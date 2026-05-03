@@ -370,6 +370,51 @@ The implementation follows OpenID Connect style discovery and token endpoints wh
 
 Clients and allowed redirect URLs are configured in `JwtIssuer:Clients` in `appsettings.json`. Redirect URI matching is exact and checked before any authorization response is returned.
 
+### SigningPrivateKeyPem setup (secure and working)
+
+The issuer currently supports **RSA signing** (`RS256`).
+
+- Supported key headers:
+  - `-----BEGIN PRIVATE KEY-----` (PKCS#8)
+  - `-----BEGIN RSA PRIVATE KEY-----` (PKCS#1)
+- Not supported:
+  - `-----BEGIN OPENSSH PRIVATE KEY-----`
+
+If you used `ssh-keygen -t rsa -b 4096`, that typically produces OpenSSH private key format, which cannot be imported by the .NET JWT signer in this service.
+
+Generate a compatible RSA key with OpenSSL:
+
+```bash
+# Generate RSA 4096 PKCS#8 private key
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out jwt-signing-private.pem
+
+# Optional: extract public key for verification/debugging
+openssl rsa -pubout -in jwt-signing-private.pem -out jwt-signing-public.pem
+```
+
+Set the key in configuration in one of these ways:
+
+1. Inline PEM content in `JwtIssuer:SigningPrivateKeyPem` using escaped newlines (`\\n`)
+2. File path in `JwtIssuer:SigningPrivateKeyPem` (the service now resolves existing file paths and reads the PEM file)
+
+Example inline value:
+
+```json
+"JwtIssuer": {
+  "KeyId": "biatec-main-key-2026-05",
+  "SigningPrivateKeyPem": "-----BEGIN PRIVATE KEY-----\\nMIIEv...\\n-----END PRIVATE KEY-----"
+}
+```
+
+### About Ed25519 / EdDSA
+
+`Ed25519` JWT signing (`EdDSA`) is currently **not enabled** in this implementation because the active `System.IdentityModel.Tokens.Jwt` / `Microsoft.IdentityModel.Tokens` stack in this project does not expose EdDSA signing primitives in the current package set.
+
+Supported algorithms in this service today:
+
+- `RS256` (default)
+- The library also supports ECDSA families (`ES256`, `ES384`, `ES512`), but this service is currently wired for `RS256` only.
+
 ### Detailed integration guide
 
 See `OIDC_INTEGRATION_GUIDE.md` for full configuration, security guidance, and a Copilot-ready prompt for implementing this flow in destination projects.

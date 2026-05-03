@@ -75,9 +75,30 @@ Configure `JwtIssuer` in `appsettings.json`.
 
 Notes:
 
-- `SigningPrivateKeyPem` must be RSA private key in PEM format.
+- `SigningPrivateKeyPem` must be an RSA private key in PEM format.
+  - Supported PEM headers: `BEGIN PRIVATE KEY` (PKCS#8) and `BEGIN RSA PRIVATE KEY` (PKCS#1)
+  - Unsupported format: `BEGIN OPENSSH PRIVATE KEY` (common output of `ssh-keygen`)
+- If you provide a file path in `SigningPrivateKeyPem`, the service will read PEM content from that file.
 - If `SigningPrivateKeyPem` is empty, service falls back to ephemeral key (not for production).
 - Redirect URIs are exact-match allowlisted.
+
+### Generate compatible signing key (recommended)
+
+Use OpenSSL to generate a PEM key the service can import:
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out jwt-signing-private.pem
+openssl rsa -pubout -in jwt-signing-private.pem -out jwt-signing-public.pem
+```
+
+Then configure either:
+
+1. Inline PEM with escaped newlines (`\\n`) in `SigningPrivateKeyPem`
+2. A file path to `jwt-signing-private.pem` in `SigningPrivateKeyPem`
+
+### Ed25519 / EdDSA note
+
+`Ed25519` (`EdDSA`) is not currently wired in this service. The current JWT token stack used by this project is configured for `RS256` issuance and validation.
 
 ## Recommended Flow for Destination Project
 

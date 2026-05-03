@@ -671,9 +671,15 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
 
         private RSA LoadOrCreateSigningKey()
         {
-            var pem = Current.SigningPrivateKeyPem?.Replace("\\n", "\n", StringComparison.Ordinal)?.Trim();
+            var rawConfiguredValue = Current.SigningPrivateKeyPem?.Trim();
+            var pem = ResolveConfiguredPem(rawConfiguredValue)?.Replace("\\n", "\n", StringComparison.Ordinal)?.Trim();
             if (!string.IsNullOrWhiteSpace(pem))
             {
+                if (pem.Contains("BEGIN OPENSSH PRIVATE KEY", StringComparison.Ordinal))
+                {
+                    _logger.LogError("JwtIssuer SigningPrivateKeyPem uses unsupported OpenSSH key format. Provide a PEM encoded RSA private key with header 'BEGIN PRIVATE KEY' or 'BEGIN RSA PRIVATE KEY'.");
+                }
+
                 try
                 {
                     var rsa = RSA.Create();
@@ -688,6 +694,30 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
 
             _logger.LogWarning("JwtIssuer signing key not configured. Using ephemeral RSA key. Tokens become invalid after restart.");
             return RSA.Create(2048);
+        }
+
+        private string? ResolveConfiguredPem(string? configuredValue)
+        {
+            if (string.IsNullOrWhiteSpace(configuredValue))
+            {
+                return null;
+            }
+
+            // Allow either inline PEM content or a local file path to the PEM file.
+            if (File.Exists(configuredValue))
+            {
+                try
+                {
+                    return File.ReadAllText(configuredValue);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Unable to read JwtIssuer signing key file at path: {Path}", configuredValue);
+                    return null;
+                }
+            }
+
+            return configuredValue;
         }
 
         private static bool UriEquals(string configuredUri, string? actualUri)
