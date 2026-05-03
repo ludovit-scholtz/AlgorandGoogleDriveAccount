@@ -34,6 +34,7 @@ namespace AlgorandGoogleDriveAccount
             builder.Services.Configure<CorsConfiguration>(builder.Configuration.GetSection("Cors"));
             builder.Services.Configure<CrossAccountProtectionConfiguration>(builder.Configuration.GetSection("CrossAccountProtection"));
             builder.Services.Configure<AlgodConfiguration>(builder.Configuration.GetSection("Algod"));
+            builder.Services.Configure<JwtIssuerConfiguration>(builder.Configuration.GetSection("JwtIssuer"));
 
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
@@ -105,6 +106,7 @@ namespace AlgorandGoogleDriveAccount
             builder.Services.AddScoped<AlgorandGoogleDriveAccount.BusinessLogic.IGoogleAuthorizationService, AlgorandGoogleDriveAccount.BusinessLogic.GoogleAuthorizationService>();
             builder.Services.AddScoped<AlgorandGoogleDriveAccount.BusinessLogic.ICrossAccountProtectionService, AlgorandGoogleDriveAccount.BusinessLogic.CrossAccountProtectionService>();
             builder.Services.AddScoped<AlgorandGoogleDriveAccount.BusinessLogic.IPortfolioValuationService, AlgorandGoogleDriveAccount.BusinessLogic.PortfolioValuationService>();
+            builder.Services.AddScoped<AlgorandGoogleDriveAccount.BusinessLogic.IJwtIssuerService, AlgorandGoogleDriveAccount.BusinessLogic.JwtIssuerService>();
 
             // Add HTTP context accessor for authorization service
             builder.Services.AddHttpContextAccessor();
