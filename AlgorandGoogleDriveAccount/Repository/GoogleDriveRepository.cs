@@ -54,7 +54,7 @@ namespace AlgorandGoogleDriveAccount.Repository
                 {
                     var folderResult = await folderRequest.ExecuteAsync();
 
-                    var folder = folderResult.Files.FirstOrDefault();
+                    var folder = folderResult.Files?.FirstOrDefault();
                     if (folder == null)
                     {
                         // Create the folder if not found
@@ -75,7 +75,7 @@ namespace AlgorandGoogleDriveAccount.Repository
                     fileCheckRequest.Fields = "files(id, name)";
                     var existingFiles = await fileCheckRequest.ExecuteAsync();
 
-                    if (!existingFiles.Files.Any())
+                    if (existingFiles.Files == null || !existingFiles.Files.Any())
                     {
                         // Prepare file metadata
                         var fileMetadata = new Google.Apis.Drive.v3.Data.File
@@ -103,13 +103,13 @@ namespace AlgorandGoogleDriveAccount.Repository
                         }
                         existingFiles = await fileCheckRequest.ExecuteAsync();
 
-                        if (!existingFiles.Files.Any())
+                        if (existingFiles.Files == null || !existingFiles.Files.Any())
                         {
                             throw new Exception("File upload failed, file not found after upload.");
                         }
                     }
 
-                    var file = existingFiles.Files.FirstOrDefault() ?? throw new Exception("File not found after upload.");
+                    var file = existingFiles.Files?.FirstOrDefault() ?? throw new Exception("File not found after upload.");
 
                     var requestDownload = service.Files.Get(file.Id);
                     var streamDownloadFile = new MemoryStream();
