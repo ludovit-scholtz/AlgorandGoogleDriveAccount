@@ -271,18 +271,17 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 return (false, "access_denied", "Authenticated user does not have an email claim.", null);
             }
 
-            string algorandAddress;
+            string? algorandAddress = null;
             try
             {
                 algorandAddress = await _driveService.GetAccountAddressAsync(email);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unable to load Algorand account for {Email}", email);
-                return (false, "server_error", "Unable to load Algorand account from Google Drive.", null);
+                _logger.LogWarning(ex, "Unable to load Algorand account for {Email}. Continuing OIDC login without algorand_address claim.", email);
             }
 
-            var shortIdentity = BuildShortIdentity(algorandAddress);
+            var shortIdentity = BuildIdentityDisplayName(email, algorandAddress);
             var subject = ComputePairwiseSubject(client.ClientId, email);
 
             if (string.Equals(request.ResponseType, "id_token", StringComparison.Ordinal))
@@ -506,7 +505,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             string clientId,
             string subject,
             string email,
-            string algorandAddress,
+            string? algorandAddress,
             string shortIdentity,
             string? nonce,
             string scope,
@@ -550,7 +549,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             };
         }
 
-        private string CreateIdToken(string subject, string audience, string email, string algorandAddress, string shortIdentity, string? nonce)
+        private string CreateIdToken(string subject, string audience, string email, string? algorandAddress, string shortIdentity, string? nonce)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.IdTokenLifetimeMinutes);
@@ -561,9 +560,13 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 new(ClaimTypes.Email, email),
                 new(ClaimTypes.Name, shortIdentity),
                 new("preferred_username", shortIdentity),
-                new("algorand_address", algorandAddress),
                 new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
             };
+
+            if (!string.IsNullOrWhiteSpace(algorandAddress))
+            {
+                claims.Add(new Claim("algorand_address", algorandAddress));
+            }
 
             if (!string.IsNullOrWhiteSpace(nonce))
             {
@@ -582,7 +585,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
-        private string CreateAccessToken(string subject, string clientId, string email, string algorandAddress, string shortIdentity, string scope)
+        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string shortIdentity, string scope)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.AccessTokenLifetimeMinutes);
@@ -591,12 +594,16 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 new(JwtRegisteredClaimNames.Sub, subject),
                 new(ClaimTypes.Email, email),
                 new(ClaimTypes.Name, shortIdentity),
-                new("algorand_address", algorandAddress),
                 new("client_id", clientId),
                 new("scope", scope),
                 new("token_use", "access_token"),
                 new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
             };
+
+            if (!string.IsNullOrWhiteSpace(algorandAddress))
+            {
+                claims.Add(new Claim("algorand_address", algorandAddress));
+            }
 
             var token = new JwtSecurityToken(
                 issuer: Current.Issuer,
@@ -758,6 +765,22 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             return $"{algorandAddress[..4]}{algorandAddress[^4..]}";
         }
 
+        private static string BuildIdentityDisplayName(string email, string? algorandAddress)
+        {
+            if (!string.IsNullOrWhiteSpace(algorandAddress))
+            {
+                return BuildShortIdentity(algorandAddress);
+            }
+
+            var atIndex = email.IndexOf('@');
+            if (atIndex > 0)
+            {
+                return email[..atIndex];
+            }
+
+            return email;
+        }
+
         private string ComputePairwiseSubject(string clientId, string email)
         {
             var seed = $"{Current.Issuer}|{clientId}|{email.Trim().ToLowerInvariant()}";
@@ -778,7 +801,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             public string Scope { get; set; } = string.Empty;
             public string? Nonce { get; set; }
             public string Email { get; set; } = string.Empty;
-            public string AlgorandAddress { get; set; } = string.Empty;
+            public string? AlgorandAddress { get; set; }
             public string Subject { get; set; } = string.Empty;
             public string ShortIdentity { get; set; } = string.Empty;
             public DateTimeOffset CreatedUtc { get; set; }
@@ -791,7 +814,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             public string ClientId { get; set; } = string.Empty;
             public string Subject { get; set; } = string.Empty;
             public string Email { get; set; } = string.Empty;
-            public string AlgorandAddress { get; set; } = string.Empty;
+            public string? AlgorandAddress { get; set; }
             public string ShortIdentity { get; set; } = string.Empty;
             public string Scope { get; set; } = "openid profile email";
             public DateTimeOffset CreatedUtc { get; set; }

@@ -52,6 +52,13 @@ ID token and access token contain these relevant claims:
 - `algorand_address`: full Algorand account address.
 - Standard claims: `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`.
 
+Important behavior for Drive consent:
+
+- Login no longer fails when Google Drive access is denied.
+- Tokens are still issued for `openid profile email` authentication.
+- `algorand_address` is optional and omitted when Drive access is unavailable.
+- Integrator apps should treat `algorand_address` as nullable and request incremental consent only when Drive-backed actions are needed.
+
 ## Configuration
 
 Configure `JwtIssuer` in `appsettings.json`.
@@ -176,10 +183,20 @@ GET https://google.biatec.io/connect/endsession
 Notes:
 
 - `post_logout_redirect_uri` must be absolute and allowlisted for the client.
+- Allowlist matching is based on scheme + host + port + path. Query parameters are allowed on top of an allowlisted base URI.
 - For best interoperability, send both `id_token_hint` and `client_id`.
 - Discovery metadata includes `end_session_endpoint` for dynamic client configuration.
 - Capitalism frontend environment variable:
   - `VITE_BIATEC_OIDC_END_SESSION_URL=https://google.biatec.io/connect/endsession`
+
+Example accepted logout redirect:
+
+```text
+Allowlisted base URI: http://localhost:5173/login
+Runtime URI:          http://localhost:5173/login?redirect=%2F&oidc_retry=consent
+```
+
+This runtime URI is valid because it matches the allowlisted origin and path.
 
 ## Legacy Direct Token POST Flow
 

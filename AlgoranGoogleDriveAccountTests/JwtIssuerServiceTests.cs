@@ -900,7 +900,7 @@ namespace AlgoranGoogleDriveAccountTests
         }
 
         [Test]
-        public async Task DriveServiceThrows_ReturnsServerError()
+        public async Task DriveServiceThrows_ContinuesWithoutAlgorandAddress()
         {
             MockDriveService
                 .Setup(d => d.GetAccountAddressAsync(TestEmail))
@@ -912,8 +912,36 @@ namespace AlgoranGoogleDriveAccountTests
 
             var result = await Service.CreateAuthorizeResponseAsync(request, client, user);
 
-            Assert.That(result.Success, Is.False);
-            Assert.That(result.Error, Is.EqualTo("server_error"));
+            Assert.That(result.Success, Is.True);
+            Assert.That(result.Response, Is.Not.Null);
+            Assert.That(result.Response!.ContainsKey("code"), Is.True);
+        }
+
+        [Test]
+        public async Task IdTokenFlow_WhenDriveUnavailable_DoesNotIncludeAlgorandAddressClaim()
+        {
+            MockDriveService
+                .Setup(d => d.GetAccountAddressAsync(TestEmail))
+                .ThrowsAsync(new InvalidOperationException("Drive unavailable"));
+
+            var request = new OidcAuthorizeRequest
+            {
+                ClientId = TestClientId,
+                RedirectUri = TestRedirectUri,
+                ResponseType = "id_token",
+                Scope = "openid profile email",
+                Nonce = "test-nonce"
+            };
+            var client = DefaultConfig.Clients[0];
+            var user = CreateUser();
+
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, user);
+
+            Assert.That(result.Success, Is.True);
+            var handler = new JwtSecurityTokenHandler();
+            var jwt = handler.ReadJwtToken(result.Response!["id_token"]);
+            var address = jwt.Claims.FirstOrDefault(c => c.Type == "algorand_address")?.Value;
+            Assert.That(address, Is.Null);
         }
     }
 

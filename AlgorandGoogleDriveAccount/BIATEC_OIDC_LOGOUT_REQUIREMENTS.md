@@ -43,6 +43,12 @@ Behavior:
 - If `state` is provided, it is appended and returned in redirect query string.
 - If `post_logout_redirect_uri` is provided, `client_id` (or `id_token_hint` containing `aud`) must resolve to a known client.
 
+Allowlist matching rules:
+- `post_logout_redirect_uri` must be absolute.
+- Matching is performed on scheme + host + port + path.
+- Query parameters are permitted when the base URI is allowlisted.
+- Example: allowlisted `http://localhost:5173/login` accepts runtime `http://localhost:5173/login?redirect=%2F&oidc_retry=consent`.
+
 ### 3) Client registration requirements
 For each Capitalism OIDC client (`capitalism`, `capitalism-master`):
 - Register allowed login callbacks in `RedirectUris`.
@@ -63,6 +69,12 @@ Compatibility note:
 After logout at Biatec:
 - The Biatec local authentication session is cleared.
 - A new authorization request requires a fresh Biatec sign-in session.
+
+## Login Behavior When Drive Consent Is Denied
+
+- OIDC login still succeeds for `openid profile email`.
+- Algorand-specific claim `algorand_address` is omitted until Drive consent is granted.
+- Relying parties must treat `algorand_address` as optional and request additional permissions only before Drive-backed operations.
 
 ## Non-Goals (Current Scope)
 
