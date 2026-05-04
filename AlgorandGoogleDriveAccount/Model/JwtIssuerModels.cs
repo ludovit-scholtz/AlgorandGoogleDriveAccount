@@ -19,6 +19,7 @@ namespace AlgorandGoogleDriveAccount.Model
         public string ClientId { get; set; } = string.Empty;
         public string? ClientSecret { get; set; }
         public List<string> RedirectUris { get; set; } = new();
+        public List<string> PostLogoutRedirectUris { get; set; } = new();
         public List<string> AllowedScopes { get; set; } = new() { "openid", "profile", "email" };
     }
 

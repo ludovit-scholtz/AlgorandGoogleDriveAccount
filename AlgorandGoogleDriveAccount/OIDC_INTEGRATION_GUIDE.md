@@ -27,6 +27,14 @@ This project now exposes a standards-oriented OpenID Connect style identity prov
   - Supports:
     - `grant_type=authorization_code`
     - `grant_type=refresh_token`
+- `GET /connect/endsession`
+  - RP-initiated logout endpoint.
+  - Also available as `GET /logout` alias.
+  - Supports parameters:
+    - `id_token_hint` (recommended)
+    - `post_logout_redirect_uri` (recommended)
+    - `state` (recommended)
+    - `client_id` (recommended for compatibility)
 - `GET /userinfo`
   - Returns user claims from bearer access token.
 - `POST /introspect`
@@ -67,6 +75,10 @@ Configure `JwtIssuer` in `appsettings.json`.
         "https://my-app.example.com/auth/callback",
         "http://localhost:3000/auth/callback"
       ],
+      "PostLogoutRedirectUris": [
+        "https://my-app.example.com/login",
+        "http://localhost:3000/login"
+      ],
       "AllowedScopes": ["openid", "profile", "email"]
     }
   ]
@@ -81,6 +93,8 @@ Notes:
 - If you provide a file path in `SigningPrivateKeyPem`, the service will read PEM content from that file.
 - If `SigningPrivateKeyPem` is empty, service falls back to ephemeral key (not for production).
 - Redirect URIs are exact-match allowlisted.
+- Post-logout redirect URIs are exact-match allowlisted via `PostLogoutRedirectUris`.
+  - If `PostLogoutRedirectUris` is empty for a client, `RedirectUris` are used as fallback allowlist for logout redirects.
 
 ### Generate compatible signing key (recommended)
 
@@ -137,6 +151,36 @@ grant_type=authorization_code
    - expiration and signature
 6. Use `refresh_token` at `/token` with `grant_type=refresh_token` when renewing.
 
+## RP-Initiated Logout Flow (Required for full sign-out)
+
+Use standards-based RP-initiated logout so the Biatec IdP session is cleared, not just the local app session.
+
+Dedicated requirements doc for Capitalism integrators:
+- `BIATEC_OIDC_LOGOUT_REQUIREMENTS.md`
+
+1. Clear your application session.
+2. Redirect browser to:
+
+```text
+GET https://google.biatec.io/connect/endsession
+  ?id_token_hint=<last_id_token>
+  &post_logout_redirect_uri=https%3A%2F%2Fmy-app.example.com%2Flogin
+  &state=<csrf_or_logout_state>
+  &client_id=my-app
+```
+
+3. Biatec invalidates its authentication session cookie.
+4. Browser is redirected to `post_logout_redirect_uri`.
+5. `state` is preserved and returned as query parameter when provided.
+
+Notes:
+
+- `post_logout_redirect_uri` must be absolute and allowlisted for the client.
+- For best interoperability, send both `id_token_hint` and `client_id`.
+- Discovery metadata includes `end_session_endpoint` for dynamic client configuration.
+- Capitalism frontend environment variable:
+  - `VITE_BIATEC_OIDC_END_SESSION_URL=https://google.biatec.io/connect/endsession`
+
 ## Legacy Direct Token POST Flow
 
 If needed, a direct token return is available:
@@ -181,3 +225,6 @@ Requirements:
 - `/token` returns access token, id token, refresh token for valid code.
 - `/userinfo` returns expected claims for valid access token.
 - `/introspect` returns `active=true` for valid access token.
+- Discovery contains `end_session_endpoint`.
+- Logout via `/connect/endsession` redirects to allowlisted `post_logout_redirect_uri`.
+- A new login after logout requires a fresh Biatec authentication session.

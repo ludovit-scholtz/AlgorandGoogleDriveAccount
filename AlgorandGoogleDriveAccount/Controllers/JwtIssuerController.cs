@@ -2,6 +2,7 @@ using AlgorandGoogleDriveAccount.BusinessLogic;
 using AlgorandGoogleDriveAccount.Model;
 using Google.Apis.Auth.AspNetCore3;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
@@ -211,6 +212,75 @@ namespace AlgorandGoogleDriveAccount.Controllers
             return Ok(result);
         }
 
+        [AllowAnonymous]
+        [HttpGet("connect/endsession")]
+        [HttpGet("logout")]
+        public IActionResult EndSession(
+            [FromQuery(Name = "id_token_hint")] string? idTokenHint,
+            [FromQuery(Name = "post_logout_redirect_uri")] string? postLogoutRedirectUri,
+            [FromQuery(Name = "state")] string? state,
+            [FromQuery(Name = "client_id")] string? clientId)
+        {
+            clientId ??= TryGetClientIdFromIdTokenHint(idTokenHint);
+            var issuerConfig = HttpContext.RequestServices.GetRequiredService<IConfiguration>().GetSection("JwtIssuer").Get<JwtIssuerConfiguration>()
+                ?? new JwtIssuerConfiguration();
+
+            JwtIssuerClientConfiguration? client = null;
+            if (!string.IsNullOrWhiteSpace(clientId))
+            {
+                client = issuerConfig.Clients.FirstOrDefault(c => string.Equals(c.ClientId, clientId, StringComparison.Ordinal));
+                if (client == null)
+                {
+                    return BadRequest(new ProblemDetails
+                    {
+                        Title = "invalid_client",
+                        Detail = "Unknown client_id."
+                    });
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(postLogoutRedirectUri))
+            {
+                if (client == null)
+                {
+                    return BadRequest(new ProblemDetails
+                    {
+                        Title = "invalid_request",
+                        Detail = "client_id (or id_token_hint with aud) is required when post_logout_redirect_uri is provided."
+                    });
+                }
+
+                if (!Uri.TryCreate(postLogoutRedirectUri, UriKind.Absolute, out _))
+                {
+                    return BadRequest(new ProblemDetails
+                    {
+                        Title = "invalid_request",
+                        Detail = "post_logout_redirect_uri must be an absolute URI."
+                    });
+                }
+
+                if (!IsAllowedPostLogoutRedirectUri(client, postLogoutRedirectUri))
+                {
+                    return BadRequest(new ProblemDetails
+                    {
+                        Title = "invalid_request",
+                        Detail = "post_logout_redirect_uri is not allowlisted for this client_id."
+                    });
+                }
+            }
+
+            var redirectUri = postLogoutRedirectUri;
+            if (!string.IsNullOrWhiteSpace(redirectUri) && !string.IsNullOrWhiteSpace(state))
+            {
+                redirectUri = QueryHelpers.AddQueryString(redirectUri, "state", state);
+            }
+
+            return SignOut(new AuthenticationProperties
+            {
+                RedirectUri = string.IsNullOrWhiteSpace(redirectUri) ? "/" : redirectUri
+            }, CookieAuthenticationDefaults.AuthenticationScheme);
+        }
+
         private async Task<IActionResult> FinalizeAuthorizeAsync(OidcAuthorizeRequest request, JwtIssuerClientConfiguration client)
         {
             var result = await _jwtIssuerService.CreateAuthorizeResponseAsync(request, client, User);
@@ -281,6 +351,39 @@ namespace AlgorandGoogleDriveAccount.Controllers
             }
 
             return header[prefix.Length..].Trim();
+        }
+
+        private static string? TryGetClientIdFromIdTokenHint(string? idTokenHint)
+        {
+            if (string.IsNullOrWhiteSpace(idTokenHint))
+            {
+                return null;
+            }
+
+            var tokenHandler = new JwtSecurityTokenHandler();
+            if (!tokenHandler.CanReadToken(idTokenHint))
+            {
+                return null;
+            }
+
+            try
+            {
+                var token = tokenHandler.ReadJwtToken(idTokenHint);
+                return token.Audiences.FirstOrDefault();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool IsAllowedPostLogoutRedirectUri(JwtIssuerClientConfiguration client, string postLogoutRedirectUri)
+        {
+            var allowlist = client.PostLogoutRedirectUris.Count > 0
+                ? client.PostLogoutRedirectUris
+                : client.RedirectUris;
+
+            return allowlist.Any(uri => string.Equals(uri, postLogoutRedirectUri, StringComparison.Ordinal));
         }
 
         private static string BuildAutoPostHtml(string actionUrl, Dictionary<string, string> values)
