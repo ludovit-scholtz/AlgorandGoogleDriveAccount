@@ -6,10 +6,12 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Caching.Distributed;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 
 namespace AlgorandGoogleDriveAccount.Controllers
 {
@@ -17,11 +19,17 @@ namespace AlgorandGoogleDriveAccount.Controllers
     [Route("")]
     public class JwtIssuerController : ControllerBase
     {
-        private readonly IJwtIssuerService _jwtIssuerService;
+        private const string AuthorizeAttemptPrefix = "oidc:authorize-attempts:";
+        private const int MaxAuthorizeAttempts = 3;
+        private static readonly TimeSpan AuthorizeAttemptWindow = TimeSpan.FromSeconds(10);
 
-        public JwtIssuerController(IJwtIssuerService jwtIssuerService)
+        private readonly IJwtIssuerService _jwtIssuerService;
+        private readonly IDistributedCache _cache;
+
+        public JwtIssuerController(IJwtIssuerService jwtIssuerService, IDistributedCache cache)
         {
             _jwtIssuerService = jwtIssuerService;
+            _cache = cache;
         }
 
         [AllowAnonymous]
@@ -73,6 +81,16 @@ namespace AlgorandGoogleDriveAccount.Controllers
 
             if (User.Identity?.IsAuthenticated != true)
             {
+                if (!await TryRegisterAuthorizeAttemptAsync(normalizedRequest))
+                {
+                    return BuildAuthorizeErrorResponse(
+                        normalizedRequest.RedirectUri,
+                        normalizedRequest.State,
+                        "temporarily_unavailable",
+                        "Too many authorization attempts. Wait a few seconds before trying again.",
+                        normalizedRequest.ResponseMode);
+                }
+
                 var requestId = await _jwtIssuerService.StorePendingAuthorizeRequestAsync(normalizedRequest);
                 var callbackUrl = Url.Action(nameof(AuthorizeCallback), "JwtIssuer", new { requestId }, Request.Scheme);
 
@@ -289,6 +307,8 @@ namespace AlgorandGoogleDriveAccount.Controllers
                 return BuildAuthorizeErrorResponse(request.RedirectUri, request.State, result.Error ?? "server_error", result.ErrorDescription ?? "Authorization failed.", request.ResponseMode);
             }
 
+            await ClearAuthorizeAttemptsAsync(request);
+
             if (string.Equals(request.ResponseMode, "form_post", StringComparison.Ordinal))
             {
                 return Content(BuildAutoPostHtml(request.RedirectUri!, result.Response), "text/html; charset=utf-8", Encoding.UTF8);
@@ -391,6 +411,70 @@ namespace AlgorandGoogleDriveAccount.Controllers
             return allowlist.Any(configuredUri => IsAllowedLogoutUri(configuredUri, requested));
         }
 
+        private async Task<bool> TryRegisterAuthorizeAttemptAsync(OidcAuthorizeRequest request)
+        {
+            var cacheKey = BuildAuthorizeAttemptCacheKey(request);
+            var now = DateTimeOffset.UtcNow;
+            var attempts = await GetAuthorizeAttemptsAsync(cacheKey);
+            var recentAttempts = attempts
+                .Where(timestamp => now - timestamp < AuthorizeAttemptWindow)
+                .ToList();
+
+            if (recentAttempts.Count >= MaxAuthorizeAttempts)
+            {
+                return false;
+            }
+
+            recentAttempts.Add(now);
+
+            await _cache.SetStringAsync(
+                cacheKey,
+                JsonSerializer.Serialize(recentAttempts),
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = AuthorizeAttemptWindow
+                });
+
+            return true;
+        }
+
+        private async Task ClearAuthorizeAttemptsAsync(OidcAuthorizeRequest request)
+        {
+            await _cache.RemoveAsync(BuildAuthorizeAttemptCacheKey(request));
+        }
+
+        private async Task<List<DateTimeOffset>> GetAuthorizeAttemptsAsync(string cacheKey)
+        {
+            var json = await _cache.GetStringAsync(cacheKey);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return new List<DateTimeOffset>();
+            }
+
+            try
+            {
+                return JsonSerializer.Deserialize<List<DateTimeOffset>>(json) ?? new List<DateTimeOffset>();
+            }
+            catch
+            {
+                return new List<DateTimeOffset>();
+            }
+        }
+
+        private string BuildAuthorizeAttemptCacheKey(OidcAuthorizeRequest request)
+        {
+            var remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown-ip";
+            var userAgent = Request.Headers.UserAgent.ToString();
+            var rawKey = string.Join("|",
+                request.ClientId ?? string.Empty,
+                request.RedirectUri ?? string.Empty,
+                remoteIp,
+                userAgent);
+
+            var encodedKey = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(rawKey));
+            return AuthorizeAttemptPrefix + encodedKey;
+        }
+
         private static bool IsAllowedLogoutUri(string configuredUri, Uri requested)
         {
             if (!Uri.TryCreate(configuredUri, UriKind.Absolute, out var allowed))
@@ -423,7 +507,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
                 return "/";
             }
 
-            if (absolutePath.Length > 1 && absolutePath.EndsWith('/', StringComparison.Ordinal))
+            if (absolutePath.Length > 1 && absolutePath.EndsWith("/", StringComparison.Ordinal))
             {
                 return absolutePath.TrimEnd('/');
             }
