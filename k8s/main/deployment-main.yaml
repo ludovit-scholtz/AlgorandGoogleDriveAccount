@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: google-account-main-app
-          image: scholtz2/algorand-google-account:1.2026.05.16-main
+          image: scholtz2/algorand-google-account:1.2026.05.17-main
           imagePullPolicy: Always
           resources:
             requests:
