@@ -46,6 +46,8 @@ Behavior:
 Allowlist matching rules:
 - `post_logout_redirect_uri` must be absolute.
 - Matching is performed on scheme + host + port + path.
+- `RedirectUris` and `PostLogoutRedirectUris` support `*` wildcards for subdomains and other variable URI parts, for example `https://*.example.com/login`.
+- `https://*.example.com/login` matches `https://tenant-a.example.com/login` but not `https://example.com/login`; register the root domain separately when needed.
 - Query parameters are permitted when the base URI is allowlisted.
 - Example: allowlisted `http://localhost:5173/login` accepts runtime `http://localhost:5173/login?redirect=%2F&oidc_retry=consent`.
 
@@ -53,6 +55,7 @@ Allowlist matching rules:
 For each Capitalism OIDC client (`capitalism`, `capitalism-master`):
 - Register allowed login callbacks in `RedirectUris`.
 - Register allowed logout callbacks in `PostLogoutRedirectUris`.
+- When you need one entry for many subdomains, use wildcard patterns such as `https://*.example.com/auth/callback` and `https://*.example.com/login`.
 
 Minimum logout redirect URIs:
 - `https://<game-host>/login`

@@ -79,11 +79,11 @@ Configure `JwtIssuer` in `appsettings.json`.
       "ClientId": "my-app",
       "ClientSecret": "super-strong-secret",
       "RedirectUris": [
-        "https://my-app.example.com/auth/callback",
+        "https://*.example.com/auth/callback",
         "http://localhost:3000/auth/callback"
       ],
       "PostLogoutRedirectUris": [
-        "https://my-app.example.com/login",
+        "https://*.example.com/login",
         "http://localhost:3000/login"
       ],
       "AllowedScopes": ["openid", "profile", "email"]
@@ -99,8 +99,11 @@ Notes:
   - Unsupported format: `BEGIN OPENSSH PRIVATE KEY` (common output of `ssh-keygen`)
 - If you provide a file path in `SigningPrivateKeyPem`, the service will read PEM content from that file.
 - If `SigningPrivateKeyPem` is empty, service falls back to ephemeral key (not for production).
-- Redirect URIs are exact-match allowlisted.
-- Post-logout redirect URIs are exact-match allowlisted via `PostLogoutRedirectUris`.
+- Redirect URIs are allowlisted and support `*` wildcards in the configured host, path, and query.
+  - Example: `https://*.example.com/auth/callback` matches `https://tenant-a.example.com/auth/callback`.
+  - `https://*.example.com/auth/callback` does not match `https://example.com/auth/callback`; register the root domain separately when needed.
+  - Scheme and port must still match exactly.
+- Post-logout redirect URIs are allowlisted via `PostLogoutRedirectUris` with the same wildcard rules.
   - If `PostLogoutRedirectUris` is empty for a client, `RedirectUris` are used as fallback allowlist for logout redirects.
 
 ### Generate compatible signing key (recommended)
@@ -183,7 +186,9 @@ GET https://google.biatec.io/connect/endsession
 Notes:
 
 - `post_logout_redirect_uri` must be absolute and allowlisted for the client.
-- Allowlist matching is based on scheme + host + port + path. Query parameters are allowed on top of an allowlisted base URI.
+- Allowlist matching is based on scheme + host + port + path, with optional `*` wildcards in configured entries.
+- Query parameters are allowed on top of an allowlisted base URI. Wildcards in `PostLogoutRedirectUris` are evaluated before query parameters are appended.
+- `https://*.example.com/login` matches `https://tenant-a.example.com/login` but not `https://example.com/login`.
 - For best interoperability, send both `id_token_hint` and `client_id`.
 - Discovery metadata includes `end_session_endpoint` for dynamic client configuration.
 - Capitalism frontend environment variable:

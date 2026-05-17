@@ -1,4 +1,5 @@
 using AlgorandGoogleDriveAccount.BusinessLogic;
+using AlgorandGoogleDriveAccount.Helper;
 using AlgorandGoogleDriveAccount.Model;
 using Google.Apis.Auth.AspNetCore3;
 using Microsoft.AspNetCore.Authentication;
@@ -408,7 +409,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
                 ? client.PostLogoutRedirectUris
                 : client.RedirectUris;
 
-            return allowlist.Any(configuredUri => IsAllowedLogoutUri(configuredUri, requested));
+            return allowlist.Any(configuredUri => RedirectUriMatcher.MatchesPostLogoutRedirect(configuredUri, requested));
         }
 
         private async Task<bool> TryRegisterAuthorizeAttemptAsync(OidcAuthorizeRequest request)
@@ -473,46 +474,6 @@ namespace AlgorandGoogleDriveAccount.Controllers
 
             var encodedKey = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(rawKey));
             return AuthorizeAttemptPrefix + encodedKey;
-        }
-
-        private static bool IsAllowedLogoutUri(string configuredUri, Uri requested)
-        {
-            if (!Uri.TryCreate(configuredUri, UriKind.Absolute, out var allowed))
-            {
-                return false;
-            }
-
-            if (!string.Equals(allowed.Scheme, requested.Scheme, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            if (!string.Equals(allowed.Host, requested.Host, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            if (allowed.Port != requested.Port)
-            {
-                return false;
-            }
-
-            return string.Equals(NormalizePath(allowed.AbsolutePath), NormalizePath(requested.AbsolutePath), StringComparison.Ordinal);
-        }
-
-        private static string NormalizePath(string absolutePath)
-        {
-            if (string.IsNullOrWhiteSpace(absolutePath))
-            {
-                return "/";
-            }
-
-            if (absolutePath.Length > 1 && absolutePath.EndsWith("/", StringComparison.Ordinal))
-            {
-                return absolutePath.TrimEnd('/');
-            }
-
-            return absolutePath;
         }
 
         private static string BuildAutoPostHtml(string actionUrl, Dictionary<string, string> values)

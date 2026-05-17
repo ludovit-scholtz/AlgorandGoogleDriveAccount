@@ -1,3 +1,4 @@
+using AlgorandGoogleDriveAccount.Helper;
 using AlgorandGoogleDriveAccount.Model;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Distributed;
@@ -191,7 +192,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             else
             {
                 var matchingClients = Current.Clients
-                    .Where(c => c.RedirectUris.Any(r => UriEquals(r, normalized.RedirectUri)))
+                    .Where(c => c.RedirectUris.Any(r => RedirectUriMatcher.MatchesAuthorizeRedirect(r, normalized.RedirectUri)))
                     .ToList();
 
                 if (matchingClients.Count == 1)
@@ -209,7 +210,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 }
             }
 
-            if (!client.RedirectUris.Any(r => UriEquals(r, normalized.RedirectUri)))
+            if (!client.RedirectUris.Any(r => RedirectUriMatcher.MatchesAuthorizeRedirect(r, normalized.RedirectUri)))
             {
                 return (false, "invalid_request", "redirect_uri is not allowlisted for this client_id.", null, null);
             }
@@ -728,26 +729,6 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             }
 
             return configuredValue;
-        }
-
-        private static bool UriEquals(string configuredUri, string? actualUri)
-        {
-            if (string.IsNullOrWhiteSpace(configuredUri) || string.IsNullOrWhiteSpace(actualUri))
-            {
-                return false;
-            }
-
-            if (!Uri.TryCreate(configuredUri, UriKind.Absolute, out var configured))
-            {
-                return false;
-            }
-
-            if (!Uri.TryCreate(actualUri, UriKind.Absolute, out var actual))
-            {
-                return false;
-            }
-
-            return Uri.Compare(configured, actual, UriComponents.AbsoluteUri, UriFormat.SafeUnescaped, StringComparison.Ordinal) == 0;
         }
 
         private static string BuildShortIdentity(string algorandAddress)

@@ -629,12 +629,50 @@ namespace AlgoranGoogleDriveAccountTests
         }
 
         [Test]
+        public async Task NoClientId_WildcardRedirectUri_ResolvesClientAutomatically()
+        {
+            DefaultConfig.Clients[0].RedirectUris = new List<string> { "https://*.example.com/callback" };
+            var request = new OidcAuthorizeRequest
+            {
+                ClientId = null,
+                RedirectUri = "https://tenant-a.example.com/callback",
+                ResponseType = "code",
+                Scope = "openid profile email"
+            };
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.Client, Is.Not.Null);
+            Assert.That(result.Client!.ClientId, Is.EqualTo(TestClientId));
+            Assert.That(result.NormalizedRequest!.ClientId, Is.EqualTo(TestClientId));
+        }
+
+        [Test]
         public async Task NoClientId_NoMatchingRedirectUri_ReturnsInvalidRequest()
         {
             var request = new OidcAuthorizeRequest
             {
                 ClientId = null,
                 RedirectUri = "https://no-match.example.com/callback",
+                ResponseType = "code",
+                Scope = "openid profile email"
+            };
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Error, Is.EqualTo("invalid_request"));
+        }
+
+        [Test]
+        public async Task WildcardRedirectUri_DoesNotMatchRootDomain()
+        {
+            DefaultConfig.Clients[0].RedirectUris = new List<string> { "https://*.example.com/callback" };
+            var request = new OidcAuthorizeRequest
+            {
+                ClientId = TestClientId,
+                RedirectUri = "https://example.com/callback",
                 ResponseType = "code",
                 Scope = "openid profile email"
             };
