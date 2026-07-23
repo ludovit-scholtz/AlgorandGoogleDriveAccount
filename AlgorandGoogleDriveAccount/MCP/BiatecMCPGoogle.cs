@@ -63,7 +63,7 @@ namespace AlgorandGoogleDriveAccount.MCP
         }
 
         [McpServerTool(Name = "getAlgorandAddress"), Description("Loads the Algorand account address stored at the google store.")]
-        public async Task<GetAccountAddressResponse> GetAccountAddress(IMcpServer mcpServer, [Description("You can use slot to identify the account. Default account is at slot 1. Second account can be slot 2, and so on.")] int slot = 1)
+        public async Task<GetAccountAddressResponse> GetAccountAddress(McpServer mcpServer, [Description("You can use slot to identify the account. Default account is at slot 1. Second account can be slot 2, and so on.")] int slot = 1)
         {
             try
             {
@@ -127,7 +127,7 @@ namespace AlgorandGoogleDriveAccount.MCP
 
         [McpServerTool(Name = "transferAsset"), Description("Allows the google store account transfer the assets.")]
         public async Task<TransferAssetResponse> TransferAsset(
-            IMcpServer mcpServer,
+            McpServer mcpServer,
             [Description("You can use slot to identify the account which will sign the transfer. Default account is at slot 1. Second account can be slot 2, and so on.")] int slot = 1,
             [Description("Receiver. If empty it will execute self signed transaction.")] string receiverAccount = "",
             [Description("ASA id to transfer. If asset id is 0, it will execute native token transaction.")] ulong assetId = 0,
@@ -220,7 +220,7 @@ namespace AlgorandGoogleDriveAccount.MCP
         }
         [McpServerTool(Name = "optIn"), Description("Allows the google store account to opt in to an asset.")]
         public async Task<TransferAssetResponse> OptIn(
-            IMcpServer mcpServer,
+            McpServer mcpServer,
             [Description("You can use slot to identify the account which will sign the transfer. Default account is at slot 1. Second account can be slot 2, and so on.")] int slot = 1,
             [Description("ASA id to transfer. Asset id must be positive number and asset must exists.")] ulong assetId = 0,
             [Description("Note to attach to the transaction. If empty, it will not attach any note.")] string note = "",
