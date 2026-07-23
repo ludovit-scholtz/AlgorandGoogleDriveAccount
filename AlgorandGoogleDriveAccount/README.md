@@ -39,7 +39,7 @@ A secure Model Context Protocol (MCP) server that enables AI assistants to inter
 
 ### Prerequisites
 
-- .NET 8.0 or later
+- .NET 10.0 or later
 - Redis server
 - Google OAuth 2.0 credentials
 - Google Drive API access

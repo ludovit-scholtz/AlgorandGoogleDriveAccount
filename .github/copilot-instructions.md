@@ -6,7 +6,7 @@ the other to match.
 
 ## Project overview
 
-Biatec MCP Server — an ASP.NET Core 8 (`AlgorandGoogleDriveAccount`) service that gives AI assistants (via the
+Biatec MCP Server — an ASP.NET Core 10 (`AlgorandGoogleDriveAccount`) service that gives AI assistants (via the
 Model Context Protocol) self-custody access to Algorand accounts. Private keys are AES-256 encrypted, bound to the
 user's email address, and stored only in the user's own Google Drive — never on Biatec's servers. The service also
 acts as an OpenID Connect identity provider (JWT issuer) so whitelisted third-party apps can authenticate users via
@@ -14,7 +14,7 @@ Google and receive Algorand-identity claims.
 
 ## Solution layout
 
-- `AlgorandGoogleDriveAccount/` — the web/API/MCP project (net8.0, `Microsoft.NET.Sdk.Web`)
+- `AlgorandGoogleDriveAccount/` — the web/API/MCP project (net10.0, `Microsoft.NET.Sdk.Web`)
   - `Controllers/` — `DevicePairingController`, `DriveController`, `JwtIssuerController`
   - `BusinessLogic/` — services and their interfaces (`I*Service` + implementation), e.g. `DriveService`,
     `DevicePairingService`, `GoogleAuthorizationService`, `CrossAccountProtectionService`,
@@ -77,5 +77,10 @@ short-lived. There is no automated test job in CI, so run tests locally before p
   `StorageFileName`/private keys as security-sensitive; changes there warrant extra scrutiny.
 - Redirect URI validation for OIDC (`/authorize`) must remain an allowlist check against `JwtIssuer:Clients` —
   do not loosen this to permissive matching without explicit instruction.
+- When bumping the target .NET version, update it everywhere, not just the `.csproj` files: both base images in
+  `AlgorandGoogleDriveAccount/Dockerfile` (`mcr.microsoft.com/dotnet/aspnet:<ver>` and
+  `mcr.microsoft.com/dotnet/sdk:<ver>`), the version mentioned in this file and `CLAUDE.md`, and
+  `AlgorandGoogleDriveAccount/README.md`. A `TargetFramework` bump alone will build fine locally but ship a Docker
+  image on the old runtime.
 - This is proprietary software (Scholtz & Company, j.s.a.) — do not add third-party license headers or open-source
   boilerplate.
