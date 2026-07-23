@@ -618,7 +618,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
             };
         }
 
-        /// <summary>Request body for <see cref="ReportSecurityEvent"/>.</summary>
+        /// <summary>Request body for reporting a Cross-Account Protection security event.</summary>
         public class SecurityEventRequest
         {
             /// <summary>The kind of security event being reported.</summary>
