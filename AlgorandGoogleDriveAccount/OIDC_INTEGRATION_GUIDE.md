@@ -22,10 +22,11 @@ This project now exposes a standards-oriented OpenID Connect style identity prov
     - `response_type=id_token` (legacy style direct token return)
   - Supports `response_mode=query` and `response_mode=form_post`.
   - Supports legacy `returnUrl` alias for `redirect_uri`.
+  - Supports PKCE (`code_challenge`, `code_challenge_method`) per RFC 7636 — see "PKCE for Public Clients" below.
 - `POST /token`
   - Token exchange endpoint.
   - Supports:
-    - `grant_type=authorization_code`
+    - `grant_type=authorization_code` (accepts `code_verifier` for PKCE)
     - `grant_type=refresh_token`
 - `GET /connect/endsession`
   - RP-initiated logout endpoint.
@@ -87,10 +88,28 @@ Configure `JwtIssuer` in `appsettings.json`.
         "http://localhost:3000/login"
       ],
       "AllowedScopes": ["openid", "profile", "email"]
+    },
+    {
+      "ClientId": "my-mobile-app",
+      "ClientSecret": null,
+      "RedirectUris": [
+        "io.example.myapp:/oauth2redirect"
+      ],
+      "PostLogoutRedirectUris": [
+        "io.example.myapp:/oauth2redirect"
+      ],
+      "AllowedScopes": ["openid", "profile", "email"]
     }
   ]
 }
 ```
+
+A client is a **public client** whenever `ClientSecret` is `null`/empty — this is the correct registration for
+Android/iOS/desktop apps and browser SPAs, which cannot keep a secret confidential. PKCE (`code_challenge` /
+`code_verifier`) is mandatory for such clients; see "PKCE for Public Clients (Mobile / Desktop Apps)" below.
+`RedirectUris` accepts custom (non-`http`/`https`) URI schemes, e.g. `io.example.myapp:/oauth2redirect` for an
+Android app-link/custom-scheme redirect — the same allowlist and wildcard rules apply, matched on scheme + host +
+port + path.
 
 Notes:
 
@@ -161,6 +180,64 @@ grant_type=authorization_code
    - expiration and signature
 6. Use `refresh_token` at `/token` with `grant_type=refresh_token` when renewing.
 
+## PKCE for Public Clients (Mobile / Desktop Apps)
+
+Native apps (Android, iOS, desktop) and browser SPAs cannot store a `client_secret` confidentially — anyone can
+decompile the app or read the bundle. Register these as a **public client** (`ClientSecret: null` in
+`JwtIssuer:Clients`) and use PKCE (RFC 7636) instead of a client secret to protect the authorization code exchange.
+The server rejects `response_type=code` authorization requests from a public client if `code_challenge` is missing.
+
+This is the standard flow for an Android app using AppAuth (or an equivalent PKCE-capable OIDC library):
+
+1. Generate a random `code_verifier` (43–128 chars, unreserved charset `[A-Za-z0-9-._~]`) and derive
+   `code_challenge = BASE64URL(SHA256(code_verifier))` (`code_challenge_method=S256`; use `S256`, not `plain`, in
+   production — `plain` exists only for clients that cannot compute SHA-256).
+2. Open the system browser / Custom Tab to:
+
+```text
+GET https://google.biatec.io/authorize
+  ?client_id=my-mobile-app
+  &redirect_uri=io.example.myapp%3A%2Foauth2redirect
+  &response_type=code
+  &scope=openid%20profile%20email
+  &state=<csrf_random>
+  &nonce=<nonce_random>
+  &code_challenge=<code_challenge>
+  &code_challenge_method=S256
+```
+
+3. The user authenticates with Google at Biatec (same flow as the web case — the app never sees Google
+   credentials).
+4. Biatec redirects to the app's registered custom-scheme `redirect_uri` with `code` and `state`. The OS routes
+   this back into the app (Android App Links / custom scheme intent filter).
+5. The app exchanges the code directly from the device — no `client_secret`, no backend needed:
+
+```text
+POST https://google.biatec.io/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code
+&code=<code>
+&redirect_uri=io.example.myapp%3A%2Foauth2redirect
+&client_id=my-mobile-app
+&code_verifier=<code_verifier>
+```
+
+6. Validate the returned `id_token` the same way as the confidential-client flow (issuer, `jwks_uri`, audience,
+   expiration, signature) and store `access_token`/`refresh_token` in platform-appropriate secure storage
+   (Android Keystore-backed `EncryptedSharedPreferences`, iOS Keychain, etc.) — never in plain files or logs.
+7. Refresh with `grant_type=refresh_token` at `/token` exactly like a confidential client; refresh does not require
+   `code_verifier` (PKCE only protects the authorization code step).
+
+Notes:
+
+- `code_challenge_method` accepts `S256` (recommended) or `plain`.
+- PKCE is optional (but still accepted and validated if sent) for confidential clients that have a `ClientSecret`
+  configured — it does not replace the secret for those clients, it complements it.
+- The token endpoint remains public/anonymous (`token_endpoint_auth_methods_supported` includes `none`) precisely
+  to support this public-client, secret-less exchange; PKCE is what prevents a stolen authorization code from being
+  redeemed by an attacker.
+
 ## RP-Initiated Logout Flow (Required for full sign-out)
 
 Use standards-based RP-initiated logout so the Biatec IdP session is cleared, not just the local app session.
@@ -219,6 +296,8 @@ This path defaults to `response_type=id_token` and `response_mode=form_post` for
 - Keep authorization codes short lived.
 - Always validate `state` for CSRF protection.
 - Use strong client secrets for confidential clients.
+- Register mobile/desktop/SPA clients as public clients (no `ClientSecret`) and require PKCE — never embed a
+  `client_secret` in an app binary or frontend bundle.
 - Rotate signing keys using `kid` changes and serve both old and new public keys during transition.
 - Validate `iss`, `aud`, and signature on every token.
 
@@ -250,3 +329,6 @@ Requirements:
 - Discovery contains `end_session_endpoint`.
 - Logout via `/connect/endsession` redirects to allowlisted `post_logout_redirect_uri`.
 - A new login after logout requires a fresh Biatec authentication session.
+- For a public (PKCE) client: `/authorize` without `code_challenge` returns `invalid_request`.
+- For a public (PKCE) client: `/token` with a correct `code` but missing/wrong `code_verifier` returns
+  `invalid_grant`; the matching `code_verifier` succeeds without any `client_secret`.

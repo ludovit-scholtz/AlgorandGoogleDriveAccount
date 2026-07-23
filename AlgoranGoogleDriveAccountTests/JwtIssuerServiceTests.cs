@@ -100,7 +100,9 @@ namespace AlgoranGoogleDriveAccountTests
             string? nonce = null,
             string email = TestEmail,
             string algorandAddress = TestAlgorandAddress,
-            DateTimeOffset? expiresUtc = null)
+            DateTimeOffset? expiresUtc = null,
+            string? codeChallenge = null,
+            string? codeChallengeMethod = null)
         {
             var record = new
             {
@@ -113,6 +115,8 @@ namespace AlgoranGoogleDriveAccountTests
                 algorandAddress,
                 subject = "sub-value",
                 shortIdentity = "ABCD" + algorandAddress[^4..],
+                codeChallenge,
+                codeChallengeMethod,
                 createdUtc = DateTimeOffset.UtcNow,
                 expiresUtc = expiresUtc ?? DateTimeOffset.UtcNow.AddSeconds(120)
             };
@@ -369,6 +373,70 @@ namespace AlgoranGoogleDriveAccountTests
             Assert.That(result.Error, Is.Null);
             Assert.That(result.Client, Is.Not.Null);
             Assert.That(result.Client!.ClientId, Is.EqualTo(TestClientId));
+        }
+
+        [Test]
+        public async Task PublicClient_MissingCodeChallenge_ReturnsInvalidRequest()
+        {
+            DefaultConfig.Clients[0].ClientSecret = null; // public client (mobile/SPA)
+            var request = ValidCodeRequest();
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Error, Is.EqualTo("invalid_request"));
+        }
+
+        [Test]
+        public async Task PublicClient_WithCodeChallenge_ReturnsValid()
+        {
+            DefaultConfig.Clients[0].ClientSecret = null; // public client (mobile/SPA)
+            var request = ValidCodeRequest();
+            request.CodeChallenge = new string('a', 43);
+            request.CodeChallengeMethod = "S256";
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.NormalizedRequest!.CodeChallenge, Is.EqualTo(request.CodeChallenge));
+            Assert.That(result.NormalizedRequest!.CodeChallengeMethod, Is.EqualTo("S256"));
+        }
+
+        [Test]
+        public async Task ConfidentialClient_MissingCodeChallenge_StillValid()
+        {
+            // Confidential clients can hold a secret, so PKCE is optional for backward compatibility.
+            var request = ValidCodeRequest();
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.True);
+        }
+
+        [Test]
+        public async Task CodeChallenge_UnsupportedMethod_ReturnsInvalidRequest()
+        {
+            var request = ValidCodeRequest();
+            request.CodeChallenge = new string('a', 43);
+            request.CodeChallengeMethod = "md5";
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Error, Is.EqualTo("invalid_request"));
+        }
+
+        [Test]
+        public async Task CodeChallenge_TooShort_ReturnsInvalidRequest()
+        {
+            var request = ValidCodeRequest();
+            request.CodeChallenge = "too-short";
+            request.CodeChallengeMethod = "S256";
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Error, Is.EqualTo("invalid_request"));
         }
 
         [Test]
@@ -1026,6 +1094,110 @@ namespace AlgoranGoogleDriveAccountTests
             Assert.That(result.Response!.AccessToken, Is.Not.Empty);
             Assert.That(result.Response.IdToken, Is.Not.Empty);
             Assert.That(result.Response.RefreshToken, Is.Not.Empty);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_PkceS256_ValidVerifier_ReturnsTokens()
+        {
+            const string verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"; // RFC 7636 example
+            const string challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"; // SHA256(verifier), base64url
+
+            var code = "pkce-code";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri,
+                codeChallenge: challenge, codeChallengeMethod: "S256");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret,
+                CodeVerifier = verifier
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            Assert.That(result.Success, Is.True);
+            Assert.That(result.Response!.AccessToken, Is.Not.Empty);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_PkceMissingVerifier_ReturnsInvalidGrant()
+        {
+            var code = "pkce-missing-verifier";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri,
+                codeChallenge: new string('a', 43), codeChallengeMethod: "S256");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret,
+                CodeVerifier = null
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.StatusCode, Is.EqualTo(400));
+            Assert.That(result.Error, Is.EqualTo("invalid_grant"));
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_PkceWrongVerifier_ReturnsInvalidGrant()
+        {
+            const string challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+
+            var code = "pkce-wrong-verifier";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri,
+                codeChallenge: challenge, codeChallengeMethod: "S256");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret,
+                CodeVerifier = new string('x', 43)
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.StatusCode, Is.EqualTo(400));
+            Assert.That(result.Error, Is.EqualTo("invalid_grant"));
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_PkcePlainMethod_MatchingVerifier_ReturnsTokens()
+        {
+            var verifier = new string('p', 43);
+
+            var code = "pkce-plain-code";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri,
+                codeChallenge: verifier, codeChallengeMethod: "plain");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret,
+                CodeVerifier = verifier
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            Assert.That(result.Success, Is.True);
         }
 
         [Test]

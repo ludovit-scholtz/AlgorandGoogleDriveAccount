@@ -21,6 +21,12 @@ namespace AlgorandGoogleDriveAccount.Model
         public List<string> RedirectUris { get; set; } = new();
         public List<string> PostLogoutRedirectUris { get; set; } = new();
         public List<string> AllowedScopes { get; set; } = new() { "openid", "profile", "email" };
+
+        /// <summary>
+        /// A client with no ClientSecret is a public client (SPA, mobile, desktop) and cannot keep a secret
+        /// confidential, so PKCE (RFC 7636) is mandatory for it on the authorization_code grant.
+        /// </summary>
+        public bool IsPublicClient => string.IsNullOrWhiteSpace(ClientSecret);
     }
 
     public class OidcAuthorizeRequest
@@ -33,6 +39,8 @@ namespace AlgorandGoogleDriveAccount.Model
         public string Scope { get; set; } = "openid profile email";
         public string? State { get; set; }
         public string? Nonce { get; set; }
+        public string? CodeChallenge { get; set; }
+        public string? CodeChallengeMethod { get; set; }
     }
 
     public class OidcTokenRequest
@@ -43,6 +51,7 @@ namespace AlgorandGoogleDriveAccount.Model
         public string? RedirectUri { get; set; }
         public string? ClientId { get; set; }
         public string? ClientSecret { get; set; }
+        public string? CodeVerifier { get; set; }
     }
 
     public class OidcTokenResponse

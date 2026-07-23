@@ -33,11 +33,11 @@ namespace AlgoranGoogleDriveAccountTests
 
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                var result = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null);
+                var result = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
                 Assert.That(result, Is.TypeOf<ChallengeResult>());
             }
 
-            var blockedResult = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null);
+            var blockedResult = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
 
             Assert.That(blockedResult, Is.TypeOf<RedirectResult>());
             var redirect = (RedirectResult)blockedResult;
@@ -65,16 +65,16 @@ namespace AlgoranGoogleDriveAccountTests
             var unauthenticatedController = CreateController(jwtIssuerService.Object, cache, authenticated: false);
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                var result = await unauthenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null);
+                var result = await unauthenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
                 Assert.That(result, Is.TypeOf<ChallengeResult>());
             }
 
             var authenticatedController = CreateController(jwtIssuerService.Object, cache, authenticated: true);
-            var successResult = await authenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null);
+            var successResult = await authenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
             Assert.That(successResult, Is.TypeOf<RedirectResult>());
 
             var nextAttemptController = CreateController(jwtIssuerService.Object, cache, authenticated: false);
-            var nextAttemptResult = await nextAttemptController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null);
+            var nextAttemptResult = await nextAttemptController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
             Assert.That(nextAttemptResult, Is.TypeOf<ChallengeResult>());
         }
 

@@ -81,6 +81,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 subject_types_supported = new[] { "pairwise" },
                 id_token_signing_alg_values_supported = new[] { "RS256" },
                 token_endpoint_auth_methods_supported = new[] { "client_secret_post", "client_secret_basic", "none" },
+                code_challenge_methods_supported = new[] { "S256", "plain" },
                 scopes_supported = new[] { "openid", "profile", "email" },
                 claims_supported = new[] { "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "email", "name", "preferred_username", "algorand_address" }
             };
@@ -117,7 +118,9 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 ResponseMode = request.ResponseMode,
                 Scope = string.IsNullOrWhiteSpace(request.Scope) ? "openid profile email" : request.Scope,
                 State = request.State,
-                Nonce = request.Nonce
+                Nonce = request.Nonce,
+                CodeChallenge = request.CodeChallenge,
+                CodeChallengeMethod = string.IsNullOrWhiteSpace(request.CodeChallengeMethod) ? "plain" : request.CodeChallengeMethod
             };
 
             if (normalized.ReturnUrl != null && string.IsNullOrWhiteSpace(request.ClientId) && string.IsNullOrWhiteSpace(request.ResponseType))
@@ -228,6 +231,30 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 return (false, "invalid_request", "nonce is required when response_type=id_token.", null, null);
             }
 
+            if (string.Equals(normalized.ResponseType, "code", StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(normalized.CodeChallenge))
+                {
+                    if (client.IsPublicClient)
+                    {
+                        return (false, "invalid_request", "code_challenge is required for public clients (PKCE, RFC 7636).", null, null);
+                    }
+                }
+                else
+                {
+                    if (!string.Equals(normalized.CodeChallengeMethod, "S256", StringComparison.Ordinal) &&
+                        !string.Equals(normalized.CodeChallengeMethod, "plain", StringComparison.Ordinal))
+                    {
+                        return (false, "invalid_request", "code_challenge_method must be 'S256' or 'plain'.", null, null);
+                    }
+
+                    if (normalized.CodeChallenge.Length < 43 || normalized.CodeChallenge.Length > 128)
+                    {
+                        return (false, "invalid_request", "code_challenge must be between 43 and 128 characters.", null, null);
+                    }
+                }
+            }
+
             return (true, null, null, normalized, client);
         }
 
@@ -310,6 +337,8 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 AlgorandAddress = algorandAddress,
                 Subject = subject,
                 ShortIdentity = shortIdentity,
+                CodeChallenge = request.CodeChallenge,
+                CodeChallengeMethod = request.CodeChallengeMethod,
                 CreatedUtc = DateTimeOffset.UtcNow,
                 ExpiresUtc = DateTimeOffset.UtcNow.AddSeconds(Current.AuthorizationCodeLifetimeSeconds)
             };
@@ -370,6 +399,12 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 if (!string.Equals(codeRecord.RedirectUri, request.RedirectUri, StringComparison.Ordinal))
                 {
                     return (false, 400, "invalid_grant", "redirect_uri does not match the authorization request.", null);
+                }
+
+                var pkceError = ValidatePkce(codeRecord.CodeChallenge, codeRecord.CodeChallengeMethod, request.CodeVerifier);
+                if (pkceError != null)
+                {
+                    return (false, 400, "invalid_grant", pkceError, null);
                 }
 
                 if (DateTimeOffset.UtcNow >= codeRecord.ExpiresUtc)
@@ -769,6 +804,40 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             return Base64UrlEncoder.Encode(bytes);
         }
 
+        private static string? ValidatePkce(string? codeChallenge, string? codeChallengeMethod, string? codeVerifier)
+        {
+            if (string.IsNullOrWhiteSpace(codeChallenge))
+            {
+                // Authorization request was made without PKCE (confidential client that opted out).
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(codeVerifier))
+            {
+                return "code_verifier is required for this authorization code.";
+            }
+
+            if (codeVerifier.Length < 43 || codeVerifier.Length > 128)
+            {
+                return "code_verifier must be between 43 and 128 characters.";
+            }
+
+            string computedChallenge;
+            if (string.Equals(codeChallengeMethod, "S256", StringComparison.Ordinal))
+            {
+                var hash = SHA256.HashData(Encoding.ASCII.GetBytes(codeVerifier));
+                computedChallenge = Base64UrlEncoder.Encode(hash);
+            }
+            else
+            {
+                computedChallenge = codeVerifier;
+            }
+
+            return string.Equals(computedChallenge, codeChallenge, StringComparison.Ordinal)
+                ? null
+                : "code_verifier does not match code_challenge.";
+        }
+
         private static string GenerateOpaqueToken(int size)
         {
             return Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(size));
@@ -785,6 +854,8 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             public string? AlgorandAddress { get; set; }
             public string Subject { get; set; } = string.Empty;
             public string ShortIdentity { get; set; } = string.Empty;
+            public string? CodeChallenge { get; set; }
+            public string? CodeChallengeMethod { get; set; }
             public DateTimeOffset CreatedUtc { get; set; }
             public DateTimeOffset ExpiresUtc { get; set; }
         }

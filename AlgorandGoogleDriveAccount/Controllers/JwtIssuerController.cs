@@ -57,7 +57,9 @@ namespace AlgorandGoogleDriveAccount.Controllers
             [FromQuery(Name = "response_mode")] string? responseMode,
             [FromQuery(Name = "scope")] string? scope,
             [FromQuery(Name = "state")] string? state,
-            [FromQuery(Name = "nonce")] string? nonce)
+            [FromQuery(Name = "nonce")] string? nonce,
+            [FromQuery(Name = "code_challenge")] string? codeChallenge,
+            [FromQuery(Name = "code_challenge_method")] string? codeChallengeMethod)
         {
             var authRequest = new OidcAuthorizeRequest
             {
@@ -68,7 +70,9 @@ namespace AlgorandGoogleDriveAccount.Controllers
                 ResponseMode = responseMode,
                 Scope = scope ?? "openid profile email",
                 State = state,
-                Nonce = nonce
+                Nonce = nonce,
+                CodeChallenge = codeChallenge,
+                CodeChallengeMethod = codeChallengeMethod
             };
 
             var validation = await _jwtIssuerService.ValidateAuthorizeRequestAsync(authRequest);
@@ -154,7 +158,8 @@ namespace AlgorandGoogleDriveAccount.Controllers
                 RedirectUri = form["redirect_uri"].ToString(),
                 RefreshToken = form["refresh_token"].ToString(),
                 ClientId = form["client_id"].ToString(),
-                ClientSecret = form["client_secret"].ToString()
+                ClientSecret = form["client_secret"].ToString(),
+                CodeVerifier = form["code_verifier"].ToString()
             };
 
             var result = await _jwtIssuerService.ExchangeTokenAsync(tokenRequest, Request.Headers.Authorization.ToString());

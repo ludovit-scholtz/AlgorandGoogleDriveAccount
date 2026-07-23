@@ -15,8 +15,8 @@ exact wording for an external integration doc — for implementation work, this 
   `frontchannel_logout_supported: false`, `backchannel_logout_supported: false`)
 - `GET /.well-known/jwks.json` — public signing keys
 - `GET /authorize` — standard `response_type=code` (exchange at `/token`), plus a legacy `returnUrl` alias that
-  POSTs `id_token` directly to the return URL
-- `POST /token` — authorization code exchange and refresh-token renewal
+  POSTs `id_token` directly to the return URL. Accepts PKCE `code_challenge`/`code_challenge_method` (RFC 7636).
+- `POST /token` — authorization code exchange (accepts PKCE `code_verifier`) and refresh-token renewal
 - `GET /userinfo` — claims from access token
 - `POST /introspect`, `POST /verify` — token activity/verification
 - `GET /connect/endsession` (alias `GET /logout`) — RP-Initiated Logout 1.0
@@ -40,6 +40,25 @@ Each client has `RedirectUris` and `PostLogoutRedirectUris`. Matching rules (`He
 - If `PostLogoutRedirectUris` is empty for a client, logout redirect falls back to that client's `RedirectUris`.
 - Redirect URI matching must stay a strict allowlist — never loosen to permissive/prefix matching without
   explicit instruction (see [[../../../CLAUDE.md]] conventions section).
+- `RedirectUris` may use non-`http(s)` custom schemes (e.g. `io.example.myapp:/oauth2redirect` for a native
+  Android/iOS app) — `RedirectUriMatcher` only checks scheme/host/port/path/query, it doesn't require http(s).
+
+## PKCE (RFC 7636) — public clients (mobile/desktop/SPA)
+
+A client is "public" whenever `JwtIssuerClientConfiguration.ClientSecret` is null/empty
+(`JwtIssuerClientConfiguration.IsPublicClient`). Public clients cannot hold a confidential secret, so PKCE replaces
+`client_secret` as the authorization-code-theft defense:
+
+- `ValidateAuthorizeRequestAsync` (`JwtIssuerService.cs`) rejects `response_type=code` with `invalid_request` if the
+  resolved client `IsPublicClient` and `code_challenge` is missing. `code_challenge_method` must be `S256` or
+  `plain` (defaults to `plain` if omitted); `code_challenge` must be 43–128 chars.
+- The challenge is stored on the `AuthorizationCodeRecord` alongside the issued `code` (Redis, `oidc:code:` prefix).
+- `ExchangeTokenAsync` validates `code_verifier` against the stored challenge via the private `ValidatePkce` helper
+  (`S256` = base64url(SHA256(verifier)) must equal challenge; `plain` = verifier must equal challenge byte-for-byte)
+  before honoring `grant_type=authorization_code`. Mismatch/missing verifier → `invalid_grant`.
+- Confidential clients (have a `ClientSecret`) may still send PKCE — it's validated if present but not required;
+  it does not replace the secret check in `ValidateClientAuthentication`.
+- Refresh (`grant_type=refresh_token`) never requires `code_verifier` — PKCE only guards the code exchange step.
 
 ## Logout endpoint parameters
 
