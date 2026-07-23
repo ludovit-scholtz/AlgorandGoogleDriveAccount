@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <OpenApiReference Include="OpenAPIs\swagger.json" ClassName="BiatecTokensApi">
+    <OpenApiReference Include="OpenAPIs\swagger.json" ClassName="BiatecTokensApi" Namespace="AlgorandGoogleDriveAccount.ExternalClients.BiatecTokens">
       <SourceUri>https://api.tokens.biatec.io/swagger/v1/swagger.json</SourceUri>
     </OpenApiReference>
   </ItemGroup>
