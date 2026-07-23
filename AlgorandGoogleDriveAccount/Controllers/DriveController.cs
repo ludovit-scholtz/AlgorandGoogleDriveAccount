@@ -109,24 +109,42 @@ namespace AlgorandGoogleDriveAccount.Controllers
             }
         }
 
+        /// <summary>
+        /// Starts the Google sign-in flow (e.g. for the "Login with Google" link in Swagger UI) and
+        /// redirects back to <paramref name="redirectUri"/> once the session cookie is set.
+        /// </summary>
         [AllowAnonymous]
         [HttpGet("login")]
-        public IActionResult Login(string redirectUri = "https://localhost:44305/swagger/")
+        public IActionResult Login(string? redirectUri = null)
         {
             return Challenge(new AuthenticationProperties
             {
-                RedirectUri = redirectUri
+                RedirectUri = ResolveLocalRedirectUri(redirectUri)
             }, GoogleOpenIdConnectDefaults.AuthenticationScheme);
         }
 
         [Authorize]
         [HttpGet("logout")]
-        public IActionResult Logout(string redirectUri = "https://localhost:44305/swagger/")
+        public IActionResult Logout(string? redirectUri = null)
         {
             return SignOut(new AuthenticationProperties
             {
-                RedirectUri = redirectUri
+                RedirectUri = ResolveLocalRedirectUri(redirectUri)
             }, CookieAuthenticationDefaults.AuthenticationScheme);
+        }
+
+        /// <summary>
+        /// Only ever redirects within this app. <paramref name="redirectUri"/> is caller-supplied
+        /// (a query string parameter), so it must be validated as local to avoid an open redirect.
+        /// </summary>
+        private string ResolveLocalRedirectUri(string? redirectUri)
+        {
+            if (!string.IsNullOrEmpty(redirectUri) && Url.IsLocalUrl(redirectUri))
+            {
+                return redirectUri;
+            }
+
+            return Url.Content("~/swagger/");
         }
     }
 }

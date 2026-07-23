@@ -1,11 +1,13 @@
 using AlgorandGoogleDriveAccount.MCP;
 using AlgorandGoogleDriveAccount.Model;
 using AlgorandGoogleDriveAccount.Repository;
+using AlgorandGoogleDriveAccount.Swagger;
 using Google.Apis.Auth.AspNetCore3;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.Options;
+using Microsoft.OpenApi;
 using ModelContextProtocol.Server;
 using System.Security.Claims;
 using System.Linq;
@@ -23,7 +25,25 @@ namespace AlgorandGoogleDriveAccount
             builder.Services.AddControllers();
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+            builder.Services.AddSwaggerGen(c =>
+            {
+                // Login for [Authorize] endpoints is the same Google session cookie the rest of the
+                // site uses (see /api/drive/login). This definition just documents that and lets
+                // Swagger UI show a padlock; the actual "Authorize" button in Swagger UI has nowhere
+                // to send a browser-redirect OAuth login, so sign-in happens via the Login link
+                // injected into the page instead (see wwwroot/swagger/swagger-login.js).
+                c.AddSecurityDefinition("GoogleCookieAuth", new OpenApiSecurityScheme
+                {
+                    Type = SecuritySchemeType.ApiKey,
+                    In = ParameterLocation.Cookie,
+                    Name = CookieAuthenticationDefaults.CookiePrefix + CookieAuthenticationDefaults.AuthenticationScheme,
+                    Description = "Google-authenticated session cookie. Click the \"Login with Google\" link " +
+                        "above the operations list, sign in, then come back here and use \"Try it out\" - " +
+                        "the browser sends the session cookie automatically."
+                });
+
+                c.OperationFilter<AuthorizeCheckOperationFilter>();
+            });
             builder.Services.AddProblemDetails();
 
             var config = new Configuration();
@@ -315,8 +335,14 @@ namespace AlgorandGoogleDriveAccount
                 logger.LogWarning("No CORS origins configured. Using default policy based on environment.");
             }
 
-            app.UseSwagger();
-            app.UseSwaggerUI();
+            app.UseSwagger(options =>
+            {
+                options.OpenApiVersion = OpenApiSpecVersion.OpenApi3_1;
+            });
+            app.UseSwaggerUI(options =>
+            {
+                options.InjectJavascript("/swagger/swagger-login.js");
+            });
 
             // Enable static files with proper content types
             app.UseStaticFiles(new StaticFileOptions
