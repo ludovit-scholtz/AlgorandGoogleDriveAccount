@@ -4,26 +4,89 @@ on:
     branches:
       - master
 
+permissions:
+  contents: write
+
+env:
+  IMAGE: scholtz2/algorand-google-account
+  NAMESPACE: biatec
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Configure SSH
-        run: |
-          mkdir -p ~/.ssh/
-          echo "$SSH_KEY" > ~/.ssh/staging.key
-          chmod 600 ~/.ssh/staging.key
-          cat >>~/.ssh/config <<END
-          Host staging
-            HostName $SSH_HOST
-            User $SSH_USER
-            IdentityFile ~/.ssh/staging.key
-            StrictHostKeyChecking no
-          END
-        env:
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_KEY: ${{ secrets.SSH_KEY }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Deploy
-        run: ssh staging 'cd ~/AlgorandGoogleDriveAccount/. && ./deploy.sh'
+      # Same versioning scheme historically used by deploy.sh: 1.<year>.<month>.<day>-main
+      - name: Compute version
+        id: version
+        run: |
+          ver="1.$(date -u '+%Y').$(date -u '+%m').$(date -u '+%d')"
+          version="$ver-main"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Computed version: $version"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: AlgorandGoogleDriveAccount/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+
+      - name: Update deployment manifest with new image tag
+        run: |
+          sed -i "s~${IMAGE}.*~${IMAGE}:${{ steps.version.outputs.version }}~g" k8s/main/deployment-main.yaml
+
+      - name: Commit updated manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- k8s/main/deployment-main.yaml; then
+            git add k8s/main/deployment-main.yaml
+            git commit -m "cicd deploy ${{ steps.version.outputs.version }} [skip ci]"
+            git push
+          else
+            echo "No manifest changes to commit"
+          fi
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBE_CONFIG" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Apply Kubernetes manifest
+        run: kubectl apply -f k8s/main/deployment-main.yaml -n "$NAMESPACE"
+
+      - name: Update config map
+        run: |
+          kubectl delete configmap google-account-main-conf -n "$NAMESPACE" --ignore-not-found
+          kubectl create configmap google-account-main-conf --from-file=k8s/main/conf -n "$NAMESPACE"
+
+      - name: Roll out deployment
+        run: |
+          kubectl rollout restart deployment/google-account-main-app-deployment -n "$NAMESPACE"
+          kubectl rollout status deployment/google-account-main-app-deployment -n "$NAMESPACE"
+
+      - name: Remove kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"

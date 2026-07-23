@@ -39,9 +39,11 @@ dotnet run --project AlgorandGoogleDriveAccount/AlgorandGoogleDriveAccount.cspro
 ```
 
 Requires Redis (`Redis:ConnectionString` in `appsettings.json`) and Google OAuth 2.0 credentials
-(`App:ClientId`/`App:ClientSecret`) to run. CI (`.github/workflows/build-api.yml`) only builds/deploys on push to
-`master` via SSH to a staging server that runs `./deploy.sh` — there is no automated test job in CI, so run tests
-locally before pushing.
+(`App:ClientId`/`App:ClientSecret`) to run. CI (`.github/workflows/build-api.yml`) builds/pushes a Docker image and
+applies it straight to the Kubernetes cluster on push to `master` — no staging server or SSH involved anymore. See
+[docs/CICD_GITHUB_ACTIONS.md](docs/CICD_GITHUB_ACTIONS.md) for the required GitHub secrets and
+[docs/KUBE_CONFIG_SECURITY.md](docs/KUBE_CONFIG_SECURITY.md) for why the CI kubeconfig is namespace-scoped and
+short-lived. There is no automated test job in CI, so run tests locally before pushing.
 
 ## Architecture notes
 
