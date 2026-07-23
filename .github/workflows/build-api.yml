@@ -58,7 +58,11 @@ jobs:
           if ! git diff --quiet -- k8s/main/deployment-main.yaml; then
             git add k8s/main/deployment-main.yaml
             git commit -m "cicd deploy ${{ steps.version.outputs.version }} [skip ci]"
-            git push
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin master && git push && break
+              echo "Push attempt $i failed, retrying..."
+              sleep $((i * 3))
+            done
           else
             echo "No manifest changes to commit"
           fi
