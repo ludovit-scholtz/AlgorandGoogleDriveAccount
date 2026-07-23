@@ -8,6 +8,10 @@ using System.Security.Claims;
 
 namespace AlgorandGoogleDriveAccount.Controllers
 {
+    /// <summary>
+    /// Self-custody operations against the signed-in user's Algorand account: signing, address lookup,
+    /// and the Google session used to unlock the AES-encrypted key stored in the user's own Drive.
+    /// </summary>
     [Authorize]
     [ApiController]
     [Route("api/drive")]
@@ -25,9 +29,11 @@ namespace AlgorandGoogleDriveAccount.Controllers
         }
 
         /// <summary>
-        /// sign unsigned transaction, or combine signed multisig transaction with the account's private key
+        /// Signs an unsigned transaction, or combines a signed multisig transaction with the
+        /// account's private key, using the key decrypted from the user's own Google Drive.
         /// </summary>
-        /// <returns></returns>
+        /// <param name="txMsgPack">The msgpack-encoded Algorand transaction to sign.</param>
+        /// <returns>The signed transaction, msgpack-encoded.</returns>
         [Authorize]
         [HttpPost("sign")]
         public async Task<ActionResult<byte[]>> Sign([FromForm] byte[] txMsgPack)
@@ -82,7 +88,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// <summary>
         /// Get the account address for the authenticated user
         /// </summary>
-        /// <returns></returns>
+        /// <returns>The user's Algorand account address.</returns>
         [Authorize]
         [HttpGet("address")]
         public async Task<ActionResult<string>> GetAddress()
@@ -113,6 +119,10 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// Starts the Google sign-in flow (e.g. for the "Login with Google" link in Swagger UI) and
         /// redirects back to <paramref name="redirectUri"/> once the session cookie is set.
         /// </summary>
+        /// <param name="redirectUri">
+        /// Where to send the browser after sign-in. Must be a local path (validated with
+        /// <c>Url.IsLocalUrl</c>) - defaults to <c>/swagger/</c> if omitted or not local.
+        /// </param>
         [AllowAnonymous]
         [HttpGet("login")]
         public IActionResult Login(string? redirectUri = null)
@@ -123,6 +133,14 @@ namespace AlgorandGoogleDriveAccount.Controllers
             }, GoogleOpenIdConnectDefaults.AuthenticationScheme);
         }
 
+        /// <summary>
+        /// Clears the Google-authenticated session cookie and redirects back to
+        /// <paramref name="redirectUri"/>.
+        /// </summary>
+        /// <param name="redirectUri">
+        /// Where to send the browser after sign-out. Must be a local path (validated with
+        /// <c>Url.IsLocalUrl</c>) - defaults to <c>/swagger/</c> if omitted or not local.
+        /// </param>
         [Authorize]
         [HttpGet("logout")]
         public IActionResult Logout(string? redirectUri = null)

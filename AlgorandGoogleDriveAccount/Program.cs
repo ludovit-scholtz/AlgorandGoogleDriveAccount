@@ -43,6 +43,13 @@ namespace AlgorandGoogleDriveAccount
                 });
 
                 c.OperationFilter<AuthorizeCheckOperationFilter>();
+
+                var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+                var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+                if (File.Exists(xmlPath))
+                {
+                    c.IncludeXmlComments(xmlPath, includeControllerXmlComments: true);
+                }
             });
             builder.Services.AddProblemDetails();
 

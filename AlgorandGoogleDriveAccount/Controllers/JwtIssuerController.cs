@@ -16,6 +16,13 @@ using System.Text.Json;
 
 namespace AlgorandGoogleDriveAccount.Controllers
 {
+    /// <summary>
+    /// OpenID Connect identity provider: discovery/JWKS, the authorize/token endpoints (standard
+    /// <c>response_type=code</c> with optional PKCE, plus a legacy <c>returnUrl</c> direct <c>id_token</c>
+    /// flow), userinfo, token introspection/verification, and RP-Initiated Logout. Issues RS256-signed
+    /// tokens carrying Algorand-identity claims (<c>algorand_address</c>) for whitelisted third-party
+    /// clients registered under <c>JwtIssuer:Clients</c>.
+    /// </summary>
     [ApiController]
     [Route("")]
     public class JwtIssuerController : ControllerBase
@@ -33,6 +40,11 @@ namespace AlgorandGoogleDriveAccount.Controllers
             _cache = cache;
         }
 
+        /// <summary>
+        /// OIDC discovery document. Includes <c>end_session_endpoint</c>; front/back-channel logout
+        /// are not supported (both advertised as <c>false</c>).
+        /// </summary>
+        /// <returns>The OpenID Connect provider metadata document.</returns>
         [AllowAnonymous]
         [HttpGet(".well-known/openid-configuration")]
         public IActionResult OpenIdConfiguration()
@@ -40,6 +52,10 @@ namespace AlgorandGoogleDriveAccount.Controllers
             return Ok(_jwtIssuerService.GetDiscoveryDocument(Request));
         }
 
+        /// <summary>
+        /// The RS256 public signing key(s) used to verify tokens issued by this provider.
+        /// </summary>
+        /// <returns>A JSON Web Key Set (JWKS).</returns>
         [AllowAnonymous]
         [HttpGet(".well-known/jwks.json")]
         public IActionResult Jwks()
@@ -47,6 +63,24 @@ namespace AlgorandGoogleDriveAccount.Controllers
             return Ok(_jwtIssuerService.GetJsonWebKeySet());
         }
 
+        /// <summary>
+        /// OIDC authorization endpoint. Supports the standard <c>response_type=code</c> flow (exchange
+        /// the returned code at <c>/token</c>, with optional PKCE via <paramref name="codeChallenge"/>/
+        /// <paramref name="codeChallengeMethod"/> - required for public clients with no client secret),
+        /// plus a legacy flow where <paramref name="returnUrl"/> receives the <c>id_token</c> directly.
+        /// If the caller isn't already signed in, this redirects to Google sign-in first.
+        /// </summary>
+        /// <param name="clientId">Registered client identifier (<c>JwtIssuer:Clients</c>).</param>
+        /// <param name="redirectUri">Allowlisted redirect URI for the standard code flow.</param>
+        /// <param name="returnUrl">Allowlisted return URL for the legacy direct <c>id_token</c> flow.</param>
+        /// <param name="responseType">Defaults to <c>code</c>.</param>
+        /// <param name="responseMode">e.g. <c>query</c> (default) or <c>form_post</c>.</param>
+        /// <param name="scope">Space-separated scopes; defaults to <c>openid profile email</c>.</param>
+        /// <param name="state">Opaque value round-tripped back to the client.</param>
+        /// <param name="nonce">Value round-tripped into the issued <c>id_token</c>.</param>
+        /// <param name="codeChallenge">PKCE code challenge (RFC 7636); required for public clients.</param>
+        /// <param name="codeChallengeMethod"><c>S256</c> (recommended) or <c>plain</c>.</param>
+        /// <returns>A redirect to Google sign-in, to the client's redirect URI with the result, or an error.</returns>
         [AllowAnonymous]
         [HttpGet("authorize")]
         public async Task<IActionResult> Authorize(
@@ -110,6 +144,14 @@ namespace AlgorandGoogleDriveAccount.Controllers
             return await FinalizeAuthorizeAsync(normalizedRequest, client);
         }
 
+        /// <summary>
+        /// Callback used internally after the user completes Google sign-in from <c>/authorize</c>.
+        /// Not part of the public OIDC contract - resumes the pending authorize request identified by
+        /// <paramref name="requestId"/> and finalizes it as if <c>/authorize</c> had been called while
+        /// already signed in.
+        /// </summary>
+        /// <param name="requestId">Opaque id of the pending authorize request stored by <c>/authorize</c>.</param>
+        /// <returns>A redirect to the client's redirect URI with the result, or an error.</returns>
         [Authorize]
         [HttpGet("authorize/callback")]
         public async Task<IActionResult> AuthorizeCallback([FromQuery] string requestId)
@@ -141,6 +183,18 @@ namespace AlgorandGoogleDriveAccount.Controllers
             return await FinalizeAuthorizeAsync(validation.NormalizedRequest, validation.Client);
         }
 
+        /// <summary>
+        /// OIDC token endpoint. Supports <c>grant_type=authorization_code</c> (with PKCE
+        /// <c>code_verifier</c> when the code was issued with a <c>code_challenge</c>) and
+        /// <c>grant_type=refresh_token</c>. Confidential clients authenticate with <c>client_id</c> +
+        /// <c>client_secret</c> (form body or HTTP Basic); public clients rely on PKCE instead.
+        /// </summary>
+        /// <remarks>
+        /// Body is <c>application/x-www-form-urlencoded</c> with fields: <c>grant_type</c>, <c>code</c>,
+        /// <c>redirect_uri</c>, <c>refresh_token</c>, <c>client_id</c>, <c>client_secret</c>,
+        /// <c>code_verifier</c>.
+        /// </remarks>
+        /// <returns>An OIDC token response (<c>access_token</c>, <c>id_token</c>, etc.) or an OAuth error.</returns>
         [AllowAnonymous]
         [HttpPost("token")]
         public async Task<IActionResult> Token()
@@ -173,6 +227,14 @@ namespace AlgorandGoogleDriveAccount.Controllers
             return Ok(result.Response);
         }
 
+        /// <summary>
+        /// Returns claims for the caller's access token, sent as a <c>Bearer</c> token in the
+        /// <c>Authorization</c> header.
+        /// </summary>
+        /// <returns>
+        /// <c>sub</c>, <c>email</c>, <c>name</c>, <c>preferred_username</c>, and <c>algorand_address</c>
+        /// (omitted if the user never granted Drive access). 401 if the token is missing or invalid.
+        /// </returns>
         [AllowAnonymous]
         [HttpGet("userinfo")]
         public IActionResult UserInfo()
@@ -205,6 +267,11 @@ namespace AlgorandGoogleDriveAccount.Controllers
             });
         }
 
+        /// <summary>
+        /// RFC 7662 token introspection.
+        /// </summary>
+        /// <param name="token">The access or refresh token to check.</param>
+        /// <returns>An object with at least <c>active: bool</c>, plus token metadata when active.</returns>
         [AllowAnonymous]
         [HttpPost("introspect")]
         public async Task<IActionResult> Introspect([FromForm] string token)
@@ -218,6 +285,12 @@ namespace AlgorandGoogleDriveAccount.Controllers
             return Ok(result);
         }
 
+        /// <summary>
+        /// Verifies a token, same result shape as <c>/introspect</c>. The token can be supplied either
+        /// in the form body or as a <c>Bearer</c> token in the <c>Authorization</c> header.
+        /// </summary>
+        /// <param name="token">The token to verify (optional if supplied via the Authorization header instead).</param>
+        /// <returns>An object with at least <c>active: bool</c>, plus token metadata when active.</returns>
         [AllowAnonymous]
         [HttpPost("verify")]
         public async Task<IActionResult> Verify([FromForm] string? token)
@@ -236,6 +309,17 @@ namespace AlgorandGoogleDriveAccount.Controllers
             return Ok(result);
         }
 
+        /// <summary>
+        /// RP-Initiated Logout 1.0. Clears the Google-authenticated session cookie and, if
+        /// <paramref name="postLogoutRedirectUri"/> is given, redirects there (only if it's allowlisted
+        /// for the resolved client - via <paramref name="clientId"/> or the <c>aud</c> claim of
+        /// <paramref name="idTokenHint"/>). Also reachable as <c>GET /logout</c>.
+        /// </summary>
+        /// <param name="idTokenHint">Previously issued <c>id_token</c>; its <c>aud</c> can substitute for <paramref name="clientId"/>.</param>
+        /// <param name="postLogoutRedirectUri">Where to send the browser after logout; must be allowlisted for the client.</param>
+        /// <param name="state">Opaque value appended to <paramref name="postLogoutRedirectUri"/> as a query parameter.</param>
+        /// <param name="clientId">Registered client identifier (<c>JwtIssuer:Clients</c>).</param>
+        /// <returns>A redirect to <paramref name="postLogoutRedirectUri"/> (or <c>/</c>), or a validation error.</returns>
         [AllowAnonymous]
         [HttpGet("connect/endsession")]
         [HttpGet("logout")]

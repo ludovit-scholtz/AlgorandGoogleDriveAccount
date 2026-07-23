@@ -13,6 +13,12 @@ using System.Security.Claims;
 
 namespace AlgorandGoogleDriveAccount.Controllers
 {
+    /// <summary>
+    /// Links a session on one device (e.g. an AI assistant's config) to a Google Drive authorization
+    /// completed via <c>pair.html</c> on another device (a browser), coordinated through Redis-backed
+    /// session state. Also exposes Cross-Account Protection status/reporting and portfolio/tier info
+    /// for a paired session.
+    /// </summary>
     [ApiController]
     [Route("api/device")]
     public class DevicePairingController : ControllerBase
@@ -438,8 +444,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// Report a security event for Cross-Account Protection
         /// </summary>
         /// <param name="sessionId">Session ID of the device</param>
-        /// <param name="eventType">Type of security event</param>
-        /// <param name="details">Additional details about the event</param>
+        /// <param name="request">The security event type and optional details to report</param>
         /// <returns>Result of the security event report</returns>
         [AllowAnonymous]
         [HttpPost("report-security-event/{sessionId}")]
@@ -585,7 +590,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
                 ServiceTier.Free => new
                 {
                     tier = "Free",
-                    portfolioRange = "< €10,000",
+                    portfolioRange = "< ï¿½10,000",
                     devices = 1,
                     support = "Community",
                     sla = "Best effort",
@@ -594,7 +599,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
                 ServiceTier.Professional => new
                 {
                     tier = "Professional",
-                    portfolioRange = "€10,000 - €1,000,000",
+                    portfolioRange = "ï¿½10,000 - ï¿½1,000,000",
                     devices = 5,
                     support = "Priority",
                     sla = "99.5%",
@@ -603,7 +608,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
                 ServiceTier.Enterprise => new
                 {
                     tier = "Enterprise",
-                    portfolioRange = "> €1,000,000",
+                    portfolioRange = "> ï¿½1,000,000",
                     devices = "Unlimited",
                     support = "Dedicated",
                     sla = "99.9%",
@@ -613,9 +618,13 @@ namespace AlgorandGoogleDriveAccount.Controllers
             };
         }
 
+        /// <summary>Request body for <see cref="ReportSecurityEvent"/>.</summary>
         public class SecurityEventRequest
         {
+            /// <summary>The kind of security event being reported.</summary>
             public SecurityEventType EventType { get; set; }
+
+            /// <summary>Optional free-text details about the event.</summary>
             public string? Details { get; set; }
         }
     }
