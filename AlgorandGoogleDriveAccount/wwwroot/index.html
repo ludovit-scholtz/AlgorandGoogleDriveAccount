@@ -4,318 +4,756 @@
     <meta charset="UTF-8">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Biatec MCP Server - Algorand Google Drive Integration</title>
+    <meta name="description" content="Biatec MCP Server — self-custody Algorand wealth management for AI assistants via the Model Context Protocol. Keys never leave your Google Drive.">
+    <title>Biatec MCP Server — Self-Custody Algorand for AI Agents</title>
+    <link rel="icon" href="/logo-biatec.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --bg-0: #05060d;
+            --bg-1: #0a0d1a;
+            --bg-2: #10142a;
+            --panel: rgba(18, 22, 42, 0.6);
+            --panel-border: rgba(140, 160, 255, 0.14);
+            --panel-border-hover: rgba(140, 200, 255, 0.35);
+            --text-0: #eef1fb;
+            --text-1: #aab1cf;
+            --text-2: #6d759a;
+            --accent-cyan: #4de3ff;
+            --accent-violet: #9b7bff;
+            --accent-green: #35e6a4;
+            --accent-pink: #ff6bd6;
+            --font-display: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+            --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
         }
-        
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html { scroll-behavior: smooth; }
+
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: var(--font-display);
+            color: var(--text-0);
+            background: var(--bg-0);
             min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.6;
         }
-        
-        .navbar {
-            background: rgba(255, 255, 255, 0.95);
-            padding: 1rem 0;
+
+        /* ---------- Ambient futuristic backdrop ---------- */
+        .aurora {
             position: fixed;
-            width: 100%;
-            top: 0;
-            z-index: 1000;
-            backdrop-filter: blur(10px);
+            inset: 0;
+            z-index: -2;
+            background:
+                radial-gradient(60vw 60vw at 12% 8%, rgba(77, 227, 255, 0.16), transparent 60%),
+                radial-gradient(55vw 55vw at 88% 18%, rgba(155, 123, 255, 0.18), transparent 60%),
+                radial-gradient(70vw 70vw at 50% 100%, rgba(53, 230, 164, 0.10), transparent 60%),
+                linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 45%, var(--bg-2) 100%);
+            animation: driftAurora 24s ease-in-out infinite alternate;
         }
-        
+
+        @keyframes driftAurora {
+            0%   { filter: hue-rotate(0deg) brightness(1); }
+            100% { filter: hue-rotate(18deg) brightness(1.08); }
+        }
+
+        .grid-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            background-image:
+                linear-gradient(rgba(140, 160, 255, 0.055) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(140, 160, 255, 0.055) 1px, transparent 1px);
+            background-size: 44px 44px;
+            mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 30%, transparent 90%);
+        }
+
+        ::selection { background: var(--accent-violet); color: #05060d; }
+
+        a { color: inherit; }
+
+        .glow-text {
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet) 55%, var(--accent-pink));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        /* ---------- Nav ---------- */
+        .navbar {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+            background: rgba(6, 8, 18, 0.55);
+            backdrop-filter: blur(18px) saturate(140%);
+            -webkit-backdrop-filter: blur(18px) saturate(140%);
+            border-bottom: 1px solid var(--panel-border);
+        }
+
         .nav-container {
-            max-width: 1200px;
+            max-width: 1240px;
             margin: 0 auto;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 0 2rem;
+            padding: 0.9rem 2rem;
         }
-        
+
         .logo {
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: #4285f4;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
         }
-        
+
+        .logo img { height: 26px; width: auto; display: block; }
+
         .nav-links {
             display: flex;
             list-style: none;
             gap: 2rem;
+            align-items: center;
         }
-        
+
         .nav-links a {
             text-decoration: none;
-            color: #333;
+            color: var(--text-1);
             font-weight: 500;
-            transition: color 0.3s ease;
+            font-size: 0.92rem;
+            transition: color 0.25s ease;
+            position: relative;
         }
-        
-        .nav-links a:hover {
-            color: #4285f4;
+
+        .nav-links a:hover { color: var(--text-0); }
+
+        .nav-cta {
+            padding: 0.55rem 1.15rem;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
+            color: #05060d !important;
+            font-weight: 600;
+            transition: transform 0.25s ease, box-shadow 0.25s ease;
         }
-        
+
+        .nav-cta:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 28px rgba(77, 227, 255, 0.35);
+        }
+
+        .nav-toggle { display: none; }
+
+        /* ---------- Layout ---------- */
         .container {
-            max-width: 1200px;
+            max-width: 1240px;
             margin: 0 auto;
-            padding: 8rem 2rem 4rem;
+            padding: 9rem 2rem 4rem;
         }
-        
+
+        /* ---------- Hero ---------- */
         .hero {
             text-align: center;
-            color: white;
-            margin-bottom: 4rem;
+            margin-bottom: 5rem;
+            position: relative;
         }
-        
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 1rem;
+            border-radius: 999px;
+            border: 1px solid var(--panel-border);
+            background: var(--panel);
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--accent-cyan);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin-bottom: 1.75rem;
+        }
+
+        .eyebrow .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            box-shadow: 0 0 10px var(--accent-green);
+            animation: pulseDot 1.8s ease-in-out infinite;
+        }
+
+        @keyframes pulseDot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.75); }
+        }
+
         .hero h1 {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+            font-size: clamp(2.4rem, 5.4vw, 4.2rem);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.08;
+            margin-bottom: 1.4rem;
         }
-        
-        .hero p {
-            font-size: 1.2rem;
-            margin-bottom: 2rem;
-            opacity: 0.9;
+
+        .hero p.subtitle {
+            font-size: clamp(1.02rem, 1.6vw, 1.25rem);
+            color: var(--text-1);
+            max-width: 700px;
+            margin: 0 auto 2.5rem;
         }
-        
+
+        .hero-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
         .cta-button {
-            display: inline-block;
-            background: #4285f4;
-            color: white;
-            padding: 1rem 2rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
+            color: #05060d;
+            padding: 0.95rem 1.9rem;
             text-decoration: none;
-            border-radius: 5px;
-            font-weight: bold;
-            transition: all 0.3s ease;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 0.98rem;
+            transition: transform 0.25s ease, box-shadow 0.25s ease;
         }
-        
+
         .cta-button:hover {
-            background: #3367d6;
             transform: translateY(-2px);
+            box-shadow: 0 14px 36px rgba(77, 227, 255, 0.32);
         }
-        
+
+        .cta-button.secondary {
+            background: var(--panel);
+            color: var(--text-0);
+            border: 1px solid var(--panel-border);
+        }
+
+        .cta-button.secondary:hover {
+            border-color: var(--panel-border-hover);
+            box-shadow: 0 10px 30px rgba(140, 160, 255, 0.14);
+        }
+
+        /* ---------- Stat strip ---------- */
+        .stat-strip {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            max-width: 880px;
+            margin: 3rem auto 0;
+        }
+
+        .stat-strip .stat {
+            padding: 1.1rem 0.5rem;
+            border-radius: 14px;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            text-align: center;
+        }
+
+        .stat .num {
+            font-family: var(--font-mono);
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: var(--text-0);
+        }
+
+        .stat .label {
+            font-size: 0.78rem;
+            color: var(--text-2);
+            margin-top: 0.25rem;
+        }
+
+        /* ---------- Section heading ---------- */
+        .section-head {
+            text-align: center;
+            max-width: 640px;
+            margin: 0 auto 3rem;
+        }
+
+        .section-head .kicker {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--accent-violet);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 0.6rem;
+        }
+
+        .section-head h2 {
+            font-size: clamp(1.7rem, 3vw, 2.3rem);
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            margin-bottom: 0.75rem;
+        }
+
+        .section-head p { color: var(--text-1); }
+
+        section { margin: 6rem 0; scroll-margin-top: 6rem; }
+
+        /* ---------- Feature cards ---------- */
         .features {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 2rem;
-            margin: 4rem 0;
+            gap: 1.5rem;
         }
-        
+
         .feature-card {
-            background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            transition: transform 0.3s ease;
+            position: relative;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            padding: 1.75rem;
+            border-radius: 18px;
+            backdrop-filter: blur(10px);
+            transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+            overflow: hidden;
         }
-        
+
+        .feature-card::before {
+            content: "";
+            position: absolute;
+            inset: -1px;
+            border-radius: 18px;
+            padding: 1px;
+            background: linear-gradient(135deg, rgba(77,227,255,0.4), rgba(155,123,255,0) 40%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            pointer-events: none;
+        }
+
         .feature-card:hover {
-            transform: translateY(-5px);
+            transform: translateY(-4px);
+            border-color: var(--panel-border-hover);
+            box-shadow: 0 20px 50px rgba(8, 10, 24, 0.5);
         }
-        
-        .feature-card h3 {
-            color: #4285f4;
+
+        .feature-card:hover::before { opacity: 1; }
+
+        .feature-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            background: linear-gradient(135deg, rgba(77,227,255,0.18), rgba(155,123,255,0.18));
+            border: 1px solid var(--panel-border);
             margin-bottom: 1rem;
         }
-        
-        .setup-section {
-            background: white;
-            padding: 3rem;
-            border-radius: 10px;
-            margin: 4rem 0;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+
+        .feature-card h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 0.55rem;
+            color: var(--text-0);
         }
-        
+
+        .feature-card p { color: var(--text-1); font-size: 0.92rem; }
+
+        /* ---------- Setup / tabs ---------- */
+        .setup-section {
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            padding: 2.5rem;
+            border-radius: 22px;
+            backdrop-filter: blur(10px);
+        }
+
         .setup-tabs {
             display: flex;
+            gap: 0.5rem;
             margin-bottom: 2rem;
-            border-bottom: 2px solid #eee;
+            border-bottom: 1px solid var(--panel-border);
+            flex-wrap: wrap;
         }
-        
+
         .tab-button {
             background: none;
             border: none;
-            padding: 1rem 2rem;
+            padding: 0.85rem 1.4rem;
             cursor: pointer;
-            font-size: 1rem;
-            font-weight: 500;
-            color: #666;
-            border-bottom: 3px solid transparent;
-            transition: all 0.3s ease;
+            font-family: var(--font-display);
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-2);
+            border-bottom: 2px solid transparent;
+            transition: color 0.25s ease, border-color 0.25s ease;
         }
-        
-        .tab-button.active {
-            color: #4285f4;
-            border-bottom-color: #4285f4;
+
+        .tab-button.active,
+        .tab-button:hover { color: var(--accent-cyan); }
+
+        .tab-button.active { border-bottom-color: var(--accent-cyan); }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; animation: fadeIn 0.35s ease; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
         }
-        
-        .tab-content {
-            display: none;
-        }
-        
-        .tab-content.active {
-            display: block;
-        }
-        
-        .code-block {
-            background: #f5f5f5;
-            padding: 1rem;
-            border-radius: 5px;
-            border-left: 4px solid #4285f4;
-            margin: 1rem 0;
-            overflow-x: auto;
-        }
-        
+
         .step {
-            margin: 1.5rem 0;
-            padding: 1rem;
-            background: #f8f9fa;
-            border-radius: 5px;
+            margin: 1.25rem 0;
+            padding: 1.25rem 1.4rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
         }
-        
+
         .step h4 {
-            color: #4285f4;
-            margin-bottom: 0.5rem;
+            color: var(--text-0);
+            font-size: 0.98rem;
+            margin-bottom: 0.4rem;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
         }
-        
+
+        .step h4 .step-num {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet));
+            color: #05060d;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .step p { color: var(--text-1); font-size: 0.92rem; }
+        .step code {
+            font-family: var(--font-mono);
+            background: rgba(255,255,255,0.06);
+            padding: 0.1rem 0.4rem;
+            border-radius: 5px;
+            font-size: 0.85em;
+            color: var(--accent-cyan);
+        }
+
+        /* ---------- Copyable code blocks ---------- */
+        .code-block {
+            position: relative;
+            background: #060811;
+            border: 1px solid var(--panel-border);
+            border-left: 3px solid var(--accent-cyan);
+            border-radius: 12px;
+            margin: 1rem 0;
+        }
+
+        .code-block pre {
+            margin: 0;
+            padding: 1.1rem 3.6rem 1.1rem 1.2rem;
+            overflow-x: auto;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.55;
+            color: #d7ddff;
+            white-space: pre;
+        }
+
+        .code-block .copy-btn {
+            position: absolute;
+            top: 0.65rem;
+            right: 0.65rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--panel-border);
+            color: var(--text-1);
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            padding: 0.4rem 0.7rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .code-block .copy-btn:hover {
+            color: var(--text-0);
+            border-color: var(--panel-border-hover);
+            background: rgba(255,255,255,0.1);
+        }
+
+        .code-block .copy-btn.copied {
+            color: #05060d;
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+        }
+
+        .code-block .copy-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+
+        /* ---------- Pricing ---------- */
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .price-card {
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            border-radius: 18px;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .price-card:hover { transform: translateY(-4px); border-color: var(--panel-border-hover); }
+
+        .price-card.featured {
+            border-color: rgba(155, 123, 255, 0.55);
+            background: linear-gradient(180deg, rgba(155,123,255,0.10), var(--panel) 60%);
+            position: relative;
+        }
+
+        .price-card.featured .badge {
+            position: absolute;
+            top: -12px;
+            right: 1.5rem;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
+            color: #05060d;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            padding: 0.3rem 0.7rem;
+            border-radius: 999px;
+            text-transform: uppercase;
+        }
+
+        .price-card h3 { font-size: 1.15rem; margin-bottom: 0.3rem; }
+        .price-card .sub { color: var(--text-2); font-size: 0.85rem; margin-bottom: 1.25rem; }
+
+        .price-card .price {
+            font-family: var(--font-mono);
+            font-size: 2.1rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+        }
+
+        .price-card .price span { font-size: 0.95rem; color: var(--text-2); font-weight: 400; }
+
+        .price-card ul {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+            color: var(--text-1);
+            font-size: 0.9rem;
+            flex-grow: 1;
+        }
+
+        .price-card li { display: flex; align-items: flex-start; gap: 0.55rem; }
+        .price-card li::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            margin-top: 0.5rem;
+            border-radius: 50%;
+            background: var(--accent-green);
+            flex-shrink: 0;
+        }
+
+        /* ---------- Footer ---------- */
         .footer {
-            background: rgba(255, 255, 255, 0.95);
-            padding: 2rem 0;
+            border-top: 1px solid var(--panel-border);
+            padding: 2.5rem 0 3rem;
             text-align: center;
-            color: #666;
+            color: var(--text-2);
         }
-        
-        .footer-links {
-            margin-bottom: 1rem;
-        }
-        
+
+        .footer-links { margin-bottom: 1rem; }
+
         .footer-links a {
-            color: #666;
+            color: var(--text-1);
             text-decoration: none;
             margin: 0 1rem;
-            transition: color 0.3s ease;
+            font-size: 0.9rem;
+            transition: color 0.25s ease;
         }
-        
-        .footer-links a:hover {
-            color: #4285f4;
-        }
-        
+
+        .footer-links a:hover { color: var(--accent-cyan); }
+
+        .footer p { font-size: 0.82rem; }
+
         @media (max-width: 768px) {
-            .hero h1 {
-                font-size: 2rem;
-            }
-            
-            .nav-container {
-                flex-direction: column;
-                gap: 1rem;
-            }
-            
             .nav-links {
-                gap: 1rem;
-            }
-            
-            .setup-tabs {
+                display: none;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
                 flex-direction: column;
+                background: rgba(6, 8, 18, 0.97);
+                padding: 1.25rem 2rem;
+                border-bottom: 1px solid var(--panel-border);
+                gap: 1.1rem;
             }
+
+            .nav-links.open { display: flex; }
+
+            .nav-toggle {
+                display: inline-flex;
+                background: none;
+                border: 1px solid var(--panel-border);
+                color: var(--text-0);
+                border-radius: 8px;
+                padding: 0.4rem 0.6rem;
+                cursor: pointer;
+            }
+
+            .container { padding: 7.5rem 1.25rem 3rem; }
+            .setup-section { padding: 1.5rem; }
+            section { margin: 4rem 0; }
         }
     </style>
 </head>
 <body>
+    <div class="aurora"></div>
+    <div class="grid-overlay"></div>
+
     <nav class="navbar">
         <div class="nav-container">
-            <div class="logo">Biatec MCP Server</div>
-            <ul class="nav-links">
+            <div class="logo">
+                <img src="/logo-biatec.png" alt="Biatec logo">
+                <span>Biatec MCP</span>
+            </div>
+            <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">☰</button>
+            <ul class="nav-links" id="navLinks">
                 <li><a href="#features">Features</a></li>
                 <li><a href="#setup">Setup</a></li>
-                <li><a href="/api/device/app">Device Pairing</a></li>
                 <li><a href="#pricing">Pricing</a></li>
                 <li><a href="/privacy.html">Privacy</a></li>
                 <li><a href="/terms.html">Terms</a></li>
+                <li><a href="/pair.html" class="nav-cta">Device Pairing</a></li>
             </ul>
         </div>
     </nav>
 
     <div class="container">
         <section class="hero">
-            <h1>Algorand Google Drive MCP Server</h1>
-            <p>Secure self-custody Algorand wealth management through Google Drive with AI-powered Model Context Protocol integration</p>
-            <a href="#setup" class="cta-button">Get Started</a>
+            <div class="eyebrow"><span class="dot"></span> Model Context Protocol · Live on google.biatec.io</div>
+            <h1>Self-custody Algorand,<br><span class="glow-text">wired directly into your AI agent.</span></h1>
+            <p class="subtitle">Biatec MCP Server gives Claude, VS Code, and any MCP-compatible assistant secure access to your Algorand account — while your encrypted private key stays in your own Google Drive, never on our servers.</p>
+            <div class="hero-actions">
+                <a href="#setup" class="cta-button">Connect your agent →</a>
+                <a href="/pair.html" class="cta-button secondary">Pair a device</a>
+            </div>
+            <div class="stat-strip">
+                <div class="stat"><div class="num">AES-256</div><div class="label">Key encryption</div></div>
+                <div class="stat"><div class="num">0</div><div class="label">Keys stored on our servers</div></div>
+                <div class="stat"><div class="num">2</div><div class="label">Clients: Claude &amp; VS Code</div></div>
+                <div class="stat"><div class="num">100%</div><div class="label">Self-custody, always</div></div>
+            </div>
         </section>
 
-        <section id="features" class="features">
-            <div class="feature-card">
-                <h3>🔐 Self-Custody Account Storage</h3>
-                <p>Your Algorand private keys are encrypted and stored securely in your personal Google Drive, ensuring only you have access to your funds with true self-custody.</p>
+        <section id="features">
+            <div class="section-head">
+                <div class="kicker">Why Biatec</div>
+                <h2>Built for AI-native, self-custody finance</h2>
+                <p>Every design choice keeps custody of your keys in your hands — the AI only asks, you always hold the vault.</p>
             </div>
-            
-            <div class="feature-card">
-                <h3>🤖 MCP Integration</h3>
-                <p>Seamlessly integrate with Claude Desktop and Visual Studio Code through the Model Context Protocol for AI-assisted blockchain operations while maintaining self-custody.</p>
-            </div>
-            
-            <div class="feature-card">
-                <h3>🔄 Cross-Device Sync</h3>
-                <p>Access your self-custody Algorand accounts from any device through secure device pairing and Google authentication without compromising key ownership.</p>
-            </div>
-            
-            <div class="feature-card">
-                <h3>🛡️ Email-Bound Security</h3>
-                <p>Enhanced security through email-specific encryption binding that ensures your private keys can only be used with your specific Google account.</p>
-            </div>
-            
-            <div class="feature-card">
-                <h3>📱 Secure Device Pairing</h3>
-                <p>Easily pair new devices with your self-custody accounts using secure OAuth flows while maintaining exclusive control of your private keys.</p>
-            </div>
-            
-            
-            <div class="feature-card">
-                <h3>⚡ Authorized Processing</h3>
-                <p>Biatec servers process your encrypted keys only when you authorize transaction signing, ensuring true self
+            <div class="features">
+                <div class="feature-card">
+                    <div class="feature-icon">🔐</div>
+                    <h3>Self-Custody Account Storage</h3>
+                    <p>Your Algorand private keys are encrypted and stored securely in your personal Google Drive, ensuring only you have access to your funds with true self-custody.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🤖</div>
+                    <h3>MCP Integration</h3>
+                    <p>Seamlessly integrate with Claude Desktop and Visual Studio Code through the Model Context Protocol for AI-assisted blockchain operations while maintaining self-custody.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔄</div>
+                    <h3>Cross-Device Sync</h3>
+                    <p>Access your self-custody Algorand accounts from any device through secure device pairing and Google authentication without compromising key ownership.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🛡️</div>
+                    <h3>Email-Bound Security</h3>
+                    <p>Enhanced security through email-specific encryption binding that ensures your private keys can only be used with your specific Google account.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📱</div>
+                    <h3>Secure Device Pairing</h3>
+                    <p>Easily pair new devices with your self-custody accounts using secure OAuth flows while maintaining exclusive control of your private keys.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Authorized Processing Only</h3>
+                    <p>Biatec servers decrypt your keys only in-memory, only when you explicitly authorize a signing operation — plaintext keys are never persisted.</p>
+                </div>
             </div>
         </section>
 
         <section id="setup" class="setup-section">
-            <h2>Setup Instructions</h2>
+            <div class="section-head" style="margin-bottom:2rem;">
+                <div class="kicker">Get connected</div>
+                <h2>Setup instructions</h2>
+                <p>Copy the config, paste it into your client, and you're pairing in under a minute.</p>
+            </div>
             <div class="setup-tabs">
                 <button class="tab-button active" onclick="showTab('claude')">Claude Desktop</button>
                 <button class="tab-button" onclick="showTab('vscode')">Visual Studio Code</button>
             </div>
+
             <div id="claude" class="tab-content active">
                 <div class="step">
-                    <h4>1. Open Claude Desktop</h4>
+                    <h4><span class="step-num">1</span>Open Claude Desktop</h4>
                     <p>Launch the Claude Desktop application on your computer.</p>
                 </div>
                 <div class="step">
-                    <h4>2. Go to Model Context Protocol (MCP) Settings</h4>
+                    <h4><span class="step-num">2</span>Go to Model Context Protocol (MCP) Settings</h4>
                     <p>Navigate to <b>Settings</b> &rarr; <b>Model Context Protocol</b> or <b>Custom Servers</b> section.</p>
                 </div>
                 <div class="step">
-                    <h4>3. Add the Biatec MCP Server</h4>
+                    <h4><span class="step-num">3</span>Add the Biatec MCP Server</h4>
                     <p>Click <b>Add Server</b> and enter the following URL:</p>
                     <div class="code-block">
-                        https://google.biatec.io/mcp/
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>https://google.biatec.io/mcp/</pre>
                     </div>
-                                        <div class="code-block">
-{
+                    <p>Or configure it explicitly via JSON:</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>{
     "servers": {
         "Biatec": {
             "command": "npx",
             "cwd": "${input:cwd}",
-            "args":[
+            "args": [
                 "mcp-remote",
                 "https://google.biatec.io/mcp/",
                 "--transport",
                 "http-first"
-              ]
+            ]
         }
     },
     "inputs": [
@@ -330,35 +768,39 @@
             "description": "Debug Type"
         }
     ]
-}
- 
+}</pre>
                     </div>
                     <p>Save your changes. The server will now be available for use in Claude Desktop.</p>
                 </div>
                 <div class="step">
-                    <h4>4. Use the Integration</h4>
+                    <h4><span class="step-num">4</span>Use the Integration</h4>
                     <p>When prompted to select an MCP server, choose <b>Biatec</b> or the URL above. Follow the on-screen instructions to authenticate with Google and pair your device.</p>
                 </div>
                 <div class="step">
-                    <h4>5. Do prompt</h4>
-                    <p>For example "@Biatec getAlgorandAddress".</p>
-                    <p>If the authentication prompt will be shown, just login to the google account and run the prompt after successfull login.</p>
+                    <h4><span class="step-num">5</span>Run your first prompt</h4>
+                    <p>For example: <code>@Biatec getAlgorandAddress</code></p>
+                    <p>If an authentication prompt appears, log in to your Google account and re-run the prompt after a successful login.</p>
                 </div>
             </div>
+
             <div id="vscode" class="tab-content">
                 <div class="step">
-                    <h4>1. Open Visual Studio Code</h4>
+                    <h4><span class="step-num">1</span>Open Visual Studio Code</h4>
                     <p>Start Visual Studio Code on your computer.</p>
                 </div>
                 <div class="step">
-                    <h4>2. Create or Edit <code>.vscode/mcp.json</code></h4>
-                    <p>In your project folder, create a folder .vscode if it does not exists yet, and file named <code>mcp.json</code> (or open it if it already exists).</p>
+                    <h4><span class="step-num">2</span>Create or edit <code>.vscode/mcp.json</code></h4>
+                    <p>In your project folder, create a <code>.vscode</code> folder if it doesn't exist yet, then create or open a file named <code>mcp.json</code>.</p>
                 </div>
                 <div class="step">
-                    <h4>3. Add the Biatec MCP Server Configuration</h4>
+                    <h4><span class="step-num">3</span>Add the Biatec MCP Server configuration</h4>
                     <p>Insert the following configuration into <code>mcp.json</code>:</p>
                     <div class="code-block">
-{
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>{
   "mcpServers": {
     "Biatec": {
       "command": "npx",
@@ -370,76 +812,104 @@
       ]
     }
   }
-}
- 
+}</pre>
                     </div>
-                    <p>Save the file. Visual Studio Code will now recognize the Biatec for Model Context Protocol operations.</p>
+                    <p>Save the file. Visual Studio Code will now recognize Biatec for Model Context Protocol operations.</p>
                 </div>
                 <div class="step">
-                    <h4>4. Use the Integration</h4>
+                    <h4><span class="step-num">4</span>Use the Integration</h4>
                     <p>When using MCP features in VS Code, select <b>Biatec</b> as your provider. Follow prompts to authenticate and pair your device as needed.</p>
                 </div>
                 <div class="step">
-                    <h4>5. Do prompt</h4>
-                    <p>For example "run #getAlgorandAddress".</p>
-                    <p>If the authentication prompt will be shown, just login to the google account and run the prompt after successfull login.</p>
+                    <h4><span class="step-num">5</span>Run your first prompt</h4>
+                    <p>For example: <code>run #getAlgorandAddress</code></p>
+                    <p>If an authentication prompt appears, log in to your Google account and re-run the prompt after a successful login.</p>
                 </div>
             </div>
-            <script>
-                function showTab(tab) {
-                    document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-                    document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
-                    document.querySelector('.tab-button[onclick*="' + tab + '"]').classList.add('active');
-                    document.getElementById(tab).classList.add('active');
-                }
-            </script>
         </section>
 
-        <section id="pricing" class="setup-section">
-            <h2>Pricing</h2>
-            <div class="features" style="margin: 0;">
-                <div class="feature-card">
-                    <h3>Tier 1: Free</h3>
-                    <p><b>Wealth up to 10,000 EUR</b></p>
+        <section id="pricing">
+            <div class="section-head">
+                <div class="kicker">Pricing</div>
+                <h2>Value-based tiers, not billing tiers</h2>
+                <p>Your tier is assigned automatically from your self-custody portfolio value — no subscriptions to manage.</p>
+            </div>
+            <div class="pricing-grid">
+                <div class="price-card">
+                    <h3>Free</h3>
+                    <p class="sub">Wealth up to €10,000</p>
+                    <div class="price">€0<span>/month</span></div>
                     <ul>
                         <li>All core features</li>
                         <li>Secure Google Drive storage</li>
                         <li>Device pairing</li>
                         <li>Community support</li>
                     </ul>
-                    <div style="font-size: 1.5rem; color: #4285f4; margin-top: 1rem;">€0 / month</div>
                 </div>
-                <div class="feature-card">
-                    <h3>Tier 2: Pro</h3>
-                    <p><b>Wealth up to 1,000,000 EUR</b></p>
+                <div class="price-card featured">
+                    <span class="badge">Most Popular</span>
+                    <h3>Pro</h3>
+                    <p class="sub">Wealth up to €1,000,000</p>
+                    <div class="price">€10<span>/month</span></div>
                     <ul>
-                        <li>All Tier 1 features</li>
+                        <li>All Free tier features</li>
                         <li>Priority support</li>
                         <li>Advanced security monitoring</li>
                     </ul>
-                    <div style="font-size: 1.5rem; color: #4285f4; margin-top: 1rem;">€10 / month</div>
                 </div>
-                <div class="feature-card">
+                <div class="price-card">
                     <h3>Enterprise</h3>
-                    <p><b>Wealth over 1,000,000 EUR</b></p>
+                    <p class="sub">Wealth over €1,000,000</p>
+                    <div class="price">€1,000<span>/month</span></div>
                     <ul>
-                        <li>All Tier 2 features</li>
+                        <li>All Pro tier features</li>
                         <li>Dedicated account manager</li>
                         <li>Custom integrations</li>
                         <li>Enterprise-grade SLAs</li>
                     </ul>
-                    <div style="font-size: 1.5rem; color: #4285f4; margin-top: 1rem;">€1,000 / month</div>
                 </div>
             </div>
         </section>
 
         <footer class="footer">
             <div class="footer-links">
+                <a href="/pair.html">Device Pairing</a>
                 <a href="/privacy.html">Privacy Policy</a>
                 <a href="/terms.html">Terms of Service</a>
             </div>
-            <p>&copy; 2023 Biatec. All rights reserved.</p>
+            <p>&copy; 2026 Biatec (Scholtz &amp; Company, j.s.a.). All rights reserved.</p>
         </footer>
     </div>
+
+    <script>
+        function showTab(tab) {
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+            document.querySelector('.tab-button[onclick*="' + tab + '"]').classList.add('active');
+            document.getElementById(tab).classList.add('active');
+        }
+
+        function copyCode(btn) {
+            const pre = btn.parentElement.querySelector('pre');
+            const text = pre.innerText;
+            navigator.clipboard.writeText(text).then(() => {
+                const original = btn.innerHTML;
+                btn.classList.add('copied');
+                btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied';
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    btn.innerHTML = original;
+                }, 1800);
+            });
+        }
+
+        document.getElementById('navToggle').addEventListener('click', () => {
+            document.getElementById('navLinks').classList.toggle('open');
+        });
+
+        document.querySelectorAll('.nav-links a').forEach(link => {
+            link.addEventListener('click', () => document.getElementById('navLinks').classList.remove('open'));
+        });
+    </script>
 </body>
 </html>
