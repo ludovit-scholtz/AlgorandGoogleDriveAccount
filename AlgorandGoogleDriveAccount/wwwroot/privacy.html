@@ -5,26 +5,51 @@
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Privacy Policy - Biatec MCP Server</title>
+    <link rel="icon" href="/logo-biatec.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --bg-0: #05060d;
+            --bg-1: #0a0d1a;
+            --bg-2: #10142a;
+            --panel: rgba(18, 22, 42, 0.6);
+            --panel-border: rgba(140, 160, 255, 0.14);
+            --panel-border-hover: rgba(140, 200, 255, 0.35);
+            --text-0: #eef1fb;
+            --text-1: #aab1cf;
+            --text-2: #6d759a;
+            --accent-cyan: #4de3ff;
+            --accent-violet: #9b7bff;
+            --accent-green: #35e6a4;
+            --font-display: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+            --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
         }
-        
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: #f8f9fa;
+            font-family: var(--font-display);
+            line-height: 1.65;
+            color: var(--text-0);
+            background:
+                radial-gradient(55vw 55vw at 12% 0%, rgba(77, 227, 255, 0.12), transparent 60%),
+                radial-gradient(55vw 55vw at 90% 15%, rgba(155, 123, 255, 0.14), transparent 60%),
+                linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 45%, var(--bg-2) 100%);
+            min-height: 100vh;
         }
-        
+
+        a { color: var(--accent-cyan); }
+
         .navbar {
-            background: white;
+            background: rgba(6, 8, 18, 0.6);
+            backdrop-filter: blur(16px) saturate(140%);
+            -webkit-backdrop-filter: blur(16px) saturate(140%);
+            border-bottom: 1px solid var(--panel-border);
             padding: 1rem 0;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        
+
         .nav-container {
             max-width: 1200px;
             margin: 0 auto;
@@ -33,124 +58,148 @@
             align-items: center;
             padding: 0 2rem;
         }
-        
+
         .logo {
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: #4285f4;
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--text-0);
             text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
         }
-        
+
+        .logo img { height: 24px; width: auto; }
+
         .container {
             max-width: 800px;
-            margin: 0 auto;
-            padding: 2rem;
-            background: white;
-            margin-top: 2rem;
-            margin-bottom: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin: 2rem auto;
+            padding: 2.5rem;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            backdrop-filter: blur(14px);
+            border-radius: 18px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.4);
         }
-        
+
         h1 {
-            color: #4285f4;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
             margin-bottom: 1rem;
-            font-size: 2.5rem;
+            font-size: 2.3rem;
+            letter-spacing: -0.01em;
         }
-        
+
         h2 {
-            color: #333;
-            margin: 2rem 0 1rem 0;
-            font-size: 1.5rem;
+            color: var(--text-0);
+            margin: 2.25rem 0 1rem 0;
+            font-size: 1.4rem;
+            font-weight: 600;
         }
-        
+
         h3 {
-            color: #555;
+            color: var(--text-0);
             margin: 1.5rem 0 0.5rem 0;
-            font-size: 1.2rem;
+            font-size: 1.1rem;
+            font-weight: 600;
         }
-        
-        p {
-            margin-bottom: 1rem;
-        }
-        
-        ul {
-            margin: 1rem 0 1rem 2rem;
-        }
-        
-        li {
-            margin-bottom: 0.5rem;
-        }
-        
+
+        p { margin-bottom: 1rem; color: var(--text-1); }
+
+        ul { margin: 1rem 0 1rem 1.4rem; color: var(--text-1); }
+
+        li { margin-bottom: 0.5rem; }
+
         .contact-info {
-            background: #f8f9fa;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--panel-border);
             padding: 1.5rem;
-            border-radius: 5px;
+            border-radius: 12px;
             margin: 2rem 0;
-            border-left: 4px solid #4285f4;
+            border-left: 3px solid var(--accent-cyan);
         }
-        
+
+        .contact-info.success {
+            background: rgba(53, 230, 164, 0.07);
+            border-color: rgba(53, 230, 164, 0.3);
+            border-left-color: var(--accent-green);
+        }
+
+        .contact-info.success h3 { color: var(--accent-green); }
+
+        .contact-info.warning {
+            background: rgba(255, 196, 77, 0.08);
+            border-color: rgba(255, 196, 77, 0.3);
+            border-left-color: #ffc44d;
+            color: #ffd98a;
+        }
+
+        .contact-info.warning strong { color: #ffd98a; }
+
         .last-updated {
-            background: #e8f4fd;
+            background: rgba(77, 227, 255, 0.08);
+            border: 1px solid rgba(77, 227, 255, 0.25);
             padding: 1rem;
-            border-radius: 5px;
+            border-radius: 10px;
             margin-bottom: 2rem;
-            color: #666;
+            color: var(--text-1);
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
         }
-        
+
         .back-link {
-            display: inline-block;
-            background: #4285f4;
-            color: white;
-            padding: 0.5rem 1rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            color: var(--text-0);
+            padding: 0.55rem 1.1rem;
             text-decoration: none;
-            border-radius: 5px;
+            border-radius: 999px;
             margin-bottom: 2rem;
-            transition: background 0.3s ease;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.25s ease;
         }
-        
+
         .back-link:hover {
-            background: #3367d6;
+            border-color: var(--panel-border-hover);
+            box-shadow: 0 10px 26px rgba(77, 227, 255, 0.18);
         }
-        
-        strong {
-            color: #333;
-        }
-        
+
+        strong { color: var(--text-0); }
+
         @media (max-width: 768px) {
-            .container {
-                margin: 1rem;
-                padding: 1rem;
-            }
-            
-            h1 {
-                font-size: 2rem;
-            }
+            .container { margin: 1rem; padding: 1.25rem; }
+            h1 { font-size: 1.9rem; }
         }
     </style>
 </head>
 <body>
     <nav class="navbar">
         <div class="nav-container">
-            <a href="/" class="logo">Biatec MCP Server</a>
+            <a href="/" class="logo"><img src="/logo-biatec.png" alt="Biatec logo"> Biatec MCP Server</a>
         </div>
     </nav>
 
     <div class="container">
-        <a href="/" class="back-link">← Back to Home</a>
-        
+        <a href="/" class="back-link">&larr; Back to Home</a>
+
         <div class="last-updated">
             <strong>Last Updated:</strong> December 2024
         </div>
 
         <h1>Privacy Policy</h1>
 
-        <p>This Privacy Policy describes how Scholtz & Company, j.s.a. ("we," "us," or "our") collects, uses, and protects your personal information when you use the Biatec MCP Server self-custody service.</p>
+        <p>This Privacy Policy describes how Scholtz &amp; Company, j.s.a. ("we," "us," or "our") collects, uses, and protects your personal information when you use the Biatec MCP Server self-custody service.</p>
 
-        <div class="contact-info" style="background: #e8f5e8; border-left-color: #4caf50; color: #2e7d32;">
-            <h3 style="color: #2e7d32;">🔐 Self-Custody Privacy Guarantee</h3>
+        <div class="contact-info success">
+            <h3>🔐 Self-Custody Privacy Guarantee</h3>
             <p><strong>Your Algorand private keys are self-custody:</strong></p>
-            <ul style="margin: 0.5rem 0 0 1rem;">
+            <ul style="margin: 0.5rem 0 0 1.4rem;">
                 <li><strong>Stored in your Google Drive:</strong> We never store your unencrypted private keys on our servers</li>
                 <li><strong>Email-specific encryption:</strong> Keys are encrypted for your specific email address only</li>
                 <li><strong>Non-transferable:</strong> Cannot be moved between different Google accounts</li>
@@ -161,7 +210,7 @@
 
         <div class="contact-info">
             <h3>Data Controller Information</h3>
-            <p><strong>Company:</strong> Scholtz & Company, j.s.a.<br>
+            <p><strong>Company:</strong> Scholtz &amp; Company, j.s.a.<br>
             <strong>Address:</strong> Švabinského 21<br>
             851 01 Bratislava - mestská časť Petržalka, Slovakia<br>
             <strong>Company ID:</strong> 51882272<br>
@@ -189,8 +238,8 @@
             <li><strong>Email-Bound Encryption:</strong> Private keys are cryptographically bound to your specific email address</li>
             <li><strong>Non-Transferable Data:</strong> Encrypted account data cannot be moved between different Google Drive accounts</li>
         </ul>
-        
-        <div class="contact-info" style="background: #fff3cd; border-left-color: #ffc107; color: #856404;">
+
+        <div class="contact-info warning">
             <strong>Important Self-Custody Notice:</strong> Your private keys remain encrypted in your Google Drive at all times. Our servers only process these encrypted keys temporarily during transaction signing operations that you explicitly authorize. We cannot access your unencrypted private keys under any circumstances.
         </div>
 
@@ -311,5 +360,34 @@
             <li><strong>Compliance:</strong> Regular security audits and compliance assessments for self-custody operations</li>
         </ul>
 
-        <div class="contact-info" style="background: #e8f5e8; border-left-color: #4caf50; color: #2e7d32;">
-            <strong>Self-Custody Security Guarantee:</strong> Your Algorand private keys remain under your exclusive control in your Google Drive. Our security architecture ensures that even our systems cannot access your unencrypted private keys, providing true
+        <div class="contact-info success">
+            <strong>Self-Custody Security Guarantee:</strong> Your Algorand private keys remain under your exclusive control in your Google Drive. Our security architecture ensures that even our systems cannot access your unencrypted private keys, providing true self-custody at all times.
+        </div>
+
+        <h2>8. International Data Transfers</h2>
+
+        <p>Your Google Account information and encrypted key data may be processed by Google's infrastructure, which operates data centers globally. Google maintains its own compliance framework (including EU Standard Contractual Clauses where applicable) for international transfers. We do not independently transfer your data outside of the providers listed in this policy.</p>
+
+        <h2>9. Children's Privacy</h2>
+
+        <p>Our service is not directed at individuals under the age of 18. We do not knowingly collect personal information from minors. If you believe a minor has provided us with personal data, please contact us so we can delete it.</p>
+
+        <h2>10. Changes to This Privacy Policy</h2>
+
+        <p>We may update this Privacy Policy from time to time. We will notify users of material changes via email notification, a website announcement, or in-service notifications. Continued use of the service after changes constitutes acceptance of the updated policy.</p>
+
+        <h2>11. Contact Us</h2>
+
+        <div class="contact-info">
+            <p><strong>Privacy Email:</strong> privacy@biatec.io<br>
+            <strong>Support Email:</strong> support@biatec.io<br>
+            <strong>Address:</strong> Scholtz &amp; Company, j.s.a.<br>
+            Švabinského 21<br>
+            851 01 Bratislava - mestská časť Petržalka<br>
+            Slovakia</p>
+        </div>
+
+        <p><em>This Privacy Policy is effective as of December 2024 and governs the collection and use of personal information for the Biatec MCP Server service provided by Scholtz &amp; Company, j.s.a.</em></p>
+    </div>
+</body>
+</html>
