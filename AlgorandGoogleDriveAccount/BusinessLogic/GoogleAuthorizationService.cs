@@ -13,17 +13,20 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
         private readonly ILogger<GoogleAuthorizationService> _logger;
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly IOptionsMonitor<Configuration> _config;
+        private readonly IHttpClientFactory _httpClientFactory;
 
         public GoogleAuthorizationService(
             IDistributedCache cache,
             ILogger<GoogleAuthorizationService> logger,
             IHttpContextAccessor httpContextAccessor,
-            IOptionsMonitor<Configuration> config)
+            IOptionsMonitor<Configuration> config,
+            IHttpClientFactory httpClientFactory)
         {
             _cache = cache;
             _logger = logger;
             _httpContextAccessor = httpContextAccessor;
             _config = config;
+            _httpClientFactory = httpClientFactory;
         }
 
         public async Task<string> GetIncrementalAuthorizationUrlAsync(string[] additionalScopes, string? sessionId = null, string? redirectUri = null)
@@ -61,33 +64,68 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
         {
             try
             {
+                string? accessToken = null;
+
                 if (!string.IsNullOrEmpty(sessionId))
                 {
                     var cacheKey = $"device_session:{sessionId}";
                     var deviceInfoJson = await _cache.GetStringAsync(cacheKey);
-                    
+
                     if (!string.IsNullOrEmpty(deviceInfoJson))
                     {
                         var deviceInfo = JsonSerializer.Deserialize<PairedDeviceInfo>(deviceInfoJson);
-                        return deviceInfo != null && !string.IsNullOrEmpty(deviceInfo.AccessToken);
+                        accessToken = deviceInfo?.AccessToken;
                     }
                 }
-                
-                // For regular authentication, check the current user's token
-                var httpContext = _httpContextAccessor.HttpContext;
-                if (httpContext?.User?.Identity?.IsAuthenticated == true)
+                else
                 {
-                    var accessToken = await httpContext.GetTokenAsync("access_token");
-                    return !string.IsNullOrEmpty(accessToken);
+                    // For regular authentication, check the current user's token
+                    var httpContext = _httpContextAccessor.HttpContext;
+                    if (httpContext?.User?.Identity?.IsAuthenticated == true)
+                    {
+                        accessToken = await httpContext.GetTokenAsync("access_token");
+                    }
                 }
 
-                return false;
+                if (string.IsNullOrEmpty(accessToken))
+                {
+                    return false;
+                }
+
+                return await TokenGrantsScopeAsync(accessToken, scope);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Error checking scope {scope} for session {sessionId}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Calls Google's tokeninfo endpoint to determine the scopes actually granted to
+        /// <paramref name="accessToken"/> and checks whether <paramref name="scope"/> is among them.
+        /// Fails closed (returns <c>false</c>) if the token is invalid or the check itself fails.
+        /// </summary>
+        private async Task<bool> TokenGrantsScopeAsync(string accessToken, string scope)
+        {
+            var tokenInfoUrl = $"https://oauth2.googleapis.com/tokeninfo?access_token={Uri.EscapeDataString(accessToken)}";
+            var httpClient = _httpClientFactory.CreateClient();
+            var response = await httpClient.GetAsync(tokenInfoUrl);
+            if (!response.IsSuccessStatusCode)
+            {
+                return false;
+            }
+
+            using var tokenInfo = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            if (!tokenInfo.RootElement.TryGetProperty("scope", out var scopeProperty))
+            {
+                return false;
+            }
+
+            var grantedScopes = (scopeProperty.GetString() ?? string.Empty)
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            return grantedScopes.Contains(scope, StringComparer.Ordinal);
         }
 
         public async Task<string?> GetAccessTokenWithScopeAsync(string scope, string? sessionId = null)

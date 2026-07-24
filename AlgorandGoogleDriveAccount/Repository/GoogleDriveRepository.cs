@@ -15,17 +15,23 @@ namespace AlgorandGoogleDriveAccount.Repository
         private readonly IGoogleAuthProvider _auth;
         private readonly IOptionsMonitor<Model.Configuration> _config;
         private readonly IOptionsMonitor<Model.AesOptions> _aes;
+        private readonly ILogger<GoogleDriveRepository> _logger;
 
         public GoogleDriveRepository(
             IGoogleAuthProvider auth,
             IOptionsMonitor<Model.Configuration> config,
-            IOptionsMonitor<Model.AesOptions> aes
+            IOptionsMonitor<Model.AesOptions> aes,
+            ILogger<GoogleDriveRepository> logger
             )
         {
             _auth = auth;
             _config = config;
             _aes = aes;
+            _logger = logger;
         }
+
+        /// <summary>Escapes a value for safe interpolation into a Google Drive API <c>q</c> search string.</summary>
+        private static string EscapeDriveQueryValue(string value) => value.Replace("\\", "\\\\").Replace("'", "\\'");
         public async Task<Account> LoadAccount(string email, int slot, GoogleCredential? googleCredential = null)
         {
             try
@@ -47,7 +53,7 @@ namespace AlgorandGoogleDriveAccount.Repository
 
                 // Try to find the folder "Biatec"
                 var folderRequest = service.Files.List();
-                folderRequest.Q = $"mimeType = 'application/vnd.google-apps.folder' and name = '{folderName}' and trashed = false";
+                folderRequest.Q = $"mimeType = 'application/vnd.google-apps.folder' and name = '{EscapeDriveQueryValue(folderName)}' and trashed = false";
                 folderRequest.Fields = "files(id, name)";
 
                 try
@@ -71,7 +77,7 @@ namespace AlgorandGoogleDriveAccount.Repository
 
                     // Check if file with same name already exists in that folder
                     var fileCheckRequest = service.Files.List();
-                    fileCheckRequest.Q = $"name = '{fileName}' and '{folder.Id}' in parents and trashed = false";
+                    fileCheckRequest.Q = $"name = '{EscapeDriveQueryValue(fileName)}' and '{EscapeDriveQueryValue(folder.Id)}' in parents and trashed = false";
                     fileCheckRequest.Fields = "files(id, name)";
                     var existingFiles = await fileCheckRequest.ExecuteAsync();
 
@@ -130,21 +136,21 @@ namespace AlgorandGoogleDriveAccount.Repository
                     }
                     catch (CryptographicException cryptoEx)
                     {
-                        // Handle padding or decryption errors specifically
-                        if (cryptoEx.Message.Contains("Padding"))
-                        {
-                            throw new Exception($"Decryption failed for email '{email}'. This might be due to: 1) Email case mismatch (ensure exact email case), 2) File was encrypted with different credentials, 3) Corrupted file data. File size: {fileContent.Length} bytes. Try using the diagnostic endpoint: /api/device/diagnose/{{sessionId}}. Original error: {cryptoEx.Message}");
-                        }
-                        throw new Exception($"Cryptographic error during decryption for email '{email}': {cryptoEx.Message}", cryptoEx);
+                        // Log full detail server-side only - the caller-facing message must not leak email,
+                        // file size, or raw cryptographic exception text (an information-disclosure /
+                        // padding-oracle amplifier).
+                        _logger.LogError(cryptoEx, "Decryption failed for email {Email}. File size: {FileSize} bytes.", email, fileContent.Length);
+                        throw new InvalidOperationException("Unable to load the account. Please try re-pairing the device.");
                     }
                     catch (Exception decryptEx)
                     {
-                        throw new Exception($"Failed to decrypt account data for email '{email}'. File size: {fileContent.Length} bytes. Error: {decryptEx.Message}", decryptEx);
+                        _logger.LogError(decryptEx, "Failed to decrypt account data for email {Email}. File size: {FileSize} bytes.", email, fileContent.Length);
+                        throw new InvalidOperationException("Unable to load the account. Please try re-pairing the device.");
                     }
                 }
                 catch (Google.GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.Unauthorized)
                 {
-                    throw new UnauthorizedAccessException($"Google Drive access denied. The access token may be expired or invalid. Error: {ex.Message}", ex);
+                    throw new UnauthorizedAccessException("Google Drive access denied. The access token may be expired or invalid.", ex);
                 }
             }
             catch (UnauthorizedAccessException)
@@ -152,9 +158,15 @@ namespace AlgorandGoogleDriveAccount.Repository
                 // Re-throw authorization exceptions as-is
                 throw;
             }
+            catch (InvalidOperationException)
+            {
+                // Already sanitized above - re-throw as-is.
+                throw;
+            }
             catch (Exception ex)
             {
-                throw new Exception($"Error loading account from Google Drive for email {email}: {ex.Message}", ex);
+                _logger.LogError(ex, "Error loading account from Google Drive for email {Email}", email);
+                throw new InvalidOperationException("Error loading account from Google Drive.");
             }
         }
     }

@@ -7,7 +7,9 @@ using Google.Apis.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using System.Security.Claims;
 
@@ -25,13 +27,16 @@ namespace AlgorandGoogleDriveAccount.Controllers
     {
         private readonly IDevicePairingService _devicePairingService;
         private readonly ILogger<DevicePairingController> _logger;
+        private readonly IHostEnvironment _environment;
 
         public DevicePairingController(
             IDevicePairingService devicePairingService,
-            ILogger<DevicePairingController> logger)
+            ILogger<DevicePairingController> logger,
+            IHostEnvironment environment)
         {
             _devicePairingService = devicePairingService;
             _logger = logger;
+            _environment = environment;
         }
 
         /// <summary>
@@ -211,6 +216,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// <param name="sessionId">Session ID of the paired device</param>
         /// <returns>Access token if device is paired and not expired</returns>
         [AllowAnonymous]
+        [EnableRateLimiting("device-session")]
         [HttpGet("access-token/{sessionId}")]
         public async Task<ActionResult<string>> GetDeviceAccessToken(string sessionId)
         {
@@ -237,7 +243,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Error retrieving access token for session ID: {sessionId}");
+                _logger.LogError(ex, "Error retrieving access token for session ID: {SessionId}", sessionId);
                 return StatusCode(500, new ProblemDetails
                 {
                     Detail = "An error occurred while retrieving the access token"
@@ -251,6 +257,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// <param name="sessionId">Session ID of the paired device</param>
         /// <returns>Device information if device is paired and not expired</returns>
         [AllowAnonymous]
+        [EnableRateLimiting("device-session")]
         [HttpGet("info/{sessionId}")]
         public async Task<ActionResult<PairedDeviceInfo>> GetDeviceInfo(string sessionId)
         {
@@ -291,6 +298,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// <param name="sessionId">Session ID of the device to unpair</param>
         /// <returns>Result of the unpair operation</returns>
         [AllowAnonymous]
+        [EnableRateLimiting("device-session")]
         [HttpDelete("unpair/{sessionId}")]
         public async Task<ActionResult<DevicePairingResponse>> UnpairDevice(string sessionId)
         {
@@ -314,9 +322,17 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// <param name="sessionId">Session ID of the paired device</param>
         /// <returns>Diagnostic information about the account file</returns>
         [AllowAnonymous]
+        [EnableRateLimiting("device-session")]
         [HttpGet("diagnose/{sessionId}")]
         public async Task<ActionResult<object>> DiagnoseAccount(string sessionId)
         {
+            if (!_environment.IsDevelopment())
+            {
+                // Leftover troubleshooting tooling that discloses more Drive metadata than the pairing
+                // feature needs - keep it available for local debugging only, not on the live attack surface.
+                return NotFound();
+            }
+
             try
             {
                 var deviceInfo = await _devicePairingService.GetDeviceInfoInternalAsync(sessionId);
@@ -358,7 +374,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
 
                 // Check if file exists in folder
                 var fileCheckRequest = service.Files.List();
-                fileCheckRequest.Q = $"name = 'AVMAccount.dat' and '{folder.Id}' in parents and trashed = false";
+                fileCheckRequest.Q = $"name = 'AVMAccount.dat' and '{folder.Id.Replace("\\", "\\\\").Replace("'", "\\'")}' in parents and trashed = false";
                 fileCheckRequest.Fields = "files(id, name, size, createdTime, modifiedTime)";
                 var existingFiles = await fileCheckRequest.ExecuteAsync();
 
@@ -398,8 +414,8 @@ namespace AlgorandGoogleDriveAccount.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Error diagnosing account for session {sessionId}");
-                return StatusCode(500, new { error = ex.Message });
+                _logger.LogError(ex, "Error diagnosing account for session {SessionId}", sessionId);
+                return StatusCode(500, new { error = "An error occurred while diagnosing the account." });
             }
         }
 
@@ -409,6 +425,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// <param name="sessionId">Session ID of the paired device</param>
         /// <returns>Security status information</returns>
         [AllowAnonymous]
+        [EnableRateLimiting("device-session")]
         [HttpGet("security-status/{sessionId}")]
         public async Task<ActionResult<object>> GetSecurityStatus(string sessionId)
         {
@@ -435,8 +452,8 @@ namespace AlgorandGoogleDriveAccount.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Error checking security status for session {sessionId}");
-                return StatusCode(500, new { error = ex.Message });
+                _logger.LogError(ex, "Error checking security status for session {SessionId}", sessionId);
+                return StatusCode(500, new { error = "An error occurred while checking security status." });
             }
         }
 
@@ -447,6 +464,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// <param name="request">The security event type and optional details to report</param>
         /// <returns>Result of the security event report</returns>
         [AllowAnonymous]
+        [EnableRateLimiting("device-session")]
         [HttpPost("report-security-event/{sessionId}")]
         public async Task<ActionResult<object>> ReportSecurityEvent(string sessionId, [FromBody] SecurityEventRequest request)
         {
@@ -473,8 +491,8 @@ namespace AlgorandGoogleDriveAccount.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Error reporting security event for session {sessionId}");
-                return StatusCode(500, new { error = ex.Message });
+                _logger.LogError(ex, "Error reporting security event for session {SessionId}", sessionId);
+                return StatusCode(500, new { error = "An error occurred while reporting the security event." });
             }
         }
 
@@ -490,7 +508,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
             {
                 // Test with a dummy token to verify our validation logic
                 var capService = HttpContext.RequestServices.GetRequiredService<ICrossAccountProtectionService>();
-                
+
                 return Ok(new
                 {
                     message = "Token validation service is configured correctly",
@@ -501,7 +519,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error testing token validation");
-                return StatusCode(500, new { error = ex.Message });
+                return StatusCode(500, new { error = "An error occurred while testing token validation." });
             }
         }
 
@@ -511,6 +529,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
         /// <param name="sessionId">Session ID of the paired device</param>
         /// <returns>Portfolio information and current service tier</returns>
         [AllowAnonymous]
+        [EnableRateLimiting("device-session")]
         [HttpGet("portfolio/{sessionId}")]
         public async Task<ActionResult<object>> GetPortfolioInfo(string sessionId)
         {
@@ -543,8 +562,8 @@ namespace AlgorandGoogleDriveAccount.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Error getting portfolio info for session {sessionId}");
-                return StatusCode(500, new { error = ex.Message });
+                _logger.LogError(ex, "Error getting portfolio info for session {SessionId}", sessionId);
+                return StatusCode(500, new { error = "An error occurred while getting portfolio info." });
             }
         }
 
@@ -579,8 +598,34 @@ namespace AlgorandGoogleDriveAccount.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error getting Cross-Account Protection status");
-                return StatusCode(500, new { error = ex.Message });
+                return StatusCode(500, new { error = "An error occurred while getting Cross-Account Protection status." });
             }
+        }
+
+        /// <summary>
+        /// Sets (or clears) the allowlist of Algorand receiver addresses the <c>transferAsset</c> MCP tool
+        /// is permitted to send to for this paired session. An empty/omitted list removes the restriction
+        /// (the default - transfers to any receiver are allowed unless a user opts into an allowlist).
+        /// </summary>
+        /// <param name="sessionId">Session ID of the paired device</param>
+        /// <param name="request">The receiver addresses to allow</param>
+        [AllowAnonymous]
+        [EnableRateLimiting("device-session")]
+        [HttpPost("receiver-allowlist/{sessionId}")]
+        public async Task<ActionResult<DevicePairingResponse>> SetReceiverAllowlist(string sessionId, [FromBody] ReceiverAllowlistRequest request)
+        {
+            var result = await _devicePairingService.SetReceiverAllowlistAsync(sessionId, request?.AllowedReceivers ?? new List<string>());
+
+            if (!result.Success)
+            {
+                if (result.Message.Contains("required") || result.Message.Contains("not found") || result.Message.Contains("expired"))
+                {
+                    return NotFound(result);
+                }
+                return StatusCode(500, result);
+            }
+
+            return Ok(result);
         }
 
         private static object GetTierBenefits(ServiceTier tier)
@@ -626,6 +671,13 @@ namespace AlgorandGoogleDriveAccount.Controllers
 
             /// <summary>Optional free-text details about the event.</summary>
             public string? Details { get; set; }
+        }
+
+        /// <summary>Request body for setting a paired session's <c>transferAsset</c> receiver allowlist.</summary>
+        public class ReceiverAllowlistRequest
+        {
+            /// <summary>Allowed Algorand receiver addresses. Empty/omitted clears the restriction.</summary>
+            public List<string> AllowedReceivers { get; set; } = new();
         }
     }
 }

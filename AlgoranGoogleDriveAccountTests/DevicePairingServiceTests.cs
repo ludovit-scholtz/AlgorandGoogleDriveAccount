@@ -637,5 +637,85 @@ namespace AlgoranGoogleDriveAccountTests
                 Assert.That(result.Message, Is.EqualTo("An error occurred while unpairing the device"));
             }
         }
+
+        [TestFixture]
+        public class SetReceiverAllowlistAsyncTests : DevicePairingServiceTests
+        {
+            private static string BuildPairedDeviceJson(string sessionId) => JsonSerializer.Serialize(new PairedDeviceInfo
+            {
+                AccessToken = "access-token",
+                RefreshToken = "refresh-token",
+                Email = "user@example.com",
+                DeviceName = "Test Device",
+                PairedAt = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.AddHours(1)
+            });
+
+            [Test]
+            public async Task SetReceiverAllowlistAsync_PairedSession_StoresAllowlist()
+            {
+                var sessionId = "test-session-123";
+                var cacheKey = $"device_session:{sessionId}";
+                var json = BuildPairedDeviceJson(sessionId);
+                _mockCache.Setup(c => c.GetAsync(cacheKey, default)).ReturnsAsync(Encoding.UTF8.GetBytes(json));
+
+                byte[]? capturedBytes = null;
+                _mockCache.Setup(c => c.SetAsync(cacheKey, It.IsAny<byte[]>(), It.IsAny<DistributedCacheEntryOptions>(), default))
+                    .Callback<string, byte[], DistributedCacheEntryOptions, CancellationToken>((_, value, _, _) => capturedBytes = value)
+                    .Returns(Task.CompletedTask);
+
+                var result = await _service.SetReceiverAllowlistAsync(sessionId, new[] { "RECEIVER1ADDRESS", "RECEIVER2ADDRESS" });
+
+                Assert.That(result.Success, Is.True);
+                Assert.That(capturedBytes, Is.Not.Null);
+                var stored = JsonSerializer.Deserialize<PairedDeviceInfo>(capturedBytes!)!;
+                Assert.That(stored.AllowedReceivers, Is.EquivalentTo(new[] { "RECEIVER1ADDRESS", "RECEIVER2ADDRESS" }));
+            }
+
+            [Test]
+            public async Task SetReceiverAllowlistAsync_EmptyList_ClearsAllowlist()
+            {
+                var sessionId = "test-session-123";
+                var cacheKey = $"device_session:{sessionId}";
+                var deviceInfo = new PairedDeviceInfo
+                {
+                    Email = "user@example.com",
+                    ExpiresAt = DateTime.UtcNow.AddHours(1),
+                    AllowedReceivers = new List<string> { "OLD-RECEIVER" }
+                };
+                _mockCache.Setup(c => c.GetAsync(cacheKey, default)).ReturnsAsync(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(deviceInfo)));
+
+                byte[]? capturedBytes = null;
+                _mockCache.Setup(c => c.SetAsync(cacheKey, It.IsAny<byte[]>(), It.IsAny<DistributedCacheEntryOptions>(), default))
+                    .Callback<string, byte[], DistributedCacheEntryOptions, CancellationToken>((_, value, _, _) => capturedBytes = value)
+                    .Returns(Task.CompletedTask);
+
+                var result = await _service.SetReceiverAllowlistAsync(sessionId, Array.Empty<string>());
+
+                Assert.That(result.Success, Is.True);
+                var stored = JsonSerializer.Deserialize<PairedDeviceInfo>(capturedBytes!)!;
+                Assert.That(stored.AllowedReceivers, Is.Empty);
+            }
+
+            [Test]
+            public async Task SetReceiverAllowlistAsync_SessionNotFound_ReturnsFailure()
+            {
+                var sessionId = "missing-session";
+                _mockCache.Setup(c => c.GetAsync($"device_session:{sessionId}", default)).ReturnsAsync((byte[]?)null);
+
+                var result = await _service.SetReceiverAllowlistAsync(sessionId, new[] { "RECEIVER" });
+
+                Assert.That(result.Success, Is.False);
+            }
+
+            [Test]
+            public async Task SetReceiverAllowlistAsync_EmptySessionId_ReturnsFailure()
+            {
+                var result = await _service.SetReceiverAllowlistAsync("", new[] { "RECEIVER" });
+
+                Assert.That(result.Success, Is.False);
+                Assert.That(result.Message, Is.EqualTo("Session ID is required"));
+            }
+        }
     }
 }

@@ -62,6 +62,7 @@ namespace AlgorandGoogleDriveAccount
             builder.Services.Configure<CrossAccountProtectionConfiguration>(builder.Configuration.GetSection("CrossAccountProtection"));
             builder.Services.Configure<AlgodConfiguration>(builder.Configuration.GetSection("Algod"));
             builder.Services.Configure<JwtIssuerConfiguration>(builder.Configuration.GetSection("JwtIssuer"));
+            builder.Services.Configure<McpTransferLimitsConfiguration>(builder.Configuration.GetSection("McpTransferLimits"));
 
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
@@ -148,6 +149,11 @@ namespace AlgorandGoogleDriveAccount
             {
                 options.Configuration = redisConfig.ConnectionString;
             });
+
+            // Direct StackExchange.Redis connection multiplexer, used where atomic Redis primitives
+            // (e.g. GETDEL for one-time-use OIDC codes/tokens) aren't exposed by IDistributedCache.
+            builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ =>
+                StackExchange.Redis.ConnectionMultiplexer.Connect(redisConfig.ConnectionString));
 
             builder.Services
                 .AddAuthentication(options =>
@@ -288,7 +294,15 @@ namespace AlgorandGoogleDriveAccount
                         },
                         OnTokenValidated = context =>
                         {
-                            // Handle successful token validation
+                            // Enforce that Google actually verified the user's email, unconditionally -
+                            // independent of the optional Cross-Account Protection feature toggle - since
+                            // email is the sole tenant-isolation input for the self-custody key derivation.
+                            var emailVerifiedClaim = context.Principal?.FindFirst("email_verified")?.Value;
+                            if (string.Equals(emailVerifiedClaim, "false", StringComparison.OrdinalIgnoreCase))
+                            {
+                                context.Fail("Google account email is not verified.");
+                            }
+
                             return Task.CompletedTask;
                         },
                         OnAuthenticationFailed = context =>
@@ -315,6 +329,24 @@ namespace AlgorandGoogleDriveAccount
                 });
 
             builder.Services.AddControllersWithViews();
+
+            // Rate limit the device-pairing session-keyed endpoints (defense-in-depth against brute-force /
+            // abuse even once the session ID itself is a high-entropy CSPRNG value).
+            builder.Services.AddRateLimiter(options =>
+            {
+                options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+                options.AddPolicy("device-session", httpContext =>
+                {
+                    var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown-ip";
+                    return System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ =>
+                        new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = 20,
+                            Window = TimeSpan.FromMinutes(1),
+                            QueueLimit = 0
+                        });
+                });
+            });
 
             // Configure MCP Server
             builder.Services.AddMcpServer()
@@ -369,6 +401,7 @@ namespace AlgorandGoogleDriveAccount
 
             app.UseAuthentication();
             app.UseAuthorization();
+            app.UseRateLimiter();
 
             app.MapControllers();
             app.MapMcp("/mcp");

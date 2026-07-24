@@ -1,10 +1,12 @@
 using AlgorandGoogleDriveAccount.BusinessLogic;
 using AlgorandGoogleDriveAccount.Model;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Moq;
+using StackExchange.Redis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -26,8 +28,11 @@ namespace AlgoranGoogleDriveAccountTests
         protected const string TestAlgorandAddress = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXY";
 
         protected Mock<IDistributedCache> MockCache = null!;
+        protected Mock<IConnectionMultiplexer> MockRedis = null!;
+        protected Mock<IDatabase> MockDatabase = null!;
         protected Mock<IOptionsMonitor<JwtIssuerConfiguration>> MockConfig = null!;
         protected Mock<IDriveService> MockDriveService = null!;
+        protected Mock<IHostEnvironment> MockEnvironment = null!;
         protected Mock<ILogger<JwtIssuerService>> MockLogger = null!;
         protected JwtIssuerService Service = null!;
 
@@ -42,8 +47,13 @@ namespace AlgoranGoogleDriveAccountTests
         public virtual void SetUp()
         {
             MockCache = new Mock<IDistributedCache>();
+            MockRedis = new Mock<IConnectionMultiplexer>();
+            MockDatabase = new Mock<IDatabase>();
+            MockRedis.Setup(r => r.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(MockDatabase.Object);
             MockConfig = new Mock<IOptionsMonitor<JwtIssuerConfiguration>>();
             MockDriveService = new Mock<IDriveService>();
+            MockEnvironment = new Mock<IHostEnvironment>();
+            MockEnvironment.Setup(e => e.EnvironmentName).Returns(Environments.Development);
             MockLogger = new Mock<ILogger<JwtIssuerService>>();
 
             DefaultConfig = new JwtIssuerConfiguration
@@ -71,24 +81,35 @@ namespace AlgoranGoogleDriveAccountTests
 
             MockConfig.Setup(m => m.CurrentValue).Returns(DefaultConfig);
 
-            Service = new JwtIssuerService(MockCache.Object, MockConfig.Object, MockDriveService.Object, MockLogger.Object);
+            Service = new JwtIssuerService(MockCache.Object, MockRedis.Object, MockConfig.Object, MockDriveService.Object, MockEnvironment.Object, MockLogger.Object);
         }
 
-        /// <summary>Sets up the distributed cache to return a JSON string for GetAsync.</summary>
+        /// <summary>
+        /// Sets up a cache/Redis hit for <paramref name="key"/>. One-time-use values (authorization codes,
+        /// refresh tokens, pending authorize requests) are read via an atomic Redis GETDEL
+        /// (<see cref="IDatabase.StringGetDeleteAsync"/>), so that path is mocked here alongside the plain
+        /// <see cref="IDistributedCache"/> path some other flows still use.
+        /// </summary>
         protected void SetupCacheGet(string key, string json)
         {
             var bytes = Encoding.UTF8.GetBytes(json);
             MockCache
                 .Setup(c => c.GetAsync(key, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(bytes);
+            MockDatabase
+                .Setup(d => d.StringGetDeleteAsync(key, It.IsAny<CommandFlags>()))
+                .ReturnsAsync((RedisValue)json);
         }
 
-        /// <summary>Sets up the distributed cache to return null (cache miss) for GetAsync.</summary>
+        /// <summary>Sets up a cache/Redis miss for <paramref name="key"/> (see <see cref="SetupCacheGet"/>).</summary>
         protected void SetupCacheMiss(string key)
         {
             MockCache
                 .Setup(c => c.GetAsync(key, It.IsAny<CancellationToken>()))
                 .ReturnsAsync((byte[]?)null);
+            MockDatabase
+                .Setup(d => d.StringGetDeleteAsync(key, It.IsAny<CommandFlags>()))
+                .ReturnsAsync(RedisValue.Null);
         }
 
         /// <summary>Builds a camelCase JSON string for an authorization code record.</summary>
@@ -1218,9 +1239,11 @@ namespace AlgoranGoogleDriveAccountTests
 
             await Service.ExchangeTokenAsync(tokenRequest, null);
 
-            MockCache.Verify(c => c.RemoveAsync(
+            // The code is consumed via an atomic Redis GETDEL rather than a separate GET+DEL, so a
+            // concurrent second exchange attempt can never observe it as still present.
+            MockDatabase.Verify(d => d.StringGetDeleteAsync(
                 "oidc:code:" + code,
-                It.IsAny<CancellationToken>()), Times.Once);
+                It.IsAny<CommandFlags>()), Times.Once);
         }
 
         [Test]
@@ -1395,9 +1418,10 @@ namespace AlgoranGoogleDriveAccountTests
 
             await Service.ExchangeTokenAsync(tokenRequest, null);
 
-            MockCache.Verify(c => c.RemoveAsync(
+            // Atomic Redis GETDEL, same rationale as the authorization-code case above.
+            MockDatabase.Verify(d => d.StringGetDeleteAsync(
                 "oidc:refresh:" + refreshToken,
-                It.IsAny<CancellationToken>()), Times.Once);
+                It.IsAny<CommandFlags>()), Times.Once);
         }
 
         [Test]
@@ -1511,6 +1535,30 @@ namespace AlgoranGoogleDriveAccountTests
                 RedirectUri = TestRedirectUri,
                 ClientId = TestClientId,
                 ClientSecret = "wrong-secret"
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.StatusCode, Is.EqualTo(401));
+            Assert.That(result.Error, Is.EqualTo("invalid_client"));
+        }
+
+        [Test]
+        public async Task WrongClientSecret_SameLengthAsCorrectSecret_StillRejected()
+        {
+            // Regression test for the constant-time comparison fix (F-06): a same-length wrong secret
+            // must still fail rather than accidentally matching due to a comparison bug.
+            const string sameLengthWrongSecret = "wrong-secrt";
+            Assert.That(sameLengthWrongSecret.Length, Is.EqualTo(TestClientSecret.Length));
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = "some-code",
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = sameLengthWrongSecret
             };
 
             var result = await Service.ExchangeTokenAsync(tokenRequest, null);
@@ -1690,6 +1738,44 @@ namespace AlgoranGoogleDriveAccountTests
             var tokenStr = new JwtSecurityTokenHandler().WriteToken(idToken);
 
             // Must fail (even if issuer matches) because signing key won't match
+            var result = Service.ValidateBearerAccessToken(tokenStr);
+
+            Assert.That(result.IsValid, Is.False);
+        }
+
+        [Test]
+        public async Task ValidToken_ClientSubsequentlyDeregistered_ReturnsIsValidFalse()
+        {
+            var token = await IssueRealAccessTokenAsync();
+
+            // Simulate the client being removed from the allowlist after the token was issued - the aud
+            // (client_id) no longer matches any currently-registered client.
+            DefaultConfig.Clients.Clear();
+
+            var result = Service.ValidateBearerAccessToken(token);
+
+            Assert.That(result.IsValid, Is.False);
+        }
+
+        [Test]
+        public void TokenWithForeignAudience_ReturnsIsValidFalse()
+        {
+            // A token signed with our real key but whose aud does not match any registered client_id
+            // must be rejected once audience validation is enabled (F-03).
+            using var foreignAudienceRsa = RSA.Create(2048);
+            var key = new RsaSecurityKey(foreignAudienceRsa) { KeyId = "test-key" };
+            var creds = new SigningCredentials(key, SecurityAlgorithms.RsaSha256);
+            var jwt = new JwtSecurityToken(
+                issuer: TestIssuer,
+                audience: "some-other-unregistered-client",
+                claims: new[] { new Claim("token_use", "access_token") },
+                notBefore: DateTime.UtcNow,
+                expires: DateTime.UtcNow.AddMinutes(15),
+                signingCredentials: creds);
+            var tokenStr = new JwtSecurityTokenHandler().WriteToken(jwt);
+
+            // Signed with a different key than the service uses, so this also fails signature
+            // validation - the point is simply that an unregistered aud is never accepted.
             var result = Service.ValidateBearerAccessToken(tokenStr);
 
             Assert.That(result.IsValid, Is.False);
@@ -1950,8 +2036,10 @@ namespace AlgoranGoogleDriveAccountTests
             {
                 var svc = new JwtIssuerService(
                     MockCache.Object,
+                    MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
+                    MockEnvironment.Object,
                     MockLogger.Object);
                 _ = svc.GetJsonWebKeySet();
             });
@@ -1968,8 +2056,10 @@ namespace AlgoranGoogleDriveAccountTests
             {
                 var svc = new JwtIssuerService(
                     MockCache.Object,
+                    MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
+                    MockEnvironment.Object,
                     MockLogger.Object);
                 _ = svc.GetJsonWebKeySet();
             });
@@ -1984,8 +2074,10 @@ namespace AlgoranGoogleDriveAccountTests
             {
                 var svc = new JwtIssuerService(
                     MockCache.Object,
+                    MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
+                    MockEnvironment.Object,
                     MockLogger.Object);
                 _ = svc.GetJsonWebKeySet();
             });
@@ -2008,8 +2100,10 @@ namespace AlgoranGoogleDriveAccountTests
 
             var svc = new JwtIssuerService(
                 MockCache.Object,
+                MockRedis.Object,
                 MockConfig.Object,
                 MockDriveService.Object,
+                MockEnvironment.Object,
                 MockLogger.Object);
 
             // Build a "valid" access token JSON directly
@@ -2033,6 +2127,113 @@ namespace AlgoranGoogleDriveAccountTests
 
             var validation = svc.ValidateBearerAccessToken(response.Response!.AccessToken);
             Assert.That(validation.IsValid, Is.True);
+        }
+
+        [Test]
+        public void MissingSigningKey_InProduction_ThrowsInsteadOfFallingBack()
+        {
+            DefaultConfig.SigningPrivateKeyPem = string.Empty;
+            MockEnvironment.Setup(e => e.EnvironmentName).Returns(Environments.Production);
+
+            Assert.Throws<InvalidOperationException>(() =>
+            {
+                _ = new JwtIssuerService(
+                    MockCache.Object,
+                    MockRedis.Object,
+                    MockConfig.Object,
+                    MockDriveService.Object,
+                    MockEnvironment.Object,
+                    MockLogger.Object);
+            });
+        }
+
+        [Test]
+        public void InvalidSigningKey_InProduction_ThrowsInsteadOfFallingBack()
+        {
+            DefaultConfig.SigningPrivateKeyPem = "-----BEGIN RSA PRIVATE KEY-----\ninvalid-data\n-----END RSA PRIVATE KEY-----";
+            MockEnvironment.Setup(e => e.EnvironmentName).Returns(Environments.Production);
+
+            Assert.Throws<InvalidOperationException>(() =>
+            {
+                _ = new JwtIssuerService(
+                    MockCache.Object,
+                    MockRedis.Object,
+                    MockConfig.Object,
+                    MockDriveService.Object,
+                    MockEnvironment.Object,
+                    MockLogger.Object);
+            });
+        }
+
+        [Test]
+        public void MissingSigningKey_InDevelopment_DoesNotThrow()
+        {
+            DefaultConfig.SigningPrivateKeyPem = string.Empty;
+            MockEnvironment.Setup(e => e.EnvironmentName).Returns(Environments.Development);
+
+            Assert.DoesNotThrow(() =>
+            {
+                _ = new JwtIssuerService(
+                    MockCache.Object,
+                    MockRedis.Object,
+                    MockConfig.Object,
+                    MockDriveService.Object,
+                    MockEnvironment.Object,
+                    MockLogger.Object);
+            });
+        }
+    }
+
+    // =========================================================================
+    [TestFixture]
+    public class TryGetAudienceFromSelfIssuedTokenTests : JwtIssuerServiceTestBase
+    {
+        [Test]
+        public async Task GenuineSelfIssuedIdToken_ReturnsAudience()
+        {
+            MockDriveService.Setup(d => d.GetAccountAddressAsync(TestEmail)).ReturnsAsync(TestAlgorandAddress);
+
+            var request = ValidCodeRequest("test-nonce");
+            request.ResponseType = "id_token";
+            var client = DefaultConfig.Clients[0];
+
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, CreateUser());
+            Assert.That(result.Success, Is.True);
+            var idToken = result.Response!["id_token"];
+
+            var audience = Service.TryGetAudienceFromSelfIssuedToken(idToken);
+
+            Assert.That(audience, Is.EqualTo(TestClientId));
+        }
+
+        [Test]
+        public void TamperedIdTokenHint_ReturnsNull()
+        {
+            // Signed with a different key than the service's own signing key - the aud claim must not
+            // be trusted (F-14: id_token_hint's signature is validated before its aud is used).
+            using var foreignRsa = RSA.Create(2048);
+            var foreignKey = new RsaSecurityKey(foreignRsa) { KeyId = "foreign-key" };
+            var creds = new SigningCredentials(foreignKey, SecurityAlgorithms.RsaSha256);
+            var jwt = new JwtSecurityToken(
+                issuer: TestIssuer,
+                audience: TestClientId,
+                claims: Array.Empty<Claim>(),
+                notBefore: DateTime.UtcNow.AddMinutes(-10),
+                expires: DateTime.UtcNow.AddMinutes(-5),
+                signingCredentials: creds);
+            var foreignToken = new JwtSecurityTokenHandler().WriteToken(jwt);
+
+            var audience = Service.TryGetAudienceFromSelfIssuedToken(foreignToken);
+
+            Assert.That(audience, Is.Null);
+        }
+
+        [Test]
+        public void GarbageToken_ReturnsNull()
+        {
+            var audience = Service.TryGetAudienceFromSelfIssuedToken("not-a-jwt");
+
+            Assert.That(audience, Is.Null);
         }
     }
 }

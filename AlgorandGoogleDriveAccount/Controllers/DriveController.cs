@@ -56,7 +56,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
             catch (Exception exc)
             {
                 _logger?.LogError(exc, "Error signing transaction");
-                return BadRequest(new ProblemDetails() { Detail = exc.Message });
+                return BadRequest(new ProblemDetails() { Detail = "Unable to sign the transaction." });
             }
         }
 
@@ -81,7 +81,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
             catch (Exception exc)
             {
                 _logger?.LogError(exc, "Error retrieving access token");
-                return BadRequest(new ProblemDetails() { Detail = exc.Message });
+                return BadRequest(new ProblemDetails() { Detail = "Unable to retrieve the access token." });
             }
         }
 
@@ -111,7 +111,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
             catch (Exception exc)
             {
                 _logger?.LogError(exc, "Error retrieving account address");
-                return BadRequest(new ProblemDetails() { Detail = exc.Message });
+                return BadRequest(new ProblemDetails() { Detail = "Unable to retrieve the account address." });
             }
         }
 

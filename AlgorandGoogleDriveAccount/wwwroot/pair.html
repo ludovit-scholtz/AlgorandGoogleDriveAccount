@@ -220,7 +220,13 @@
         let currentSessionId = '';
 
         function generateSessionId() {
-            return 'device_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            // Cryptographically secure random ID (32 bytes / 256 bits of entropy) - this value is treated as
+            // a bearer secret by the server (whoever presents it can read/manage the paired session), so it
+            // must be unguessable, not just unique. Do not go back to Date.now()/Math.random().
+            const bytes = new Uint8Array(32);
+            crypto.getRandomValues(bytes);
+            const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+            return 'device_' + hex;
         }
 
         function showResult(content, type = 'info') {

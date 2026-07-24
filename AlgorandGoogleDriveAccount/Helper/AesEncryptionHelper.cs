@@ -1,70 +1,133 @@
-﻿using AlgorandGoogleDriveAccount.Model;
+using AlgorandGoogleDriveAccount.Model;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace AlgorandGoogleDriveAccount.Helper
 {
+    /// <summary>
+    /// Encrypts/decrypts the Algorand mnemonic stored in a user's Google Drive file.
+    /// </summary>
+    /// <remarks>
+    /// Writes a versioned, authenticated format (see <see cref="FormatMagic"/>): a per-file random salt feeds
+    /// a real per-file key derivation (HKDF) instead of hashing the shared configuration secret with the email
+    /// alone, and AES-256-GCM provides tamper detection instead of unauthenticated CBC. <see cref="Decrypt"/>
+    /// still recognizes and decrypts the legacy unversioned CBC format (single SHA-256 hash of
+    /// <c>baseValue||email</c>, no salt, no auth tag) so every file already encrypted under the old scheme
+    /// before this change shipped keeps working with no migration step - only newly created files use the new
+    /// format.
+    /// </remarks>
     public static class AesEncryptionHelper
     {
+        // 8-byte marker prefixed to every file written under the new format. Legacy files are raw CBC
+        // ciphertext with no header, so this can never occur at the start of the ciphertext with a chance any
+        // higher than an 8-byte hash collision (~1 in 2^64) — for that to matter, an existing legacy CBC
+        // ciphertext would have to itself start with these exact bytes, which is cryptographically negligible.
+        private static readonly byte[] FormatMagic = Encoding.ASCII.GetBytes("BIATECV2");
+        private const int SaltSize = 16;
+        private const int NonceSize = 12;
+        private const int TagSize = 16;
+
         /// <summary>
-        /// Encrypts the specified data using AES encryption with a 256-bit key and a 128-bit initialization vector
-        /// (IV).
+        /// Encrypts <paramref name="data"/> using the current (versioned, authenticated) format: a random
+        /// per-file salt drives an HKDF-derived per-file AES-256 key, and AES-GCM provides both confidentiality
+        /// and integrity.
         /// </summary>
-        /// <remarks>This method uses AES encryption in CBC mode with PKCS7 padding. The encryption key
-        /// and IV are derived from the provided <paramref name="key"/> and <paramref name="iv"/> using the specified
-        /// <paramref name="email"/> as a salt. Ensure that the same key, IV, and email are used for decryption to
-        /// successfully recover the original data.</remarks>
-        /// <param name="data">The data to be encrypted. Must not be null or empty.</param>
-        /// <param name="key">The base key material used to derive the encryption key. Must not be null or empty.</param>
-        /// <param name="iv">The base initialization vector material used to derive the IV. Must not be null or empty.</param>
-        /// <param name="email">An email address used as a salt for key and IV derivation. Must not be null or empty.</param>
-        /// <returns>A byte array containing the encrypted data.</returns>
         public static byte[] Encrypt(byte[] data, byte[] key, byte[] iv, string email)
         {
-            using var aes = Aes.Create();
-            aes.KeySize = 256;
-            aes.Key = DeriveKey(key, email, 32);
-            aes.IV = DeriveKey(iv, email, 16);
-            aes.Mode = CipherMode.CBC;
-            aes.Padding = PaddingMode.PKCS7;
+            var salt = RandomNumberGenerator.GetBytes(SaltSize);
+            var nonce = RandomNumberGenerator.GetBytes(NonceSize);
+            var derivedKey = DeriveKeyV2(key, email, salt);
 
-            using var encryptor = aes.CreateEncryptor();
-            return PerformCryptography(data, encryptor);
+            var ciphertext = new byte[data.Length];
+            var tag = new byte[TagSize];
+
+            using (var aesGcm = new AesGcm(derivedKey, TagSize))
+            {
+                aesGcm.Encrypt(nonce, data, ciphertext, tag);
+            }
+
+            var output = new byte[FormatMagic.Length + salt.Length + nonce.Length + ciphertext.Length + tag.Length];
+            var offset = 0;
+            Buffer.BlockCopy(FormatMagic, 0, output, offset, FormatMagic.Length); offset += FormatMagic.Length;
+            Buffer.BlockCopy(salt, 0, output, offset, salt.Length); offset += salt.Length;
+            Buffer.BlockCopy(nonce, 0, output, offset, nonce.Length); offset += nonce.Length;
+            Buffer.BlockCopy(ciphertext, 0, output, offset, ciphertext.Length); offset += ciphertext.Length;
+            Buffer.BlockCopy(tag, 0, output, offset, tag.Length);
+            return output;
         }
+
         /// <summary>
-        /// Decrypts the specified cipher data using AES encryption with a derived key and initialization vector (IV).
+        /// Decrypts <paramref name="cipherData"/>. Detects the current versioned AES-GCM format via its magic
+        /// prefix; falls back to the legacy unversioned AES-CBC format (unchanged behavior) otherwise, so
+        /// already-encrypted files keep working.
         /// </summary>
-        /// <remarks>This method uses AES encryption in CBC mode with PKCS7 padding. The key and IV are
-        /// derived from the provided <paramref name="key"/> and <paramref name="iv"/> using the specified <paramref
-        /// name="email"/> as a salt. Ensure that the same key, IV, and email are used for both encryption and
-        /// decryption to maintain data integrity.</remarks>
-        /// <param name="cipherData">The encrypted data to be decrypted.</param>
-        /// <param name="key">The base key used for deriving the encryption key. Must not be null or empty.</param>
-        /// <param name="iv">The base initialization vector used for deriving the encryption IV. Must not be null or empty.</param>
-        /// <param name="email">The email address used as a salt for key and IV derivation. Must not be null or empty.</param>
-        /// <returns>The decrypted data as a byte array.</returns>
         public static byte[] Decrypt(byte[] cipherData, byte[] key, byte[] iv, string email)
+        {
+            if (IsCurrentFormat(cipherData))
+            {
+                return DecryptV2(cipherData, key, email);
+            }
+
+            return DecryptLegacy(cipherData, key, iv, email);
+        }
+
+        private static bool IsCurrentFormat(byte[] cipherData)
+        {
+            if (cipherData.Length < FormatMagic.Length + SaltSize + NonceSize + TagSize)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < FormatMagic.Length; i++)
+            {
+                if (cipherData[i] != FormatMagic[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static byte[] DecryptV2(byte[] cipherData, byte[] key, string email)
+        {
+            var offset = FormatMagic.Length;
+            var salt = cipherData[offset..(offset + SaltSize)]; offset += SaltSize;
+            var nonce = cipherData[offset..(offset + NonceSize)]; offset += NonceSize;
+            var ciphertextLength = cipherData.Length - offset - TagSize;
+            var ciphertext = cipherData[offset..(offset + ciphertextLength)]; offset += ciphertextLength;
+            var tag = cipherData[offset..(offset + TagSize)];
+
+            var derivedKey = DeriveKeyV2(key, email, salt);
+            var plaintext = new byte[ciphertextLength];
+
+            using var aesGcm = new AesGcm(derivedKey, TagSize);
+            aesGcm.Decrypt(nonce, ciphertext, tag, plaintext);
+            return plaintext;
+        }
+
+        /// <summary>
+        /// Real per-file key derivation: HKDF-SHA256 over the shared configured key material, salted per
+        /// file and bound to the email, replacing the legacy single unsalted SHA-256 hash.
+        /// </summary>
+        private static byte[] DeriveKeyV2(byte[] baseValue, string email, byte[] salt)
+        {
+            return HKDF.DeriveKey(HashAlgorithmName.SHA256, baseValue, outputLength: 32, salt: salt, info: Encoding.UTF8.GetBytes(email));
+        }
+
+        private static byte[] DecryptLegacy(byte[] cipherData, byte[] key, byte[] iv, string email)
         {
             using var aes = Aes.Create();
             aes.KeySize = 256;
-            aes.Key = DeriveKey(key, email, 32);
-            aes.IV = DeriveKey(iv, email, 16);
+            aes.Key = DeriveKeyLegacy(key, email, 32);
+            aes.IV = DeriveKeyLegacy(iv, email, 16);
             aes.Mode = CipherMode.CBC;
             aes.Padding = PaddingMode.PKCS7;
 
             using var decryptor = aes.CreateDecryptor();
             return PerformCryptography(cipherData, decryptor);
         }
-        /// <summary>
-        /// Performs a cryptographic transformation on the specified data using the provided <see
-        /// cref="ICryptoTransform"/>.
-        /// </summary>
-        /// <remarks>This method uses a <see cref="CryptoStream"/> to apply the specified cryptographic
-        /// transformation. Ensure that the <paramref name="transform"/> is properly configured for the intended
-        /// operation (e.g., encryption or decryption).</remarks>
-        /// <param name="data">The byte array containing the data to be transformed. Cannot be null or empty.</param>
-        /// <param name="transform">The cryptographic transformation to apply to the data. Cannot be null.</param>
-        /// <returns>A byte array containing the transformed data.</returns>
+
         private static byte[] PerformCryptography(byte[] data, ICryptoTransform transform)
         {
             using var ms = new MemoryStream();
@@ -73,24 +136,20 @@ namespace AlgorandGoogleDriveAccount.Helper
             cryptoStream.FlushFinalBlock();
             return ms.ToArray();
         }
+
         /// <summary>
-        /// Derives a cryptographic key by hashing a combination of a base value and an email address.
+        /// Legacy (pre-versioning) key derivation kept only to decrypt files written before this change:
+        /// a single, unsalted SHA-256 hash of the shared config secret concatenated with the email, truncated
+        /// to the required length.
         /// </summary>
-        /// <remarks>This method uses the SHA-256 hashing algorithm to derive the key. The resulting key
-        /// is truncated to the specified length. Ensure that the <paramref name="length"/> parameter is appropriate for
-        /// your cryptographic requirements.</remarks>
-        /// <param name="baseValue">The base value used as part of the key derivation process. This must be a non-null byte array.</param>
-        /// <param name="email">The email address used to personalize the derived key. This must be a non-null, non-empty string.</param>
-        /// <param name="length">The desired length of the derived key, in bytes. Must be a positive integer less than or equal to the hash
-        /// length.</param>
-        /// <returns>A byte array containing the derived key truncated to the specified length.</returns>
-        private static byte[] DeriveKey(byte[] baseValue, string email, int length)
+        private static byte[] DeriveKeyLegacy(byte[] baseValue, string email, int length)
         {
             using var sha256 = SHA256.Create();
             var combined = baseValue.Concat(Encoding.UTF8.GetBytes(email)).ToArray();
             var hash = sha256.ComputeHash(combined);
-            return hash.Take(length).ToArray(); // truncate to required length
+            return hash.Take(length).ToArray();
         }
+
         /// <summary>
         /// Generates a unique identifier based on the provided AES key and initialization vector (IV).
         /// </summary>

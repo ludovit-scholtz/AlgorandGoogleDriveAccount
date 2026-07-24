@@ -28,13 +28,15 @@ namespace AlgorandGoogleDriveAccount.MCP
         private readonly IDevicePairingService _devicePairingService;
         private readonly IOptionsMonitor<Model.Configuration> _config;
         private readonly IOptionsMonitor<AlgorandGoogleDriveAccount.Model.AlgodConfiguration> _algodConfig;
+        private readonly IOptionsMonitor<AlgorandGoogleDriveAccount.Model.McpTransferLimitsConfiguration> _transferLimits;
 
         public BiatecMCPGoogle(
             IDistributedCache cache,
             GoogleDriveRepository googleDriveRepository,
             IDevicePairingService devicePairingService,
             IOptionsMonitor<Model.Configuration> config,
-            IOptionsMonitor<AlgorandGoogleDriveAccount.Model.AlgodConfiguration> algodConfig
+            IOptionsMonitor<AlgorandGoogleDriveAccount.Model.AlgodConfiguration> algodConfig,
+            IOptionsMonitor<AlgorandGoogleDriveAccount.Model.McpTransferLimitsConfiguration> transferLimits
             )
         {
             _cache = cache;
@@ -42,6 +44,7 @@ namespace AlgorandGoogleDriveAccount.MCP
             _devicePairingService = devicePairingService;
             _config = config;
             _algodConfig = algodConfig;
+            _transferLimits = transferLimits;
         }
 
         private (string apiAddress, string apiToken, string explorerBaseUrl) GetAlgodSettings(string genesisId)
@@ -148,6 +151,27 @@ namespace AlgorandGoogleDriveAccount.MCP
                     throw new Exception($"Initiate google access and pair your device by signing at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
                 }
 
+                // Server-side spend ceiling / receiver allowlist (F-04) - checked before touching the
+                // Drive/Algod/credential path so a disallowed transfer is rejected as cheaply as possible.
+                var maxAmount = _transferLimits.CurrentValue.MaxAmount;
+                if (Helper.TransferPolicy.ExceedsMaxAmount(amount, maxAmount))
+                {
+                    return new TransferAssetResponse
+                    {
+                        Error = $"Transfer amount {amount} exceeds the configured maximum of {maxAmount}.",
+                        ErrorType = "TransferLimitExceeded"
+                    };
+                }
+
+                if (!Helper.TransferPolicy.IsReceiverAllowed(receiverAccount, deviceInfo.AllowedReceivers))
+                {
+                    return new TransferAssetResponse
+                    {
+                        Error = $"Receiver {receiverAccount} is not on this session's allowed-receiver list.",
+                        ErrorType = "ReceiverNotAllowed"
+                    };
+                }
+
                 var (apiAddress, apiToken, explorerBaseUrl) = GetAlgodSettings(genesisId);
 
                 var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
@@ -170,6 +194,7 @@ namespace AlgorandGoogleDriveAccount.MCP
                 {
                     throw new Exception($"Unable to load the Algorand account from google store. Make sure the claim to access the google store to create files and load created files is granted to biatec app and try to login again. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
                 }
+
                 if (assetId == 0)
                 {
                     var result = await account.MakePaymentTo(new Algorand.Address(receiverAccount), amount, note, algodApiInstance);

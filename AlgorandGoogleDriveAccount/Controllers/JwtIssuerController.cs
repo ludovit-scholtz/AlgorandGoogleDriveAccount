@@ -329,7 +329,7 @@ namespace AlgorandGoogleDriveAccount.Controllers
             [FromQuery(Name = "state")] string? state,
             [FromQuery(Name = "client_id")] string? clientId)
         {
-            clientId ??= TryGetClientIdFromIdTokenHint(idTokenHint);
+            clientId ??= string.IsNullOrWhiteSpace(idTokenHint) ? null : _jwtIssuerService.TryGetAudienceFromSelfIssuedToken(idTokenHint);
             var issuerConfig = HttpContext.RequestServices.GetRequiredService<IConfiguration>().GetSection("JwtIssuer").Get<JwtIssuerConfiguration>()
                 ?? new JwtIssuerConfiguration();
 
@@ -461,30 +461,6 @@ namespace AlgorandGoogleDriveAccount.Controllers
             }
 
             return header[prefix.Length..].Trim();
-        }
-
-        private static string? TryGetClientIdFromIdTokenHint(string? idTokenHint)
-        {
-            if (string.IsNullOrWhiteSpace(idTokenHint))
-            {
-                return null;
-            }
-
-            var tokenHandler = new JwtSecurityTokenHandler();
-            if (!tokenHandler.CanReadToken(idTokenHint))
-            {
-                return null;
-            }
-
-            try
-            {
-                var token = tokenHandler.ReadJwtToken(idTokenHint);
-                return token.Audiences.FirstOrDefault();
-            }
-            catch
-            {
-                return null;
-            }
         }
 
         private static bool IsAllowedPostLogoutRedirectUri(JwtIssuerClientConfiguration client, string postLogoutRedirectUri)

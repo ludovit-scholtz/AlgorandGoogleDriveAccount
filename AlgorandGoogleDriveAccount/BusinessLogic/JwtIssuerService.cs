@@ -2,8 +2,10 @@ using AlgorandGoogleDriveAccount.Helper;
 using AlgorandGoogleDriveAccount.Model;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -19,8 +21,10 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
         private const string RefreshPrefix = "oidc:refresh:";
 
         private readonly IDistributedCache _cache;
+        private readonly IConnectionMultiplexer _redis;
         private readonly IOptionsMonitor<JwtIssuerConfiguration> _config;
         private readonly IDriveService _driveService;
+        private readonly IHostEnvironment _environment;
         private readonly ILogger<JwtIssuerService> _logger;
         private readonly RSA _rsa;
         private readonly SigningCredentials _signingCredentials;
@@ -32,13 +36,17 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
 
         public JwtIssuerService(
             IDistributedCache cache,
+            IConnectionMultiplexer redis,
             IOptionsMonitor<JwtIssuerConfiguration> config,
             IDriveService driveService,
+            IHostEnvironment environment,
             ILogger<JwtIssuerService> logger)
         {
             _cache = cache;
+            _redis = redis;
             _config = config;
             _driveService = driveService;
+            _environment = environment;
             _logger = logger;
 
             _rsa = LoadOrCreateSigningKey();
@@ -273,8 +281,9 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
 
         public async Task<OidcAuthorizeRequest?> GetPendingAuthorizeRequestAsync(string requestId)
         {
-            var key = PendingPrefix + requestId;
-            var json = await _cache.GetStringAsync(key);
+            // Atomic get-and-delete: the pending request is one-time-use, so this also consumes it,
+            // preventing a narrow-window race where two concurrent callbacks both observe it as present.
+            var json = await GetAndDeleteAsync(PendingPrefix + requestId);
             if (string.IsNullOrWhiteSpace(json))
             {
                 return null;
@@ -285,7 +294,20 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
 
         public Task RemovePendingAuthorizeRequestAsync(string requestId)
         {
+            // Already consumed by GetPendingAuthorizeRequestAsync's atomic get-and-delete; this is now a
+            // harmless no-op safety net kept for interface/caller compatibility.
             return _cache.RemoveAsync(PendingPrefix + requestId);
+        }
+
+        /// <summary>
+        /// Atomically reads and deletes a one-time-use Redis value (authorization code / refresh token /
+        /// pending-authorize-request) so two concurrent requests can never both observe it as present.
+        /// </summary>
+        private async Task<string?> GetAndDeleteAsync(string key)
+        {
+            var db = _redis.GetDatabase();
+            var value = await db.StringGetDeleteAsync(key);
+            return value.IsNullOrEmpty ? null : (string?)value;
         }
 
         public async Task<(bool Success, string? Error, string? ErrorDescription, Dictionary<string, string>? Response)> CreateAuthorizeResponseAsync(
@@ -377,13 +399,11 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 }
 
                 var codeKey = CodePrefix + request.Code;
-                var codeJson = await _cache.GetStringAsync(codeKey);
+                var codeJson = await GetAndDeleteAsync(codeKey);
                 if (string.IsNullOrWhiteSpace(codeJson))
                 {
                     return (false, 400, "invalid_grant", "Authorization code is invalid or expired.", null);
                 }
-
-                await _cache.RemoveAsync(codeKey);
 
                 var codeRecord = JsonSerializer.Deserialize<AuthorizationCodeRecord>(codeJson, _jsonOptions);
                 if (codeRecord == null)
@@ -433,7 +453,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 }
 
                 var refreshKey = RefreshPrefix + request.RefreshToken;
-                var refreshJson = await _cache.GetStringAsync(refreshKey);
+                var refreshJson = await GetAndDeleteAsync(refreshKey);
                 if (string.IsNullOrWhiteSpace(refreshJson))
                 {
                     return (false, 400, "invalid_grant", "Refresh token is invalid or expired.", null);
@@ -465,7 +485,6 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                     refreshRecord.Scope,
                     includeRefreshToken: true);
 
-                await _cache.RemoveAsync(refreshKey);
                 return (true, 200, null, null, response);
             }
 
@@ -481,7 +500,13 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 IssuerSigningKey = new RsaSecurityKey(_rsa.ExportParameters(false)),
                 ValidateIssuer = true,
                 ValidIssuer = Current.Issuer,
-                ValidateAudience = false,
+                // Access tokens' aud is always the requesting client_id (see CreateAccessToken). These three
+                // endpoints (/userinfo, /introspect, /verify) are shared by every registered client, so we
+                // validate the aud is still one of our currently-registered clients rather than a single fixed
+                // value - this rejects tokens whose client has since been deregistered and defends against any
+                // aud tampering, without breaking any legitimate client's token.
+                ValidateAudience = true,
+                ValidAudiences = Current.Clients.Select(c => c.ClientId),
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.FromMinutes(1)
             };
@@ -507,6 +532,31 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             {
                 _logger.LogWarning(ex, "Access token validation failed");
                 return (false, null, null, "invalid_token");
+            }
+        }
+
+        public string? TryGetAudienceFromSelfIssuedToken(string token)
+        {
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var parameters = new TokenValidationParameters
+            {
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new RsaSecurityKey(_rsa.ExportParameters(false)),
+                ValidateIssuer = true,
+                ValidIssuer = Current.Issuer,
+                ValidateAudience = false,
+                ValidateLifetime = false
+            };
+
+            try
+            {
+                tokenHandler.ValidateToken(token, parameters, out var validatedToken);
+                return validatedToken is JwtSecurityToken jwt ? jwt.Audiences.FirstOrDefault() : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "id_token_hint signature/issuer validation failed; ignoring its aud claim.");
+                return null;
             }
         }
 
@@ -674,12 +724,25 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 return (false, 401, "invalid_client", "Unknown client_id.", null);
             }
 
-            if (!string.IsNullOrWhiteSpace(client.ClientSecret) && !string.Equals(client.ClientSecret, clientSecret, StringComparison.Ordinal))
+            if (!string.IsNullOrWhiteSpace(client.ClientSecret) && !FixedTimeSecretsEqual(client.ClientSecret, clientSecret))
             {
                 return (false, 401, "invalid_client", "Invalid client credentials.", null);
             }
 
             return (true, 200, null, null, client);
+        }
+
+        /// <summary>
+        /// Compares client secrets in constant time to avoid a timing side-channel that could otherwise let
+        /// an attacker recover a confidential client's secret character-by-character.
+        /// </summary>
+        private static bool FixedTimeSecretsEqual(string expected, string? actual)
+        {
+            var expectedBytes = Encoding.UTF8.GetBytes(expected);
+            var actualBytes = Encoding.UTF8.GetBytes(actual ?? string.Empty);
+
+            return expectedBytes.Length == actualBytes.Length
+                && CryptographicOperations.FixedTimeEquals(expectedBytes, actualBytes);
         }
 
         private static (string? ClientId, string? ClientSecret) ParseBasicAuth(string? authorizationHeader)
@@ -736,6 +799,15 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 {
                     _logger.LogError(ex, "Failed to import configured JwtIssuer signing key. Falling back to ephemeral key.");
                 }
+            }
+
+            if (!_environment.IsDevelopment())
+            {
+                throw new InvalidOperationException(
+                    "JwtIssuer:SigningPrivateKeyPem is missing or invalid. Refusing to start with a silent " +
+                    "ephemeral signing key outside Development, since that would invalidate all previously " +
+                    "issued tokens and diverge signing keys across replicas without any operator-visible alert. " +
+                    "Configure a valid PEM-encoded RSA private key (PKCS#8 or PKCS#1).");
             }
 
             _logger.LogWarning("JwtIssuer signing key not configured. Using ephemeral RSA key. Tokens become invalid after restart.");

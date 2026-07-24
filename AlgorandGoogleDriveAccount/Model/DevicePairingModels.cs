@@ -43,5 +43,12 @@ namespace AlgorandGoogleDriveAccount.Model
 
         /// <summary>When this pairing session expires and must be re-paired.</summary>
         public DateTime ExpiresAt { get; set; }
+
+        /// <summary>
+        /// Optional, user-configured allowlist of Algorand receiver addresses the <c>transferAsset</c> MCP tool
+        /// is permitted to send to for this session. Empty/unset means unrestricted (the default - no behavior
+        /// change unless a user opts in via <c>POST /api/device/receiver-allowlist/{sessionId}</c>).
+        /// </summary>
+        public List<string> AllowedReceivers { get; set; } = new();
     }
 }

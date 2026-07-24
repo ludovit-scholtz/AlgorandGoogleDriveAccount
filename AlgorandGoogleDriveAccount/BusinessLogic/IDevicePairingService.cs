@@ -22,6 +22,12 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
 
         /// <summary>Removes a paired session from cache.</summary>
         Task<DevicePairingResponse> UnpairDeviceAsync(string sessionId);
+
+        /// <summary>
+        /// Sets (or clears, if <paramref name="allowedReceivers"/> is empty) the receiver-address allowlist
+        /// the <c>transferAsset</c> MCP tool enforces for this paired session.
+        /// </summary>
+        Task<DevicePairingResponse> SetReceiverAllowlistAsync(string sessionId, IReadOnlyCollection<string> allowedReceivers);
     }
 
     /// <summary>Requests additional (incremental) Google OAuth scopes for the current user.</summary>

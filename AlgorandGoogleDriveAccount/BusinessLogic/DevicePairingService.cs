@@ -316,5 +316,50 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 };
             }
         }
+
+        public async Task<DevicePairingResponse> SetReceiverAllowlistAsync(string sessionId, IReadOnlyCollection<string> allowedReceivers)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(sessionId))
+                {
+                    return new DevicePairingResponse { Success = false, Message = "Session ID is required" };
+                }
+
+                var cacheKey = $"device_session:{sessionId}";
+                var deviceInfoJson = await _cache.GetStringAsync(cacheKey);
+                if (string.IsNullOrEmpty(deviceInfoJson))
+                {
+                    return new DevicePairingResponse { Success = false, Message = "Device not found or session expired" };
+                }
+
+                var deviceInfo = JsonSerializer.Deserialize<PairedDeviceInfo>(deviceInfoJson);
+                if (deviceInfo == null)
+                {
+                    return new DevicePairingResponse { Success = false, Message = "Device not found or session expired" };
+                }
+
+                if (DateTime.UtcNow > deviceInfo.ExpiresAt)
+                {
+                    await _cache.RemoveAsync(cacheKey);
+                    return new DevicePairingResponse { Success = false, Message = "Device not found or session expired" };
+                }
+
+                deviceInfo.AllowedReceivers = allowedReceivers?.Where(r => !string.IsNullOrWhiteSpace(r)).Distinct().ToList() ?? new List<string>();
+
+                var remainingTtl = deviceInfo.ExpiresAt - DateTime.UtcNow;
+                await _cache.SetStringAsync(cacheKey, JsonSerializer.Serialize(deviceInfo), new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = remainingTtl
+                });
+
+                return new DevicePairingResponse { Success = true, Message = "Receiver allowlist updated", SessionId = sessionId };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error setting receiver allowlist for session ID: {sessionId}");
+                return new DevicePairingResponse { Success = false, Message = "An error occurred while updating the receiver allowlist" };
+            }
+        }
     }
 }
