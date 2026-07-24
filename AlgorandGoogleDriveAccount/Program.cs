@@ -76,7 +76,7 @@ namespace AlgorandGoogleDriveAccount
 
                     if (origins.Length > 0)
                     {
-                        policyBuilder.WithOrigins(origins);
+                        policyBuilder.SetIsOriginAllowed(origin => IsOriginAllowed(origin, origins));
                     }
                     else
                     {
@@ -109,7 +109,7 @@ namespace AlgorandGoogleDriveAccount
 
                     if (origins.Length > 0)
                     {
-                        policyBuilder.WithOrigins(origins);
+                        policyBuilder.SetIsOriginAllowed(origin => IsOriginAllowed(origin, origins));
                     }
                     else if (builder.Environment.IsDevelopment())
                     {
@@ -417,6 +417,39 @@ namespace AlgorandGoogleDriveAccount
             _ = app.Services.GetService<BiatecMCPGoogle>();
 
             app.Run();
+        }
+
+        /// <summary>
+        /// Checks whether <paramref name="origin"/> matches one of the configured allowed origin
+        /// patterns. Supports exact matches as well as single-level wildcard subdomains
+        /// (e.g. <c>https://*.capitalism5.com</c> matches <c>https://www.capitalism5.com</c>) -
+        /// something ASP.NET Core's built-in <c>WithOrigins</c> does not support.
+        /// </summary>
+        private static bool IsOriginAllowed(string origin, string[] allowedOriginPatterns)
+        {
+            foreach (var pattern in allowedOriginPatterns)
+            {
+                if (string.Equals(pattern, origin, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                var wildcardIndex = pattern.IndexOf("*.", StringComparison.Ordinal);
+                if (wildcardIndex >= 0)
+                {
+                    var prefix = pattern[..wildcardIndex];
+                    var suffix = pattern[(wildcardIndex + 1)..]; // keep the leading '.'
+
+                    if (origin.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+                        origin.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) &&
+                        origin.Length > prefix.Length + suffix.Length)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
     }
 }
