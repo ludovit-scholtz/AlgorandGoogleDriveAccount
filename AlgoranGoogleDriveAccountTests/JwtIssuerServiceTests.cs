@@ -1,6 +1,5 @@
 using AlgorandGoogleDriveAccount.BusinessLogic;
 using AlgorandGoogleDriveAccount.Model;
-using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -27,7 +26,6 @@ namespace AlgoranGoogleDriveAccountTests
         protected const string TestEmail = "user@example.com";
         protected const string TestAlgorandAddress = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXY";
 
-        protected Mock<IDistributedCache> MockCache = null!;
         protected Mock<IConnectionMultiplexer> MockRedis = null!;
         protected Mock<IDatabase> MockDatabase = null!;
         protected Mock<IOptionsMonitor<JwtIssuerConfiguration>> MockConfig = null!;
@@ -46,7 +44,6 @@ namespace AlgoranGoogleDriveAccountTests
         [SetUp]
         public virtual void SetUp()
         {
-            MockCache = new Mock<IDistributedCache>();
             MockRedis = new Mock<IConnectionMultiplexer>();
             MockDatabase = new Mock<IDatabase>();
             MockRedis.Setup(r => r.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(MockDatabase.Object);
@@ -81,32 +78,24 @@ namespace AlgoranGoogleDriveAccountTests
 
             MockConfig.Setup(m => m.CurrentValue).Returns(DefaultConfig);
 
-            Service = new JwtIssuerService(MockCache.Object, MockRedis.Object, MockConfig.Object, MockDriveService.Object, MockEnvironment.Object, MockLogger.Object);
+            Service = new JwtIssuerService(MockRedis.Object, MockConfig.Object, MockDriveService.Object, MockEnvironment.Object, MockLogger.Object);
         }
 
         /// <summary>
-        /// Sets up a cache/Redis hit for <paramref name="key"/>. One-time-use values (authorization codes,
+        /// Sets up a Redis hit for <paramref name="key"/>. One-time-use values (authorization codes,
         /// refresh tokens, pending authorize requests) are read via an atomic Redis GETDEL
-        /// (<see cref="IDatabase.StringGetDeleteAsync"/>), so that path is mocked here alongside the plain
-        /// <see cref="IDistributedCache"/> path some other flows still use.
+        /// (<see cref="IDatabase.StringGetDeleteAsync"/>).
         /// </summary>
         protected void SetupCacheGet(string key, string json)
         {
-            var bytes = Encoding.UTF8.GetBytes(json);
-            MockCache
-                .Setup(c => c.GetAsync(key, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(bytes);
             MockDatabase
                 .Setup(d => d.StringGetDeleteAsync(key, It.IsAny<CommandFlags>()))
                 .ReturnsAsync((RedisValue)json);
         }
 
-        /// <summary>Sets up a cache/Redis miss for <paramref name="key"/> (see <see cref="SetupCacheGet"/>).</summary>
+        /// <summary>Sets up a Redis miss for <paramref name="key"/> (see <see cref="SetupCacheGet"/>).</summary>
         protected void SetupCacheMiss(string key)
         {
-            MockCache
-                .Setup(c => c.GetAsync(key, It.IsAny<CancellationToken>()))
-                .ReturnsAsync((byte[]?)null);
             MockDatabase
                 .Setup(d => d.StringGetDeleteAsync(key, It.IsAny<CommandFlags>()))
                 .ReturnsAsync(RedisValue.Null);
@@ -834,11 +823,6 @@ namespace AlgoranGoogleDriveAccountTests
         [Test]
         public async Task StorePendingAuthorizeRequestAsync_ReturnsNonEmptyId()
         {
-            MockCache
-                .Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(),
-                    It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-
             var request = ValidCodeRequest();
             var id = await Service.StorePendingAuthorizeRequestAsync(request);
 
@@ -848,19 +832,16 @@ namespace AlgoranGoogleDriveAccountTests
         [Test]
         public async Task StorePendingAuthorizeRequestAsync_CallsCache()
         {
-            MockCache
-                .Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(),
-                    It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-
             var request = ValidCodeRequest();
             await Service.StorePendingAuthorizeRequestAsync(request);
 
-            MockCache.Verify(c => c.SetAsync(
-                It.Is<string>(k => k.StartsWith("oidc:pending:")),
-                It.IsAny<byte[]>(),
-                It.IsAny<DistributedCacheEntryOptions>(),
-                It.IsAny<CancellationToken>()), Times.Once);
+            MockDatabase.Verify(d => d.StringSetAsync(
+                It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:pending:")),
+                It.IsAny<RedisValue>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<bool>(),
+                It.IsAny<When>(),
+                It.IsAny<CommandFlags>()), Times.Once);
         }
 
         [Test]
@@ -892,17 +873,11 @@ namespace AlgoranGoogleDriveAccountTests
         }
 
         [Test]
-        public async Task RemovePendingAuthorizeRequestAsync_CallsRemoveOnCache()
+        public void RemovePendingAuthorizeRequestAsync_IsNoOp_DoesNotThrow()
         {
-            MockCache
-                .Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-
-            await Service.RemovePendingAuthorizeRequestAsync("test-id");
-
-            MockCache.Verify(c => c.RemoveAsync(
-                "oidc:pending:test-id",
-                It.IsAny<CancellationToken>()), Times.Once);
+            // The pending-authorize key is already consumed atomically by GetPendingAuthorizeRequestAsync's
+            // GETDEL (StringGetDeleteAsync), so this method is now a true no-op.
+            Assert.DoesNotThrowAsync(async () => await Service.RemovePendingAuthorizeRequestAsync("test-id"));
         }
     }
 
@@ -917,11 +892,6 @@ namespace AlgoranGoogleDriveAccountTests
             MockDriveService
                 .Setup(d => d.GetAccountAddressAsync(TestEmail))
                 .ReturnsAsync(TestAlgorandAddress);
-
-            MockCache
-                .Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(),
-                    It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
         }
 
         [Test]
@@ -962,11 +932,13 @@ namespace AlgoranGoogleDriveAccountTests
 
             await Service.CreateAuthorizeResponseAsync(request, client, user);
 
-            MockCache.Verify(c => c.SetAsync(
-                It.Is<string>(k => k.StartsWith("oidc:code:")),
-                It.IsAny<byte[]>(),
-                It.IsAny<DistributedCacheEntryOptions>(),
-                It.IsAny<CancellationToken>()), Times.Once);
+            MockDatabase.Verify(d => d.StringSetAsync(
+                It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:code:")),
+                It.IsAny<RedisValue>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<bool>(),
+                It.IsAny<When>(),
+                It.IsAny<CommandFlags>()), Times.Once);
         }
 
         [Test]
@@ -1080,13 +1052,6 @@ namespace AlgoranGoogleDriveAccountTests
         public override void SetUp()
         {
             base.SetUp();
-            MockCache
-                .Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(),
-                    It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-            MockCache
-                .Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
         }
 
         // ── authorization_code grant ──────────────────────────────────────────
@@ -1620,13 +1585,6 @@ namespace AlgoranGoogleDriveAccountTests
             MockDriveService
                 .Setup(d => d.GetAccountAddressAsync(TestEmail))
                 .ReturnsAsync(TestAlgorandAddress);
-            MockCache
-                .Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(),
-                    It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-            MockCache
-                .Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
 
             var code = "real-code";
             var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri);
@@ -1791,13 +1749,6 @@ namespace AlgoranGoogleDriveAccountTests
             MockDriveService
                 .Setup(d => d.GetAccountAddressAsync(TestEmail))
                 .ReturnsAsync(TestAlgorandAddress);
-            MockCache
-                .Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(),
-                    It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-            MockCache
-                .Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
 
             var code = "introspect-code";
             var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri);
@@ -1876,13 +1827,6 @@ namespace AlgoranGoogleDriveAccountTests
             MockDriveService
                 .Setup(d => d.GetAccountAddressAsync(TestEmail))
                 .ReturnsAsync(TestAlgorandAddress);
-            MockCache
-                .Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(),
-                    It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-            MockCache
-                .Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
         }
 
         private async Task<OidcTokenResponse> GetTokensAsync(string code = "claims-code")
@@ -2035,7 +1979,6 @@ namespace AlgoranGoogleDriveAccountTests
             Assert.DoesNotThrow(() =>
             {
                 var svc = new JwtIssuerService(
-                    MockCache.Object,
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
@@ -2055,7 +1998,6 @@ namespace AlgoranGoogleDriveAccountTests
             Assert.DoesNotThrow(() =>
             {
                 var svc = new JwtIssuerService(
-                    MockCache.Object,
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
@@ -2073,7 +2015,6 @@ namespace AlgoranGoogleDriveAccountTests
             Assert.DoesNotThrow(() =>
             {
                 var svc = new JwtIssuerService(
-                    MockCache.Object,
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
@@ -2090,16 +2031,7 @@ namespace AlgoranGoogleDriveAccountTests
             var pem = rsa.ExportRSAPrivateKeyPem();
             DefaultConfig.SigningPrivateKeyPem = pem;
 
-            MockCache
-                .Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(),
-                    It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-            MockCache
-                .Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-
             var svc = new JwtIssuerService(
-                MockCache.Object,
                 MockRedis.Object,
                 MockConfig.Object,
                 MockDriveService.Object,
@@ -2138,7 +2070,6 @@ namespace AlgoranGoogleDriveAccountTests
             Assert.Throws<InvalidOperationException>(() =>
             {
                 _ = new JwtIssuerService(
-                    MockCache.Object,
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
@@ -2156,7 +2087,6 @@ namespace AlgoranGoogleDriveAccountTests
             Assert.Throws<InvalidOperationException>(() =>
             {
                 _ = new JwtIssuerService(
-                    MockCache.Object,
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
@@ -2174,7 +2104,6 @@ namespace AlgoranGoogleDriveAccountTests
             Assert.DoesNotThrow(() =>
             {
                 _ = new JwtIssuerService(
-                    MockCache.Object,
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,

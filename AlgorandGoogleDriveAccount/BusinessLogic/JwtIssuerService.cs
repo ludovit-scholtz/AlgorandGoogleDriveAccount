@@ -1,7 +1,6 @@
 using AlgorandGoogleDriveAccount.Helper;
 using AlgorandGoogleDriveAccount.Model;
 using Microsoft.AspNetCore.WebUtilities;
-using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -20,7 +19,6 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
         private const string CodePrefix = "oidc:code:";
         private const string RefreshPrefix = "oidc:refresh:";
 
-        private readonly IDistributedCache _cache;
         private readonly IConnectionMultiplexer _redis;
         private readonly IOptionsMonitor<JwtIssuerConfiguration> _config;
         private readonly IDriveService _driveService;
@@ -35,14 +33,12 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
         };
 
         public JwtIssuerService(
-            IDistributedCache cache,
             IConnectionMultiplexer redis,
             IOptionsMonitor<JwtIssuerConfiguration> config,
             IDriveService driveService,
             IHostEnvironment environment,
             ILogger<JwtIssuerService> logger)
         {
-            _cache = cache;
             _redis = redis;
             _config = config;
             _driveService = driveService;
@@ -271,10 +267,7 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
             var requestId = GenerateOpaqueToken(32);
             var key = PendingPrefix + requestId;
             var payload = JsonSerializer.Serialize(request, _jsonOptions);
-            await _cache.SetStringAsync(key, payload, new DistributedCacheEntryOptions
-            {
-                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10)
-            });
+            await _redis.GetDatabase().StringSetAsync(key, payload, TimeSpan.FromMinutes(10));
 
             return requestId;
         }
@@ -295,8 +288,8 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
         public Task RemovePendingAuthorizeRequestAsync(string requestId)
         {
             // Already consumed by GetPendingAuthorizeRequestAsync's atomic get-and-delete; this is now a
-            // harmless no-op safety net kept for interface/caller compatibility.
-            return _cache.RemoveAsync(PendingPrefix + requestId);
+            // no-op kept for interface/caller compatibility.
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -365,12 +358,9 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                 ExpiresUtc = DateTimeOffset.UtcNow.AddSeconds(Current.AuthorizationCodeLifetimeSeconds)
             };
 
-            await _cache.SetStringAsync(CodePrefix + code,
+            await _redis.GetDatabase().StringSetAsync(CodePrefix + code,
                 JsonSerializer.Serialize(codeData, _jsonOptions),
-                new DistributedCacheEntryOptions
-                {
-                    AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(Current.AuthorizationCodeLifetimeSeconds)
-                });
+                TimeSpan.FromSeconds(Current.AuthorizationCodeLifetimeSeconds));
 
             var responseForCode = new Dictionary<string, string>
             {
@@ -617,12 +607,9 @@ namespace AlgorandGoogleDriveAccount.BusinessLogic
                     ExpiresUtc = DateTimeOffset.UtcNow.AddDays(Current.RefreshTokenLifetimeDays)
                 };
 
-                await _cache.SetStringAsync(RefreshPrefix + refreshToken,
+                await _redis.GetDatabase().StringSetAsync(RefreshPrefix + refreshToken,
                     JsonSerializer.Serialize(refreshRecord, _jsonOptions),
-                    new DistributedCacheEntryOptions
-                    {
-                        AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(Current.RefreshTokenLifetimeDays)
-                    });
+                    TimeSpan.FromDays(Current.RefreshTokenLifetimeDays));
             }
 
             return new OidcTokenResponse
