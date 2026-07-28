@@ -173,7 +173,7 @@ namespace BiatecMCPTests
                     .ReturnsAsync(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(tempSessionData)));
 
                 // Act
-                var result = await _service.ProcessPairingCallbackAsync(sessionId, email, accessToken, refreshToken);
+                var result = await _service.ProcessPairingCallbackAsync(sessionId, email, accessToken, refreshToken, "Google");
 
                 // Assert
                 Assert.That(result.Success, Is.True);
@@ -221,7 +221,7 @@ namespace BiatecMCPTests
                         (key, value, options, token) => capturedDeviceInfoBytes = value);
 
                 // Act
-                await _service.ProcessPairingCallbackAsync(sessionId, email, accessToken, refreshToken);
+                await _service.ProcessPairingCallbackAsync(sessionId, email, accessToken, refreshToken, "Google");
 
                 // Assert
                 Assert.That(capturedDeviceInfoBytes, Is.Not.Null);
@@ -238,7 +238,7 @@ namespace BiatecMCPTests
             public async Task ProcessPairingCallbackAsync_InvalidSessionId_ReturnsFailureResponse(string sessionId)
             {
                 // Act
-                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", "token", "refresh");
+                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", "token", "refresh", "Google");
 
                 // Assert
                 Assert.That(result.Success, Is.False);
@@ -249,7 +249,7 @@ namespace BiatecMCPTests
             public async Task ProcessPairingCallbackAsync_NullSessionId_ReturnsFailureResponse()
             {
                 // Act
-                var result = await _service.ProcessPairingCallbackAsync(null!, "test@example.com", "token", "refresh");
+                var result = await _service.ProcessPairingCallbackAsync(null!, "test@example.com", "token", "refresh", "Google");
 
                 // Assert
                 Assert.That(result.Success, Is.False);
@@ -267,7 +267,7 @@ namespace BiatecMCPTests
                     .ReturnsAsync((byte[]?)null);
 
                 // Act
-                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", "token", "refresh");
+                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", "token", "refresh", "Google");
 
                 // Assert
                 Assert.That(result.Success, Is.False);
@@ -286,7 +286,7 @@ namespace BiatecMCPTests
                     .ReturnsAsync(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(tempSessionData)));
 
                 // Act
-                var result = await _service.ProcessPairingCallbackAsync(sessionId, email, "token", "refresh");
+                var result = await _service.ProcessPairingCallbackAsync(sessionId, email, "token", "refresh", "Google");
 
                 // Assert
                 Assert.That(result.Success, Is.False);
@@ -305,7 +305,7 @@ namespace BiatecMCPTests
                     .ReturnsAsync(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(tempSessionData)));
 
                 // Act
-                var result = await _service.ProcessPairingCallbackAsync(sessionId, null!, "token", "refresh");
+                var result = await _service.ProcessPairingCallbackAsync(sessionId, null!, "token", "refresh", "Google");
 
                 // Assert
                 Assert.That(result.Success, Is.False);
@@ -324,7 +324,7 @@ namespace BiatecMCPTests
                     .ReturnsAsync(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(tempSessionData)));
 
                 // Act
-                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", accessToken, "refresh");
+                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", accessToken, "refresh", "Google");
 
                 // Assert
                 Assert.That(result.Success, Is.False);
@@ -343,7 +343,7 @@ namespace BiatecMCPTests
                     .ReturnsAsync(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(tempSessionData)));
 
                 // Act
-                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", null!, "refresh");
+                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", null!, "refresh", "Google");
 
                 // Assert
                 Assert.That(result.Success, Is.False);
@@ -361,7 +361,7 @@ namespace BiatecMCPTests
                     .ThrowsAsync(new InvalidOperationException("Cache error"));
 
                 // Act
-                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", "token", "refresh");
+                var result = await _service.ProcessPairingCallbackAsync(sessionId, "test@example.com", "token", "refresh", "Google");
 
                 // Assert
                 Assert.That(result.Success, Is.False);

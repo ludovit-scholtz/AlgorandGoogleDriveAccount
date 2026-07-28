@@ -8,7 +8,7 @@ namespace BiatecMCP.BusinessLogic
 {
     public class PortfolioValuationService : IPortfolioValuationService
     {
-        private readonly GoogleDriveRepository _googleDriveRepository;
+        private readonly ICloudAccountRepository _cloudAccountRepository;
         private readonly IDistributedCache _cache;
         private readonly ILogger<PortfolioValuationService> _logger;
         private readonly IOptionsMonitor<Configuration> _config;
@@ -18,34 +18,34 @@ namespace BiatecMCP.BusinessLogic
         private readonly decimal _algoEurPrice = 0.20m; // Example: 1 ALGO = 0.20 EUR
 
         public PortfolioValuationService(
-            GoogleDriveRepository googleDriveRepository,
+            ICloudAccountRepository cloudAccountRepository,
             IDistributedCache cache,
             ILogger<PortfolioValuationService> logger,
             IOptionsMonitor<Configuration> config,
             HttpClient httpClient)
         {
-            _googleDriveRepository = googleDriveRepository;
+            _cloudAccountRepository = cloudAccountRepository;
             _cache = cache;
             _logger = logger;
             _config = config;
             _httpClient = httpClient;
         }
 
-        public async Task<decimal> GetPortfolioValueAsync(string email)
+        public async Task<decimal> GetPortfolioValueAsync(string email, StorageProvider provider, string accessToken)
         {
             try
             {
                 // Try to get cached portfolio value first
                 var cacheKey = $"portfolio_value:{email}";
                 var cachedValue = await _cache.GetStringAsync(cacheKey);
-                
+
                 if (!string.IsNullOrEmpty(cachedValue) && decimal.TryParse(cachedValue, out var cached))
                 {
                     return cached;
                 }
 
                 // Calculate portfolio value from Algorand accounts
-                var totalValue = await CalculatePortfolioValueAsync(email);
+                var totalValue = await CalculatePortfolioValueAsync(email, provider, accessToken);
 
                 // Cache for 1 hour
                 await _cache.SetStringAsync(cacheKey, totalValue.ToString(), new DistributedCacheEntryOptions
@@ -62,19 +62,19 @@ namespace BiatecMCP.BusinessLogic
             }
         }
 
-        public async Task<ServiceTier> GetServiceTierAsync(string email)
+        public async Task<ServiceTier> GetServiceTierAsync(string email, StorageProvider provider, string accessToken)
         {
-            var portfolioValue = await GetPortfolioValueAsync(email);
+            var portfolioValue = await GetPortfolioValueAsync(email, provider, accessToken);
             return DetermineServiceTier(portfolioValue);
         }
 
-        public async Task<PortfolioSummary> GetPortfolioSummaryAsync(string email)
+        public async Task<PortfolioSummary> GetPortfolioSummaryAsync(string email, StorageProvider provider, string accessToken)
         {
             try
             {
                 var cacheKey = $"portfolio_summary:{email}";
                 var cachedSummary = await _cache.GetStringAsync(cacheKey);
-                
+
                 if (!string.IsNullOrEmpty(cachedSummary))
                 {
                     var cached = JsonSerializer.Deserialize<PortfolioSummary>(cachedSummary);
@@ -85,9 +85,9 @@ namespace BiatecMCP.BusinessLogic
                 }
 
                 // Calculate fresh portfolio summary
-                var portfolioValue = await CalculatePortfolioValueAsync(email);
+                var portfolioValue = await CalculatePortfolioValueAsync(email, provider, accessToken);
                 var algoBalance = await GetAlgorandBalanceAsync(email);
-                
+
                 var summary = new PortfolioSummary
                 {
                     TotalValueEur = portfolioValue,
@@ -121,19 +121,19 @@ namespace BiatecMCP.BusinessLogic
             }
         }
 
-        public async Task UpdatePortfolioValuationAsync(string email)
+        public async Task UpdatePortfolioValuationAsync(string email, StorageProvider provider, string accessToken)
         {
             try
             {
                 // Clear cached values to force recalculation
                 var portfolioCacheKey = $"portfolio_value:{email}";
                 var summaryCacheKey = $"portfolio_summary:{email}";
-                
+
                 await _cache.RemoveAsync(portfolioCacheKey);
                 await _cache.RemoveAsync(summaryCacheKey);
 
                 // Trigger fresh calculation
-                await GetPortfolioSummaryAsync(email);
+                await GetPortfolioSummaryAsync(email, provider, accessToken);
 
                 _logger.LogInformation($"Portfolio valuation updated for {email}");
             }
@@ -143,18 +143,18 @@ namespace BiatecMCP.BusinessLogic
             }
         }
 
-        private async Task<decimal> CalculatePortfolioValueAsync(string email)
+        private async Task<decimal> CalculatePortfolioValueAsync(string email, StorageProvider provider, string accessToken)
         {
             try
             {
                 // Load the user's Algorand account
-                var account = await _googleDriveRepository.LoadAccount(email, 0);
-                
+                var account = await _cloudAccountRepository.LoadAccountAsync(email, 0, provider, accessToken);
+
                 // In a real implementation, you would:
                 // 1. Query the Algorand blockchain for account balance
                 // 2. Get current ALGO/EUR exchange rate from a price API
                 // 3. Calculate the total value of all assets
-                
+
                 // For demonstration, we'll use a mock calculation
                 var algoBalance = await GetAlgorandBalanceAsync(email);
                 var totalValueEur = algoBalance * _algoEurPrice;
@@ -176,7 +176,7 @@ namespace BiatecMCP.BusinessLogic
                 // For now, we'll return a mock balance based on email hash for demonstration
                 var emailHash = email.GetHashCode();
                 var mockBalance = Math.Abs(emailHash % 100000); // Mock balance between 0-100,000 ALGO
-                
+
                 return mockBalance;
             }
             catch

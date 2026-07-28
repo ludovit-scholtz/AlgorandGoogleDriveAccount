@@ -1,4 +1,5 @@
 using BiatecMCP.Model;
+using BiatecSelfCustodyCore.Model;
 
 namespace BiatecMCP.BusinessLogic
 {
@@ -8,8 +9,8 @@ namespace BiatecMCP.BusinessLogic
         /// <summary>Registers a new pairing session so a subsequent OAuth callback can be matched back to it.</summary>
         Task<string> InitiatePairingAsync(string sessionId, string deviceName);
 
-        /// <summary>Stores the Google OAuth tokens obtained for a session after the user completes sign-in.</summary>
-        Task<DevicePairingResponse> ProcessPairingCallbackAsync(string sessionId, string email, string accessToken, string? refreshToken);
+        /// <summary>Stores the OAuth tokens obtained for a session after the user completes sign-in.</summary>
+        Task<DevicePairingResponse> ProcessPairingCallbackAsync(string sessionId, string email, string accessToken, string? refreshToken, string provider);
 
         /// <summary>Returns the current access token for a paired session, or null if not paired/expired.</summary>
         Task<string?> GetDeviceAccessTokenAsync(string sessionId);
@@ -63,16 +64,16 @@ namespace BiatecMCP.BusinessLogic
     public interface IPortfolioValuationService
     {
         /// <summary>Total portfolio value in EUR.</summary>
-        Task<decimal> GetPortfolioValueAsync(string email);
+        Task<decimal> GetPortfolioValueAsync(string email, StorageProvider provider, string accessToken);
 
         /// <summary>Service tier (Free/Professional/Enterprise) implied by the current portfolio value.</summary>
-        Task<ServiceTier> GetServiceTierAsync(string email);
+        Task<ServiceTier> GetServiceTierAsync(string email, StorageProvider provider, string accessToken);
 
         /// <summary>Full portfolio summary, including value, tier, and balances.</summary>
-        Task<PortfolioSummary> GetPortfolioSummaryAsync(string email);
+        Task<PortfolioSummary> GetPortfolioSummaryAsync(string email, StorageProvider provider, string accessToken);
 
         /// <summary>Recomputes and caches the portfolio valuation for a user.</summary>
-        Task UpdatePortfolioValuationAsync(string email);
+        Task UpdatePortfolioValuationAsync(string email, StorageProvider provider, string accessToken);
     }
 
     /// <summary>Value-based service tier, driving device limits and support SLA (no billing involved).</summary>

@@ -1,14 +1,14 @@
-# Biatec MCP Server - Algorand Self-Custody Google Drive Integration
+# Biatec MCP Server - Algorand Self-Custody Google Drive / OneDrive Integration
 
-A secure Model Context Protocol (MCP) server that enables AI assistants to interact with self-custody Algorand accounts stored encrypted in Google Drive.
+A secure Model Context Protocol (MCP) server that enables AI assistants to interact with self-custody Algorand accounts stored encrypted in Google Drive or OneDrive.
 
 ## ?? True Self-Custody Architecture
 
 **Your keys, your control:** This service provides genuine self-custody Algorand account management:
 
-- **?? Your Google Drive Storage**: Private keys are encrypted and stored exclusively in your personal Google Drive
+- **?? Your Choice of Storage**: Private keys are encrypted and stored exclusively in your personal Google Drive or OneDrive - you pick which provider when pairing your device
 - **?? Email-Specific Encryption**: Keys are cryptographically bound to your email address and cannot be used by others  
-- **?? Non-Transferable**: Encrypted keys cannot be moved between different Google Drive accounts
+- **?? Non-Transferable**: Encrypted keys cannot be moved between different Google Drive/OneDrive accounts
 - **? Secure Processing**: Biatec servers process your encrypted keys only when you authorize transaction signing
 - **??? No Custodial Risk**: We never store your unencrypted private keys on our servers
 
@@ -16,7 +16,8 @@ A secure Model Context Protocol (MCP) server that enables AI assistants to inter
 
 ## ?? Features
 
-- **Self-Custody Account Storage**: Algorand private keys encrypted and stored in your personal Google Drive with email-specific binding
+- **Self-Custody Account Storage**: Algorand private keys encrypted and stored in your personal Google Drive or OneDrive app folder with email-specific binding
+- **Choice of Identity Provider**: Sign in with Google or Microsoft Entra ID - `pair.html` shows a one-click picker for both, or skip straight to one via `?idp=google`/`?idp=microsoft`
 - **MCP Integration**: Compatible with Claude Desktop and Visual Studio Code for AI-assisted blockchain operations
 - **Secure Device Pairing**: Cross-device synchronization with OAuth while maintaining self-custody
 - **Email-Bound Security**: Enhanced security monitoring with cryptographic email binding  
@@ -24,11 +25,11 @@ A secure Model Context Protocol (MCP) server that enables AI assistants to inter
 
 ## ?? Self-Custody Security
 
-- **True Self-Custody**: Private keys encrypted and stored exclusively in your Google Drive - never on our servers
+- **True Self-Custody**: Private keys encrypted and stored exclusively in your Google Drive/OneDrive - never on our servers
 - **Email-Specific Encryption**: AES-256 encryption with keys derived from your specific email address
 - **Non-Transferable Design**: Cryptographic binding prevents keys from being used with different email addresses  
 - **Authorized Processing Only**: Encrypted keys are processed on our servers only during transaction signing that you authorize
-- **OAuth 2.0**: Secure Google authentication for device pairing and account access
+- **OAuth 2.0**: Secure Google or Microsoft Entra ID authentication for device pairing and account access (least-privilege scopes: Google `drive.file`, Microsoft `Files.ReadWrite.AppFolder` - the app can only ever see files it created itself)
 - **CORS**: Configurable cross-origin resource sharing
 - **Rate Limiting**: API call limits by service tier
 - **Audit Logging**: Comprehensive security event logging for all key processing operations
@@ -219,6 +220,13 @@ If you're setting up your own instance:
 5. Add authorized redirect URIs:
    - `https://your-domain.com/signin-google`
    - `https://your-domain.com/api/device/paired-device`
+
+### Microsoft Entra ID Setup (For Developers)
+
+To enable the "Continue with Microsoft" option (OneDrive-backed storage), see
+`BiatecOIDC/ENTRA_SETUP_GUIDE.md` for the full app-registration walkthrough, including the
+`Files.ReadWrite.AppFolder` Graph permission and the `https://your-domain.com/signin-microsoft`
+redirect URI this app needs registered.
 
 ## ?? Project Structure
 

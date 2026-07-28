@@ -23,17 +23,25 @@ namespace BiatecMCP.Model
         public string? SessionId { get; set; }
     }
 
-    /// <summary>Google OAuth tokens and metadata for a device that has completed pairing.</summary>
+    /// <summary>OAuth tokens and metadata for a device that has completed pairing.</summary>
     public class PairedDeviceInfo
     {
-        /// <summary>Current Google OAuth access token for the paired account.</summary>
+        /// <summary>Current OAuth access token (Google or Microsoft, per <see cref="Provider"/>) for the paired account.</summary>
         public string AccessToken { get; set; } = string.Empty;
 
-        /// <summary>Google OAuth refresh token, used to obtain new access tokens once this one expires.</summary>
+        /// <summary>OAuth refresh token, used to obtain new access tokens once this one expires.</summary>
         public string RefreshToken { get; set; } = string.Empty;
 
-        /// <summary>Email address of the Google account the device is paired to.</summary>
+        /// <summary>Email address of the account the device is paired to.</summary>
         public string Email { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Which cloud identity/storage backend this session is bound to ("Google" or "Microsoft" - see
+        /// <see cref="BiatecSelfCustodyCore.Model.AuthSchemeNames"/>). Empty/missing on sessions paired
+        /// before Microsoft support existed; <see cref="BiatecSelfCustodyCore.Model.StorageProviderExtensions.Parse"/>
+        /// treats that the same as "Google", preserving their original behavior with no migration needed.
+        /// </summary>
+        public string Provider { get; set; } = string.Empty;
 
         /// <summary>Human-readable name of the paired device.</summary>
         public string DeviceName { get; set; } = string.Empty;

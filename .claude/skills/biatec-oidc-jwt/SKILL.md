@@ -17,6 +17,10 @@ external integration doc — for implementation work, this file plus the source 
 - `GET /.well-known/jwks.json` — public signing keys
 - `GET /authorize` — standard `response_type=code` (exchange at `/token`), plus a legacy `returnUrl` alias that
   POSTs `id_token` directly to the return URL. Accepts PKCE `code_challenge`/`code_challenge_method` (RFC 7636).
+  Accepts `idp=google|microsoft` to skip the provider picker (the "fast track"); omitting it redirects to
+  `/select-provider` first. `/authorize/challenge` issues the actual provider `Challenge`; `/authorize/callback`
+  resumes after sign-in, verifies storage-write access via `StorageAccessVerifier` (retrying once with forced
+  consent if missing), then finalizes.
 - `POST /token` — authorization code exchange (accepts PKCE `code_verifier`) and refresh-token renewal
 - `GET /userinfo` — claims from access token
 - `POST /introspect`, `POST /verify` — token activity/verification
@@ -24,9 +28,10 @@ external integration doc — for implementation work, this file plus the source 
 
 ## Claims issued
 
-`email`, `algorand_address` (**optional** — omitted if the user denied Google Drive consent; treat as optional,
-request Drive scope only right before Drive-backed operations), `preferred_username`/`name` (first 4 + last 4
-chars of the Algorand address), plus standard `sub`, `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`.
+`email`, `algorand_address` (**optional** — omitted if the user denied Drive/OneDrive consent; treat as optional,
+request storage scope only right before storage-backed operations; resolved from Google Drive or OneDrive
+depending on the signed-in principal's `biatec_idp` claim, see `AuthSchemeNames`), `preferred_username`/`name`
+(first 4 + last 4 chars of the Algorand address), plus standard `sub`, `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`.
 
 ## Client registration (`JwtIssuer:Clients` in appsettings.json)
 

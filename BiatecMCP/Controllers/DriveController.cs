@@ -1,5 +1,5 @@
 using BiatecSelfCustodyCore.BusinessLogic;
-using Google.Apis.Auth.AspNetCore3;
+using BiatecSelfCustodyCore.Model;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
@@ -46,7 +46,8 @@ namespace BiatecMCP.Controllers
                     return BadRequest(new ProblemDetails() { Detail = "Email not found in claims. Please login first." });
                 }
 
-                var signedTransaction = await _driveService.SignTransactionAsync(email, txMsgPack);
+                var provider = StorageProviderExtensions.Parse(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
+                var signedTransaction = await _driveService.SignTransactionAsync(email, txMsgPack, provider);
                 return Ok(signedTransaction);
             }
             catch (ArgumentException exc)
@@ -101,7 +102,8 @@ namespace BiatecMCP.Controllers
                     return BadRequest(new ProblemDetails() { Detail = "Email not found in claims. Please login first." });
                 }
 
-                var address = await _driveService.GetAccountAddressAsync(email);
+                var provider = StorageProviderExtensions.Parse(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
+                var address = await _driveService.GetAccountAddressAsync(email, provider);
                 return Ok(address);
             }
             catch (ArgumentException exc)
@@ -123,14 +125,19 @@ namespace BiatecMCP.Controllers
         /// Where to send the browser after sign-in. Must be a local path (validated with
         /// <c>Url.IsLocalUrl</c>) - defaults to <c>/swagger/</c> if omitted or not local.
         /// </param>
+        /// <param name="idp">Which provider to sign in with: <c>"google"</c> (default) or <c>"microsoft"</c>.</param>
         [AllowAnonymous]
         [HttpGet("login")]
-        public IActionResult Login(string? redirectUri = null)
+        public IActionResult Login(string? redirectUri = null, string idp = "google")
         {
+            var scheme = string.Equals(idp, "microsoft", StringComparison.OrdinalIgnoreCase)
+                ? AuthSchemeNames.Microsoft
+                : AuthSchemeNames.Google;
+
             return Challenge(new AuthenticationProperties
             {
                 RedirectUri = ResolveLocalRedirectUri(redirectUri)
-            }, GoogleOpenIdConnectDefaults.AuthenticationScheme);
+            }, scheme);
         }
 
         /// <summary>

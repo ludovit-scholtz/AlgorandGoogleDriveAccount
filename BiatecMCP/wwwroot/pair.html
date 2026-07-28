@@ -198,7 +198,8 @@
         </div>
 
         <div class="button-container">
-            <button onclick="pairDevice()">Pair Device</button>
+            <button onclick="pairDevice('google')">Continue with Google</button>
+            <button onclick="pairDevice('microsoft')">Continue with Microsoft</button>
             <!--<button onclick="requestDriveAccess()" id="driveAccessBtn" disabled>Request Drive Access</button>
             <button onclick="checkPortfolio()" id="portfolioBtn" disabled>Check Portfolio</button>
             <button onclick="checkSecurityStatus()" id="securityBtn" disabled>Check Security Status</button>
@@ -215,9 +216,9 @@
             <ol>
                 <li>Enter a unique Session ID for your device</li>
                 <li>Optionally provide a device name for identification</li>
-                <li>Click "Pair Device" to start the Google OAuth flow</li>
+                <li>Click "Continue with Google" or "Continue with Microsoft" to start that provider's OAuth flow</li>
                 <li>After successful authentication, your device gains access to your self-custody Algorand account</li>
-                <li>Your encrypted private keys remain securely stored in your Google Drive</li>
+                <li>Your encrypted private keys remain securely stored in your Google Drive or OneDrive, depending on which provider you chose</li>
                 <li>Biatec servers can process your keys only for transaction signing when you authorize it</li>
                 <li>Use device pairing to access your self-custody account across multiple devices</li>
             </ol>
@@ -338,9 +339,10 @@
             document.getElementById('showInfoBtn').disabled = true;
         }
 
-        function pairDevice() {
+        function pairDevice(idp) {
             let sessionId = document.getElementById('sessionId').value.trim();
             const deviceName = document.getElementById('deviceName').value.trim() || 'MCP';
+            idp = (idp === 'microsoft') ? 'microsoft' : 'google';
 
             if (!sessionId) {
                 sessionId = generateSessionId();
@@ -349,8 +351,8 @@
             }
 
             currentSessionId = sessionId;
-            
-            const pairUrl = `/api/device/pair-device?sessionId=${encodeURIComponent(sessionId)}&deviceName=${encodeURIComponent(deviceName)}`;
+
+            const pairUrl = `/api/device/pair-device?sessionId=${encodeURIComponent(sessionId)}&deviceName=${encodeURIComponent(deviceName)}&idp=${encodeURIComponent(idp)}`;
             window.location.href = pairUrl;
         }
 
@@ -568,6 +570,9 @@
             const sessionParam = urlParams.get('session');
             const error = urlParams.get('error');
             const driveAccess = urlParams.get('drive_access');
+            // Fast track: ?idp=google|microsoft on the page URL skips the two-button picker and
+            // pairs directly with that provider once a session ID is known.
+            const idpParam = urlParams.get('idp');
             
             if (error) {
                 let errorMessage = 'An error occurred during authentication.';
@@ -586,6 +591,12 @@
                         break;
                     case 'drive_callback_error':
                         errorMessage = 'An error occurred during the Drive access callback. Please try again.';
+                        break;
+                    case 'storage_access_failed':
+                        errorMessage = 'Storage access request failed. Please try again.';
+                        break;
+                    case 'storage_callback_error':
+                        errorMessage = 'An error occurred during the storage access callback. Please try again.';
                         break;
                 }
                 showResult(errorMessage, 'error');
@@ -633,7 +644,7 @@
                 
                 // Automatically trigger the pairing process
                 setTimeout(() => {
-                    pairDevice();
+                    pairDevice(idpParam);
                 }, 100); // Small delay to show the message
             }
         };

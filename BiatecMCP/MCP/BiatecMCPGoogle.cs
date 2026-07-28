@@ -2,6 +2,7 @@
 using Algorand.Algod;
 using BiatecMCP.BusinessLogic;
 using BiatecMCP.Model;
+using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
@@ -24,7 +25,7 @@ namespace BiatecMCP.MCP
     public class BiatecMCPGoogle
     {
         private readonly IDistributedCache _cache;
-        private readonly GoogleDriveRepository _googleDriveRepository;
+        private readonly ICloudAccountRepository _cloudAccountRepository;
         private readonly IDevicePairingService _devicePairingService;
         private readonly IOptionsMonitor<BiatecSelfCustodyCore.Model.Configuration> _config;
         private readonly IOptionsMonitor<BiatecMCP.Model.AlgodConfiguration> _algodConfig;
@@ -32,7 +33,7 @@ namespace BiatecMCP.MCP
 
         public BiatecMCPGoogle(
             IDistributedCache cache,
-            GoogleDriveRepository googleDriveRepository,
+            ICloudAccountRepository cloudAccountRepository,
             IDevicePairingService devicePairingService,
             IOptionsMonitor<BiatecSelfCustodyCore.Model.Configuration> config,
             IOptionsMonitor<BiatecMCP.Model.AlgodConfiguration> algodConfig,
@@ -40,7 +41,7 @@ namespace BiatecMCP.MCP
             )
         {
             _cache = cache;
-            _googleDriveRepository = googleDriveRepository;
+            _cloudAccountRepository = cloudAccountRepository;
             _devicePairingService = devicePairingService;
             _config = config;
             _algodConfig = algodConfig;
@@ -79,19 +80,13 @@ namespace BiatecMCP.MCP
                     throw new Exception($"Initiate google access and pair your device by signing at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
                 }
 
-                var credential = GoogleCredential.FromAccessToken(deviceInfo.AccessToken);
-
-                if (credential == null)
-                {
-                    throw new Exception($"Invalid access token. Initiate google access token by signing at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
-                }
-
                 if (string.IsNullOrEmpty(deviceInfo.Email))
                 {
                     throw new Exception($"Unable to determine the email from the access token. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
                 }
 
-                var account = await _googleDriveRepository.LoadAccount(deviceInfo.Email, slot, credential);
+                var provider = StorageProviderExtensions.Parse(deviceInfo.Provider);
+                var account = await _cloudAccountRepository.LoadAccountAsync(deviceInfo.Email, slot, provider, deviceInfo.AccessToken);
                 if (account == null)
                 {
                     throw new Exception($"Unable to load the Algorand account from google store. Make sure the claim to access the google store to create files and load created files is granted to biatec app and try to login again. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
@@ -100,7 +95,7 @@ namespace BiatecMCP.MCP
             }
             catch (UnauthorizedAccessException unauthorizedEx)
             {
-                // Handle authorization exceptions from GoogleDriveRepository
+                // Handle authorization exceptions from CloudAccountRepository
                 return new GetAccountAddressResponse
                 {
                     Error = $"Google access token has expired or is invalid. Please re-authenticate at {_config.CurrentValue.Host}/pair.html?session={mcpServer.SessionId}. Details: {unauthorizedEx.Message}"
@@ -177,19 +172,13 @@ namespace BiatecMCP.MCP
                 var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
                 DefaultApi algodApiInstance = new DefaultApi(httpClient);
 
-                var credential = GoogleCredential.FromAccessToken(deviceInfo.AccessToken);
-
-                if (credential == null)
-                {
-                    throw new Exception($"Invalid access token. Initiate google access token by signing at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
-                }
-
                 if (string.IsNullOrEmpty(deviceInfo.Email))
                 {
                     throw new Exception($"Unable to determine the email from the access token. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
                 }
 
-                var account = await _googleDriveRepository.LoadAccount(deviceInfo.Email, slot, credential);
+                var provider = StorageProviderExtensions.Parse(deviceInfo.Provider);
+                var account = await _cloudAccountRepository.LoadAccountAsync(deviceInfo.Email, slot, provider, deviceInfo.AccessToken);
                 if (account == null)
                 {
                     throw new Exception($"Unable to load the Algorand account from google store. Make sure the claim to access the google store to create files and load created files is granted to biatec app and try to login again. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
@@ -208,7 +197,7 @@ namespace BiatecMCP.MCP
             }
             catch (Algorand.ApiException<Algorand.Algod.Model.ErrorResponse> ex)
             {
-                // Handle authorization exceptions from GoogleDriveRepository
+                // Handle authorization exceptions from CloudAccountRepository
                 return new TransferAssetResponse
                 {
                     Error = ex.Result.Message,
@@ -217,7 +206,7 @@ namespace BiatecMCP.MCP
             }
             catch (UnauthorizedAccessException unauthorizedEx)
             {
-                // Handle authorization exceptions from GoogleDriveRepository
+                // Handle authorization exceptions from CloudAccountRepository
                 return new TransferAssetResponse
                 {
                     Error = $"Google access token has expired or is invalid. Please re-authenticate at {_config.CurrentValue.Host}/pair.html?session={mcpServer.SessionId}. Details: {unauthorizedEx.Message}",
@@ -269,19 +258,13 @@ namespace BiatecMCP.MCP
                 var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
                 DefaultApi algodApiInstance = new DefaultApi(httpClient);
 
-                var credential = GoogleCredential.FromAccessToken(deviceInfo.AccessToken);
-
-                if (credential == null)
-                {
-                    throw new Exception($"Invalid access token. Initiate google access token by signing at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
-                }
-
                 if (string.IsNullOrEmpty(deviceInfo.Email))
                 {
                     throw new Exception($"Unable to determine the email from the access token. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
                 }
 
-                var account = await _googleDriveRepository.LoadAccount(deviceInfo.Email, slot, credential);
+                var provider = StorageProviderExtensions.Parse(deviceInfo.Provider);
+                var account = await _cloudAccountRepository.LoadAccountAsync(deviceInfo.Email, slot, provider, deviceInfo.AccessToken);
                 if (account == null)
                 {
                     throw new Exception($"Unable to load the Algorand account from google store. Make sure the claim to access the google store to create files and load created files is granted to biatec app and try to login again. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
@@ -298,7 +281,7 @@ namespace BiatecMCP.MCP
             }
             catch (Algorand.ApiException<Algorand.Algod.Model.ErrorResponse> ex)
             {
-                // Handle authorization exceptions from GoogleDriveRepository
+                // Handle authorization exceptions from CloudAccountRepository
                 return new TransferAssetResponse
                 {
                     Error = ex.Result.Message,
@@ -307,7 +290,7 @@ namespace BiatecMCP.MCP
             }
             catch (UnauthorizedAccessException unauthorizedEx)
             {
-                // Handle authorization exceptions from GoogleDriveRepository
+                // Handle authorization exceptions from CloudAccountRepository
                 return new TransferAssetResponse
                 {
                     Error = $"Google access token has expired or is invalid. Please re-authenticate at {_config.CurrentValue.Host}/pair.html?session={mcpServer.SessionId}. Details: {unauthorizedEx.Message}",

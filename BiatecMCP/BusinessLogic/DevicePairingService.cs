@@ -45,7 +45,7 @@ namespace BiatecMCP.BusinessLogic
             return tempKey;
         }
 
-        public async Task<DevicePairingResponse> ProcessPairingCallbackAsync(string sessionId, string email, string accessToken, string? refreshToken)
+        public async Task<DevicePairingResponse> ProcessPairingCallbackAsync(string sessionId, string email, string accessToken, string? refreshToken, string provider)
         {
             try
             {
@@ -105,6 +105,7 @@ namespace BiatecMCP.BusinessLogic
                     RefreshToken = refreshToken ?? string.Empty,
                     Email = email,
                     DeviceName = deviceName,
+                    Provider = provider,
                     PairedAt = DateTime.UtcNow,
                     ExpiresAt = DateTime.UtcNow.AddDays(CacheExpirationDays)
                 };

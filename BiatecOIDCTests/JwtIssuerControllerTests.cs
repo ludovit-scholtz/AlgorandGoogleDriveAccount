@@ -1,6 +1,7 @@
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Controllers;
 using BiatecOIDC.Model;
+using BiatecSelfCustodyCore.BusinessLogic;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Routing;
@@ -33,11 +34,11 @@ namespace BiatecOIDCTests
 
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                var result = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
+                var result = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
                 Assert.That(result, Is.TypeOf<ChallengeResult>());
             }
 
-            var blockedResult = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
+            var blockedResult = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
 
             Assert.That(blockedResult, Is.TypeOf<RedirectResult>());
             var redirect = (RedirectResult)blockedResult;
@@ -65,16 +66,16 @@ namespace BiatecOIDCTests
             var unauthenticatedController = CreateController(jwtIssuerService.Object, cache, authenticated: false);
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                var result = await unauthenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
+                var result = await unauthenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
                 Assert.That(result, Is.TypeOf<ChallengeResult>());
             }
 
             var authenticatedController = CreateController(jwtIssuerService.Object, cache, authenticated: true);
-            var successResult = await authenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
+            var successResult = await authenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
             Assert.That(successResult, Is.TypeOf<RedirectResult>());
 
             var nextAttemptController = CreateController(jwtIssuerService.Object, cache, authenticated: false);
-            var nextAttemptResult = await nextAttemptController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null);
+            var nextAttemptResult = await nextAttemptController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
             Assert.That(nextAttemptResult, Is.TypeOf<ChallengeResult>());
         }
 
@@ -175,7 +176,8 @@ namespace BiatecOIDCTests
 
         private static JwtIssuerController CreateController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, bool authenticated, IConfiguration? configuration = null)
         {
-            var controller = new JwtIssuerController(jwtIssuerService, cache);
+            var storageAccessVerifier = new StorageAccessVerifier(new HttpClient(), new Mock<Microsoft.Extensions.Logging.ILogger<StorageAccessVerifier>>().Object);
+            var controller = new JwtIssuerController(jwtIssuerService, cache, storageAccessVerifier);
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Scheme = "https";
             httpContext.Request.Host = new HostString("google.biatec.io");

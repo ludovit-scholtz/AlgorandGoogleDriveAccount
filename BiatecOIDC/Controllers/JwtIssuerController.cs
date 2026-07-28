@@ -1,7 +1,8 @@
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Helper;
 using BiatecOIDC.Model;
-using Google.Apis.Auth.AspNetCore3;
+using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Model;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
@@ -33,12 +34,18 @@ namespace BiatecOIDC.Controllers
 
         private readonly IJwtIssuerService _jwtIssuerService;
         private readonly IDistributedCache _cache;
+        private readonly StorageAccessVerifier _storageAccessVerifier;
 
-        public JwtIssuerController(IJwtIssuerService jwtIssuerService, IDistributedCache cache)
+        public JwtIssuerController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, StorageAccessVerifier storageAccessVerifier)
         {
             _jwtIssuerService = jwtIssuerService;
             _cache = cache;
+            _storageAccessVerifier = storageAccessVerifier;
         }
+
+        /// <summary>Resolves a caller-supplied <c>idp</c> value ("google"/"microsoft") to its auth scheme name. Defaults to Google for anything else.</summary>
+        private static string ResolveScheme(string? idp) =>
+            string.Equals(idp, "microsoft", StringComparison.OrdinalIgnoreCase) ? AuthSchemeNames.Microsoft : AuthSchemeNames.Google;
 
         /// <summary>
         /// OIDC discovery document. Includes <c>end_session_endpoint</c>; front/back-channel logout
@@ -80,7 +87,14 @@ namespace BiatecOIDC.Controllers
         /// <param name="nonce">Value round-tripped into the issued <c>id_token</c>.</param>
         /// <param name="codeChallenge">PKCE code challenge (RFC 7636); required for public clients.</param>
         /// <param name="codeChallengeMethod"><c>S256</c> (recommended) or <c>plain</c>.</param>
-        /// <returns>A redirect to Google sign-in, to the client's redirect URI with the result, or an error.</returns>
+        /// <param name="idp">
+        /// Fast track: <c>"google"</c> or <c>"microsoft"</c> skips the provider-picker page and challenges
+        /// that provider directly. Omit to show the picker.
+        /// </param>
+        /// <returns>
+        /// A redirect to the provider picker or straight to sign-in, to the client's redirect URI with the
+        /// result, or an error.
+        /// </returns>
         [AllowAnonymous]
         [HttpGet("authorize")]
         public async Task<IActionResult> Authorize(
@@ -93,7 +107,8 @@ namespace BiatecOIDC.Controllers
             [FromQuery(Name = "state")] string? state,
             [FromQuery(Name = "nonce")] string? nonce,
             [FromQuery(Name = "code_challenge")] string? codeChallenge,
-            [FromQuery(Name = "code_challenge_method")] string? codeChallengeMethod)
+            [FromQuery(Name = "code_challenge_method")] string? codeChallengeMethod,
+            [FromQuery(Name = "idp")] string? idp)
         {
             var authRequest = new OidcAuthorizeRequest
             {
@@ -131,30 +146,91 @@ namespace BiatecOIDC.Controllers
                 }
 
                 var requestId = await _jwtIssuerService.StorePendingAuthorizeRequestAsync(normalizedRequest);
-                var callbackUrl = Url.Action(nameof(AuthorizeCallback), "JwtIssuer", new { requestId }, Request.Scheme);
 
-                var properties = new AuthenticationProperties
+                if (!string.IsNullOrWhiteSpace(idp))
                 {
-                    RedirectUri = callbackUrl
-                };
+                    return AuthorizeChallenge(requestId, idp!, retried: false);
+                }
 
-                return Challenge(properties, GoogleOpenIdConnectDefaults.AuthenticationScheme);
+                return RedirectToAction(nameof(SelectProvider), new { requestId });
             }
 
             return await FinalizeAuthorizeAsync(normalizedRequest, client);
         }
 
         /// <summary>
-        /// Callback used internally after the user completes Google sign-in from <c>/authorize</c>.
-        /// Not part of the public OIDC contract - resumes the pending authorize request identified by
-        /// <paramref name="requestId"/> and finalizes it as if <c>/authorize</c> had been called while
-        /// already signed in.
+        /// Provider picker shown when <c>/authorize</c> is called with no <c>idp</c> fast-track parameter
+        /// and the caller isn't already signed in. Not part of the public OIDC contract.
         /// </summary>
         /// <param name="requestId">Opaque id of the pending authorize request stored by <c>/authorize</c>.</param>
+        [AllowAnonymous]
+        [HttpGet("select-provider")]
+        public IActionResult SelectProvider([FromQuery] string requestId)
+        {
+            var googleUrl = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = "google" }, Request.Scheme);
+            var microsoftUrl = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = "microsoft" }, Request.Scheme);
+
+            var sb = new StringBuilder();
+            sb.Append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Sign in to Biatec</title></head>");
+            sb.Append("<body style=\"font-family:sans-serif;max-width:420px;margin:4rem auto;text-align:center;\">");
+            sb.Append("<h1>Sign in to Biatec</h1>");
+            sb.Append("<p>Choose how you'd like to sign in. Your self-custody account is stored in the matching cloud storage (Google Drive or OneDrive).</p>");
+            sb.Append($"<p><a href=\"{WebUtility.HtmlEncode(googleUrl)}\" style=\"display:block;margin:1rem 0;padding:0.75rem;background:#4285F4;color:#fff;text-decoration:none;border-radius:6px;\">Continue with Google</a></p>");
+            sb.Append($"<p><a href=\"{WebUtility.HtmlEncode(microsoftUrl)}\" style=\"display:block;margin:1rem 0;padding:0.75rem;background:#0067B8;color:#fff;text-decoration:none;border-radius:6px;\">Continue with Microsoft</a></p>");
+            sb.Append("</body></html>");
+
+            return Content(sb.ToString(), "text/html; charset=utf-8", Encoding.UTF8);
+        }
+
+        /// <summary>
+        /// Challenges the chosen provider's sign-in. Reached either directly (the <c>idp</c> fast track on
+        /// <c>/authorize</c>) or via a <see cref="SelectProvider"/> button click.
+        /// </summary>
+        /// <param name="requestId">Opaque id of the pending authorize request.</param>
+        /// <param name="idp"><c>"google"</c> or <c>"microsoft"</c>.</param>
+        /// <param name="retried">
+        /// Set when re-challenging after <see cref="AuthorizeCallback"/> found storage-write access was
+        /// missing - forces a fresh consent screen requesting that scope again.
+        /// </param>
+        [AllowAnonymous]
+        [HttpGet("authorize/challenge")]
+        public IActionResult AuthorizeChallenge([FromQuery] string requestId, [FromQuery] string idp, [FromQuery] bool retried = false)
+        {
+            var scheme = ResolveScheme(idp);
+            var callbackUrl = Url.Action(nameof(AuthorizeCallback), "JwtIssuer", new { requestId, retried }, Request.Scheme);
+
+            var properties = new AuthenticationProperties
+            {
+                RedirectUri = callbackUrl
+            };
+
+            if (retried)
+            {
+                properties.Items[OpenIdConnectIncrementalAuth.ForceConsentKey] = "true";
+                properties.Items[OpenIdConnectIncrementalAuth.IncrementalScopesKey] = scheme == AuthSchemeNames.Microsoft
+                    ? "https://graph.microsoft.com/Files.ReadWrite.AppFolder"
+                    : "https://www.googleapis.com/auth/drive.file";
+            }
+
+            return Challenge(properties, scheme);
+        }
+
+        /// <summary>
+        /// Callback used internally after the user completes sign-in from <c>/authorize</c>. Not part of
+        /// the public OIDC contract - resumes the pending authorize request identified by
+        /// <paramref name="requestId"/> and finalizes it as if <c>/authorize</c> had been called while
+        /// already signed in. Before finalizing, verifies the fresh token actually has storage-write
+        /// access (the user can decline just that permission on the consent screen) and, if missing,
+        /// sends the browser through one incremental-consent round-trip via <see cref="AuthorizeChallenge"/>
+        /// so the OIDC code/token is never issued against a session that can't read/write the self-custody
+        /// account file.
+        /// </summary>
+        /// <param name="requestId">Opaque id of the pending authorize request stored by <c>/authorize</c>.</param>
+        /// <param name="retried">Internal guard - set after one incremental-consent round-trip, to avoid looping.</param>
         /// <returns>A redirect to the client's redirect URI with the result, or an error.</returns>
         [Authorize]
         [HttpGet("authorize/callback")]
-        public async Task<IActionResult> AuthorizeCallback([FromQuery] string requestId)
+        public async Task<IActionResult> AuthorizeCallback([FromQuery] string requestId, [FromQuery] bool retried = false)
         {
             if (string.IsNullOrWhiteSpace(requestId))
             {
@@ -178,6 +254,18 @@ namespace BiatecOIDC.Controllers
                     validation.Error ?? "invalid_request",
                     validation.ErrorDescription ?? "Invalid request.",
                     pending.ResponseMode);
+            }
+
+            if (!retried)
+            {
+                var providerScheme = User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value ?? AuthSchemeNames.Google;
+                var accessToken = await HttpContext.GetTokenAsync(providerScheme, "access_token");
+                if (!string.IsNullOrEmpty(accessToken) &&
+                    !await _storageAccessVerifier.HasWriteAccessAsync(accessToken, StorageProviderExtensions.Parse(providerScheme)))
+                {
+                    var retryRequestId = await _jwtIssuerService.StorePendingAuthorizeRequestAsync(validation.NormalizedRequest);
+                    return AuthorizeChallenge(retryRequestId, providerScheme, retried: true);
+                }
             }
 
             return await FinalizeAuthorizeAsync(validation.NormalizedRequest, validation.Client);

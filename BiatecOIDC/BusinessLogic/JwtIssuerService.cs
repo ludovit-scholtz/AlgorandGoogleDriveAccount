@@ -1,6 +1,7 @@
 using BiatecOIDC.Helper;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Model;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -318,7 +319,8 @@ namespace BiatecOIDC.BusinessLogic
             string? algorandAddress = null;
             try
             {
-                algorandAddress = await _driveService.GetAccountAddressAsync(email);
+                var provider = StorageProviderExtensions.Parse(user.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
+                algorandAddress = await _driveService.GetAccountAddressAsync(email, provider);
             }
             catch (Exception ex)
             {

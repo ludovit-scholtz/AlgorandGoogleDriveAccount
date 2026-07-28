@@ -1,5 +1,6 @@
 using Algorand;
 using Algorand.Algod.Model.Transactions;
+using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Logging;
 
@@ -7,18 +8,18 @@ namespace BiatecSelfCustodyCore.BusinessLogic
 {
     public class DriveService : IDriveService
     {
-        private readonly GoogleDriveRepository _googleDriveRepository;
+        private readonly ICloudAccountRepository _cloudAccountRepository;
         private readonly ILogger<DriveService> _logger;
 
         public DriveService(
-            GoogleDriveRepository googleDriveRepository,
+            ICloudAccountRepository cloudAccountRepository,
             ILogger<DriveService> logger)
         {
-            _googleDriveRepository = googleDriveRepository;
+            _cloudAccountRepository = cloudAccountRepository;
             _logger = logger;
         }
 
-        public async Task<byte[]> SignTransactionAsync(string email, byte[] txMsgPack)
+        public async Task<byte[]> SignTransactionAsync(string email, byte[] txMsgPack, StorageProvider provider, string? accessToken = null)
         {
             if (string.IsNullOrEmpty(email))
             {
@@ -40,7 +41,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
                 }
 
                 // Handle multisig transaction
-                var account = await _googleDriveRepository.LoadAccount(email, 0);
+                var account = await _cloudAccountRepository.LoadAccountAsync(email, 0, provider, accessToken);
                 var address = account.Address.EncodeAsString();
                 _logger?.LogInformation($"PasswordAccountSignMsig:{address}");
 
@@ -66,7 +67,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
                         throw new Exception("Unable to parse data as Transaction nor SignedTransaction");
                     }
 
-                    var account = await _googleDriveRepository.LoadAccount(email, 0);
+                    var account = await _cloudAccountRepository.LoadAccountAsync(email, 0, provider, accessToken);
                     var address = account.Address.EncodeAsString();
                     _logger?.LogInformation($"PasswordAccountSign:{address}");
 
@@ -81,7 +82,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             }
         }
 
-        public async Task<string> GetAccountAddressAsync(string email)
+        public async Task<string> GetAccountAddressAsync(string email, StorageProvider provider, string? accessToken = null)
         {
             if (string.IsNullOrEmpty(email))
             {
@@ -90,7 +91,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
 
             try
             {
-                var account = await _googleDriveRepository.LoadAccount(email, 0);
+                var account = await _cloudAccountRepository.LoadAccountAsync(email, 0, provider, accessToken);
                 return account.Address.EncodeAsString();
             }
             catch (Exception exc)

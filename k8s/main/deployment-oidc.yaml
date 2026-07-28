@@ -91,6 +91,12 @@ spec:
 # matches them ahead of the other Ingress's regex location regardless of object order. This is what
 # lets https://google.biatec.io/mcp/ keep working unchanged while /authorize, /token, etc. are
 # routed to this separate OIDC deployment on the same host.
+#
+# /select-provider is the Google/Microsoft picker page shown by /authorize when the caller didn't
+# pass idp=google|microsoft. /oidc/signin-google and /oidc/signin-microsoft are this app's own
+# OIDC callback paths (distinct from BiatecMCP's /signin-google and /signin-microsoft) - without
+# these two entries, those callbacks would fall through to BiatecMCP's catch-all ingress and land
+# in the wrong pod, which can't decrypt this app's correlation cookie.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -159,6 +165,27 @@ spec:
                 port:
                   number: 5443
           - path: /logout
+            pathType: Exact
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /select-provider
+            pathType: Exact
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /oidc/signin-google
+            pathType: Exact
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /oidc/signin-microsoft
             pathType: Exact
             backend:
               service:

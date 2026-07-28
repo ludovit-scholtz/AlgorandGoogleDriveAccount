@@ -1,10 +1,13 @@
 using BiatecMCP.BusinessLogic;
 using BiatecMCP.Model;
+using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Model;
 using Google.Apis.Auth.AspNetCore3;
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
 using Google.Apis.Services;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -26,18 +29,25 @@ namespace BiatecMCP.Controllers
     public class DevicePairingController : ControllerBase
     {
         private readonly IDevicePairingService _devicePairingService;
+        private readonly StorageAccessVerifier _storageAccessVerifier;
         private readonly ILogger<DevicePairingController> _logger;
         private readonly IHostEnvironment _environment;
 
         public DevicePairingController(
             IDevicePairingService devicePairingService,
+            StorageAccessVerifier storageAccessVerifier,
             ILogger<DevicePairingController> logger,
             IHostEnvironment environment)
         {
             _devicePairingService = devicePairingService;
+            _storageAccessVerifier = storageAccessVerifier;
             _logger = logger;
             _environment = environment;
         }
+
+        /// <summary>Resolves a caller-supplied <c>idp</c> value ("google"/"microsoft") to its auth scheme name. Defaults to Google for anything else.</summary>
+        private static string ResolveScheme(string? idp) =>
+            string.Equals(idp, "microsoft", StringComparison.OrdinalIgnoreCase) ? AuthSchemeNames.Microsoft : AuthSchemeNames.Google;
 
         /// <summary>
         /// Serves the device pairing app page
@@ -53,22 +63,24 @@ namespace BiatecMCP.Controllers
         }
 
         /// <summary>
-        /// Initiates the device pairing process by redirecting to Google OAuth
+        /// Initiates the device pairing process by redirecting to the chosen provider's OAuth login
         /// </summary>
         /// <param name="sessionId">Unique session ID for the device</param>
         /// <param name="deviceName">Optional device name for identification</param>
-        /// <param name="requestDriveAccess">Whether to request Google Drive access immediately</param>
-        /// <returns>Redirect to Google OAuth</returns>
+        /// <param name="requestDriveAccess">Whether to request storage (Drive/OneDrive) access immediately</param>
+        /// <param name="idp">Which provider to pair with: <c>"google"</c> (default) or <c>"microsoft"</c></param>
+        /// <returns>Redirect to the chosen provider's OAuth login</returns>
         [AllowAnonymous]
         [HttpGet("pair-device")]
-        public async Task<IActionResult> PairDevice(string sessionId, string deviceName = "Unknown Device", bool requestDriveAccess = false)
+        public async Task<IActionResult> PairDevice(string sessionId, string deviceName = "Unknown Device", bool requestDriveAccess = false, string idp = "google")
         {
             try
             {
                 await _devicePairingService.InitiatePairingAsync(sessionId, deviceName);
 
                 var redirectUri = Url.Action("PairedDevice", "DevicePairing", new { sessionId }, Request.Scheme);
-                
+                var scheme = ResolveScheme(idp);
+
                 var authProperties = new AuthenticationProperties
                 {
                     RedirectUri = redirectUri,
@@ -79,13 +91,15 @@ namespace BiatecMCP.Controllers
                     }
                 };
 
-                // Support incremental authorization for Drive access
+                // Support incremental authorization for storage access
                 if (requestDriveAccess)
                 {
-                    authProperties.Items["incremental_scopes"] = Google.Apis.Drive.v3.DriveService.Scope.DriveFile;
+                    authProperties.Items["incremental_scopes"] = scheme == AuthSchemeNames.Microsoft
+                        ? "https://graph.microsoft.com/Files.ReadWrite.AppFolder"
+                        : Google.Apis.Drive.v3.DriveService.Scope.DriveFile;
                 }
 
-                return Challenge(authProperties, GoogleOpenIdConnectDefaults.AuthenticationScheme);
+                return Challenge(authProperties, scheme);
             }
             catch (ArgumentException ex)
             {
@@ -97,14 +111,20 @@ namespace BiatecMCP.Controllers
         }
 
         /// <summary>
-        /// Callback endpoint after successful Google OAuth authentication
-        /// Stores the auth token in Redis with 1-day expiration
+        /// Callback endpoint after successful OAuth authentication (Google or Microsoft).
+        /// Stores the auth token in Redis with 1-day expiration. Before declaring success, verifies the
+        /// token actually has storage-write access (drive.file / Files.ReadWrite.AppFolder) - a user can
+        /// decline that specific permission on the consent screen even while completing sign-in - and if
+        /// it's missing, sends the browser through one incremental-consent round-trip
+        /// (<see cref="RequestStorageAccess"/>) before finishing, so an AI assistant never ends up paired
+        /// to a session that can't actually read/write the self-custody account file.
         /// </summary>
         /// <param name="sessionId">Session ID from the pairing request</param>
+        /// <param name="retried">Internal guard - set after one incremental-consent round-trip, to avoid looping.</param>
         /// <returns>Device pairing result</returns>
         [Authorize]
         [HttpGet("paired-device")]
-        public async Task<ActionResult<DevicePairingResponse>> PairedDevice(string sessionId)
+        public async Task<ActionResult<DevicePairingResponse>> PairedDevice(string sessionId, bool retried = false)
         {
             try
             {
@@ -112,13 +132,19 @@ namespace BiatecMCP.Controllers
                 var email = User.FindFirst(ClaimTypes.Email)?.Value;
                 var accessToken = await HttpContext.GetTokenAsync("access_token");
                 var refreshToken = await HttpContext.GetTokenAsync("refresh_token");
+                var provider = User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value ?? AuthSchemeNames.Google;
 
-                var result = await _devicePairingService.ProcessPairingCallbackAsync(sessionId, email!, accessToken!, refreshToken);
+                var result = await _devicePairingService.ProcessPairingCallbackAsync(sessionId, email!, accessToken!, refreshToken, provider);
 
                 if (!result.Success)
                 {
                     _logger.LogWarning($"Device pairing failed for session {sessionId}: {result.Message}");
                     return Redirect($"/pair.html?error=pairing_failed&sessionId={sessionId}");
+                }
+
+                if (!retried && !await _storageAccessVerifier.HasWriteAccessAsync(accessToken!, StorageProviderExtensions.Parse(provider)))
+                {
+                    return RequestStorageAccessRedirect(sessionId, provider, retried: true);
                 }
 
                 // Redirect to pair.html with success message
@@ -132,13 +158,14 @@ namespace BiatecMCP.Controllers
         }
 
         /// <summary>
-        /// Requests additional Google Drive permissions for an already paired device
+        /// Requests additional storage-write permissions (Drive/OneDrive) for an already paired device,
+        /// using the provider it was originally paired with.
         /// </summary>
         /// <param name="sessionId">Session ID of the paired device</param>
         /// <returns>Redirect to incremental authorization</returns>
         [AllowAnonymous]
-        [HttpGet("request-drive-access/{sessionId}")]
-        public async Task<IActionResult> RequestDriveAccess(string sessionId)
+        [HttpGet("request-storage-access/{sessionId}")]
+        public async Task<IActionResult> RequestStorageAccess(string sessionId)
         {
             try
             {
@@ -151,53 +178,64 @@ namespace BiatecMCP.Controllers
                     });
                 }
 
-                var redirectUri = Url.Action("DriveAccessCallback", "DevicePairing", new { sessionId }, Request.Scheme);
-                
-                var authProperties = new AuthenticationProperties
-                {
-                    RedirectUri = redirectUri,
-                    Items =
-                    {
-                        ["sessionId"] = sessionId,
-                        ["incremental_scopes"] = Google.Apis.Drive.v3.DriveService.Scope.DriveFile
-                    }
-                };
-
-                return Challenge(authProperties, GoogleOpenIdConnectDefaults.AuthenticationScheme);
+                return RequestStorageAccessRedirect(sessionId, deviceInfo.Provider, retried: false);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Error requesting Drive access for session {sessionId}");
+                _logger.LogError(ex, $"Error requesting storage access for session {sessionId}");
                 return StatusCode(500, new ProblemDetails
                 {
-                    Detail = "An error occurred while requesting Drive access"
+                    Detail = "An error occurred while requesting storage access"
                 });
             }
         }
 
+        private ActionResult RequestStorageAccessRedirect(string sessionId, string? provider, bool retried)
+        {
+            var scheme = ResolveScheme(provider);
+            var redirectUri = Url.Action("StorageAccessCallback", "DevicePairing", new { sessionId, retried }, Request.Scheme);
+
+            var authProperties = new AuthenticationProperties
+            {
+                RedirectUri = redirectUri,
+                Items =
+                {
+                    ["sessionId"] = sessionId,
+                    [OpenIdConnectIncrementalAuth.IncrementalScopesKey] = scheme == AuthSchemeNames.Microsoft
+                        ? "https://graph.microsoft.com/Files.ReadWrite.AppFolder"
+                        : Google.Apis.Drive.v3.DriveService.Scope.DriveFile,
+                    [OpenIdConnectIncrementalAuth.ForceConsentKey] = "true"
+                }
+            };
+
+            return Challenge(authProperties, scheme);
+        }
+
         /// <summary>
-        /// Callback endpoint after incremental Drive authorization
+        /// Callback endpoint after incremental storage-access authorization
         /// </summary>
         /// <param name="sessionId">Session ID from the authorization request</param>
+        /// <param name="retried">Whether this is already a retry, to avoid looping if consent is declined again.</param>
         /// <returns>Redirect with result</returns>
         [Authorize]
-        [HttpGet("drive-access-callback")]
-        public async Task<IActionResult> DriveAccessCallback(string sessionId)
+        [HttpGet("storage-access-callback")]
+        public async Task<IActionResult> StorageAccessCallback(string sessionId, bool retried = false)
         {
             try
             {
-                // Get updated tokens with Drive access
+                // Get updated tokens with storage access
                 var email = User.FindFirst(ClaimTypes.Email)?.Value;
                 var accessToken = await HttpContext.GetTokenAsync("access_token");
                 var refreshToken = await HttpContext.GetTokenAsync("refresh_token");
+                var provider = User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value ?? AuthSchemeNames.Google;
 
-                // Update the device info with new tokens that include Drive access
-                var result = await _devicePairingService.ProcessPairingCallbackAsync(sessionId, email!, accessToken!, refreshToken);
+                // Update the device info with new tokens that include storage access
+                var result = await _devicePairingService.ProcessPairingCallbackAsync(sessionId, email!, accessToken!, refreshToken, provider);
 
                 if (!result.Success)
                 {
-                    _logger.LogWarning($"Drive access update failed for session {sessionId}: {result.Message}");
-                    return Redirect($"/pair.html?error=drive_access_failed&sessionId={sessionId}");
+                    _logger.LogWarning($"Storage access update failed for session {sessionId}: {result.Message}");
+                    return Redirect($"/pair.html?error=storage_access_failed&sessionId={sessionId}");
                 }
 
                 // Redirect to pair.html with success message
@@ -205,8 +243,8 @@ namespace BiatecMCP.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Error during Drive access callback for session {sessionId}");
-                return Redirect($"/pair.html?error=drive_callback_error&sessionId={sessionId}");
+                _logger.LogError(ex, $"Error during storage access callback for session {sessionId}");
+                return Redirect($"/pair.html?error=storage_callback_error&sessionId={sessionId}");
             }
         }
 
@@ -542,7 +580,7 @@ namespace BiatecMCP.Controllers
                 }
 
                 var portfolioService = HttpContext.RequestServices.GetRequiredService<IPortfolioValuationService>();
-                var portfolioSummary = await portfolioService.GetPortfolioSummaryAsync(deviceInfo.Email!);
+                var portfolioSummary = await portfolioService.GetPortfolioSummaryAsync(deviceInfo.Email!, StorageProviderExtensions.Parse(deviceInfo.Provider), deviceInfo.AccessToken);
 
                 return Ok(new
                 {

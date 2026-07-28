@@ -1,6 +1,7 @@
 using BiatecMCP.MCP;
 using BiatecMCP.Model;
 using BiatecMCP.Swagger;
+using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
 using Google.Apis.Auth.AspNetCore3;
@@ -64,6 +65,10 @@ namespace BiatecMCP
             builder.Services.Configure<AlgodConfiguration>(builder.Configuration.GetSection("Algod"));
             builder.Services.Configure<McpTransferLimitsConfiguration>(builder.Configuration.GetSection("McpTransferLimits"));
 
+            var entraConfig = new MicrosoftEntraConfiguration();
+            builder.Configuration.GetSection("MicrosoftEntra").Bind(entraConfig);
+            builder.Services.Configure<MicrosoftEntraConfiguration>(builder.Configuration.GetSection("MicrosoftEntra"));
+
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
             builder.Configuration.GetSection("Cors").Bind(corsConfig);
@@ -126,7 +131,14 @@ namespace BiatecMCP
                 });
             });
 
-            builder.Services.AddSingleton<GoogleDriveRepository>();
+            // Self-custody storage backends (BiatecSelfCustodyCore) - GoogleDriveFileStore/OneDriveFileStore
+            // are dumb byte transports; ICloudAccountRepository owns the shared AES/ARC76 account logic and
+            // dispatches to whichever backend the signed-in user's biatec_idp claim/paired session names.
+            builder.Services.AddSingleton<GoogleDriveFileStore>();
+            builder.Services.AddHttpClient<OneDriveFileStore>();
+            builder.Services.AddHttpClient<StorageAccessVerifier>();
+            builder.Services.AddScoped<IMicrosoftAuthProvider, MicrosoftAuthProvider>();
+            builder.Services.AddScoped<ICloudAccountRepository, CloudAccountRepository>();
 
             // Add business logic services
             builder.Services.AddScoped<BiatecMCP.BusinessLogic.IDevicePairingService, BiatecMCP.BusinessLogic.DevicePairingService>();
@@ -185,6 +197,7 @@ namespace BiatecMCP
                             {
                                 context.ProtocolMessage.State = context.Properties.Items["sessionId"];
                             }
+                            OpenIdConnectIncrementalAuth.Apply(context);
                             return Task.CompletedTask;
                         },
                         OnTokenValidated = context =>
@@ -196,7 +209,12 @@ namespace BiatecMCP
                             if (string.Equals(emailVerifiedClaim, "false", StringComparison.OrdinalIgnoreCase))
                             {
                                 context.Fail("Google account email is not verified.");
+                                return Task.CompletedTask;
                             }
+
+                            // Record which provider signed this session in, so the storage backend
+                            // (Google Drive vs OneDrive) can be resolved from the cookie later.
+                            (context.Principal?.Identity as ClaimsIdentity)?.AddClaim(new Claim(AuthSchemeNames.IdpClaimType, AuthSchemeNames.Google));
 
                             return Task.CompletedTask;
                         },
@@ -220,6 +238,61 @@ namespace BiatecMCP
                         }
                     };
                     // Configure protocol validator to be more lenient with nonce validation for device flows
+                    options.ProtocolValidator.RequireNonce = false;
+                })
+                .AddOpenIdConnect(AuthSchemeNames.Microsoft, options =>
+                {
+                    options.Authority = $"https://login.microsoftonline.com/{entraConfig.TenantId}/v2.0";
+                    options.ClientId = entraConfig.ClientId;
+                    options.ClientSecret = entraConfig.ClientSecret;
+                    options.ResponseType = "code";
+                    options.UsePkce = true;
+                    options.SaveTokens = true;
+                    options.CallbackPath = "/signin-microsoft";
+
+                    // Basic scopes plus the OneDrive app-folder permission - see BiatecOIDC/ENTRA_SETUP_GUIDE.md
+                    options.Scope.Clear();
+                    options.Scope.Add("openid");
+                    options.Scope.Add("profile");
+                    options.Scope.Add("email");
+                    options.Scope.Add("offline_access");
+                    options.Scope.Add("https://graph.microsoft.com/Files.ReadWrite.AppFolder");
+
+                    options.ClaimActions.MapJsonKey(ClaimTypes.Email, "email");
+                    options.ClaimActions.MapJsonKey(ClaimTypes.Name, "name");
+
+                    options.Events = new Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectEvents
+                    {
+                        OnRedirectToIdentityProvider = context =>
+                        {
+                            if (context.Properties.Items.ContainsKey("sessionId"))
+                            {
+                                context.ProtocolMessage.State = context.Properties.Items["sessionId"];
+                            }
+                            OpenIdConnectIncrementalAuth.Apply(context);
+                            return Task.CompletedTask;
+                        },
+                        OnTokenValidated = context =>
+                        {
+                            (context.Principal?.Identity as ClaimsIdentity)?.AddClaim(new Claim(AuthSchemeNames.IdpClaimType, AuthSchemeNames.Microsoft));
+                            return Task.CompletedTask;
+                        },
+                        OnAuthenticationFailed = context =>
+                        {
+                            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                            logger.LogError(context.Exception, "Microsoft OpenIdConnect authentication failed: {ErrorMessage}", context.Exception?.Message);
+
+                            if (context.Exception?.Message?.Contains("nonce") == true)
+                            {
+                                logger.LogWarning("Nonce validation failed - this may be due to device pairing flow. Continuing with authentication.");
+                                context.HandleResponse();
+                                context.Response.Redirect("/pair.html?error=nonce_validation_failed");
+                                return Task.CompletedTask;
+                            }
+
+                            return Task.CompletedTask;
+                        }
+                    };
                     options.ProtocolValidator.RequireNonce = false;
                 });
 
@@ -308,7 +381,7 @@ namespace BiatecMCP
                 await context.Response.SendFileAsync(Path.Combine(app.Environment.WebRootPath, "index.html"));
             });
 
-            _ = app.Services.GetService<GoogleDriveRepository>();
+            _ = app.Services.GetService<GoogleDriveFileStore>();
             _ = app.Services.GetService<BiatecMCPGoogle>();
 
             app.Run();
