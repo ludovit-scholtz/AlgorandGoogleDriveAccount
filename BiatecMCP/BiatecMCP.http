@@ -1,0 +1,6 @@
+@BiatecMCP_HostAddress = http://localhost:5110
+
+GET {{BiatecMCP_HostAddress}}/api/drive/address
+Accept: application/json
+
+###

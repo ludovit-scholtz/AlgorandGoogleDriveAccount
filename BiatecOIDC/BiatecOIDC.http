@@ -1,0 +1,6 @@
+@BiatecOIDC_HostAddress = http://localhost:5111
+
+GET {{BiatecOIDC_HostAddress}}/.well-known/openid-configuration
+Accept: application/json
+
+###

@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="BiatecMCP/BiatecMCP.csproj" />
+  <Project Path="BiatecMCPTests/BiatecMCPTests.csproj" />
+  <Project Path="BiatecOIDC/BiatecOIDC.csproj" />
+  <Project Path="BiatecOIDCTests/BiatecOIDCTests.csproj" />
+  <Project Path="BiatecSelfCustodyCore/BiatecSelfCustodyCore.csproj" />
+</Solution>

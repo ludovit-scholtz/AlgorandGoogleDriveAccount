@@ -1,0 +1,167 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: biatec-oidc-app-deployment
+  namespace: biatec
+spec:
+  selector:
+    matchLabels:
+      app: biatec-oidc-app
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: biatec-oidc-app
+    spec:
+      containers:
+        - name: biatec-oidc-app
+          image: scholtz2/biatec-oidc:1.2026.07.24-main
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 200m
+              memory: "200Mi"
+            limits:
+              cpu: 2000m
+              memory: "1000Mi"
+          ports:
+            - containerPort: 5443
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: google-account-main-app-secret
+          env:
+            - name: ASPNETCORE_Kestrel__Certificates__Default__Path
+              value: /https/cert.pfx
+            - name: ASPNETCORE_Kestrel__Certificates__Default__Password
+              valueFrom:
+                secretKeyRef:
+                  name: csharp-cert-password
+                  key: password
+            - name: ASPNETCORE_Kestrel__Endpoints__Https__Url
+              value: https://biatec-oidc-app-deployment.biatec:5443
+          readinessProbe:
+            tcpSocket:
+              port: 5443
+            initialDelaySeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            tcpSocket:
+              port: 5443
+            initialDelaySeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 2
+            terminationGracePeriodSeconds: 1
+          volumeMounts:
+            - name: biatec-oidc-conf
+              mountPath: /app/appsettings.json
+              subPath: appsettings.json
+            - name: https-cert
+              mountPath: /https
+              readOnly: true
+      volumes:
+        - name: biatec-oidc-conf
+          configMap:
+            name: biatec-oidc-conf
+        - name: https-cert
+          secret:
+            secretName: csharp-cert
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: biatec-oidc-service
+  namespace: biatec
+spec:
+  type: ClusterIP
+  selector:
+    app: biatec-oidc-app
+  ports:
+    - name: https
+      protocol: TCP
+      appProtocol: https
+      port: 5443
+      targetPort: 5443
+
+---
+# Separate Ingress object (same host/TLS secret as biatec-mcp-ingress) claiming only the OIDC
+# provider's own paths. Deliberately has NO rewrite-target annotation - unlike the MCP ingress's
+# regex catch-all (`/(.*)` + `rewrite-target: /$1`), these are plain literal Prefix paths, so nginx
+# matches them ahead of the other Ingress's regex location regardless of object order. This is what
+# lets https://google.biatec.io/mcp/ keep working unchanged while /authorize, /token, etc. are
+# routed to this separate OIDC deployment on the same host.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: biatec-oidc-ingress
+  namespace: biatec
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  ingressClassName: "nginx"
+  tls:
+    - hosts:
+        - google.biatec.io
+      secretName: tls-google.biatec.io
+  rules:
+    - host: google.biatec.io
+      http:
+        paths:
+          - path: /.well-known
+            pathType: Prefix
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /authorize
+            pathType: Prefix
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /token
+            pathType: Exact
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /userinfo
+            pathType: Exact
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /introspect
+            pathType: Exact
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /verify
+            pathType: Exact
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /connect/endsession
+            pathType: Exact
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443
+          - path: /logout
+            pathType: Exact
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443

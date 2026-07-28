@@ -24,9 +24,12 @@ else
 fi
 
 # Step 2: Generate certificate
+# Shared by both the biatec-mcp and biatec-oidc deployments (both mount the same "csharp-cert"
+# secret for their Kestrel HTTPS listener), so the SAN covers both internal Service DNS names.
 openssl genrsa -out "${CERT_NAME}.key" 2048
-openssl req -new -key "${CERT_NAME}.key" -out "${CERT_NAME}.csr" -subj "/CN=google-account-main-app-deployment.biatec"
-openssl x509 -req -days 365 -in "${CERT_NAME}.csr" -signkey "${CERT_NAME}.key" -out "${CERT_NAME}.crt"
+openssl req -new -key "${CERT_NAME}.key" -out "${CERT_NAME}.csr" -subj "/CN=biatec-mcp-app-deployment.biatec"
+openssl x509 -req -days 365 -in "${CERT_NAME}.csr" -signkey "${CERT_NAME}.key" -out "${CERT_NAME}.crt" \
+  -extfile <(printf "subjectAltName=DNS:biatec-mcp-app-deployment.biatec,DNS:biatec-oidc-app-deployment.biatec")
 
 # Step 3: Create PFX file
 openssl pkcs12 -export \

@@ -1,5 +1,10 @@
-kubectl apply -f deployment-main.yaml -n biatec
-kubectl delete configmap google-account-main-conf -n biatec
-kubectl create configmap google-account-main-conf --from-file=conf -n biatec
-kubectl rollout restart deployment/google-account-main-app-deployment -n biatec
-kubectl rollout status deployment/google-account-main-app-deployment -n biatec
+kubectl apply -f deployment-mcp.yaml -n biatec
+kubectl apply -f deployment-oidc.yaml -n biatec
+kubectl delete configmap biatec-mcp-conf -n biatec
+kubectl create configmap biatec-mcp-conf --from-file=conf-mcp -n biatec
+kubectl delete configmap biatec-oidc-conf -n biatec
+kubectl create configmap biatec-oidc-conf --from-file=conf-oidc -n biatec
+kubectl rollout restart deployment/biatec-mcp-app-deployment -n biatec
+kubectl rollout status deployment/biatec-mcp-app-deployment -n biatec
+kubectl rollout restart deployment/biatec-oidc-app-deployment -n biatec
+kubectl rollout status deployment/biatec-oidc-app-deployment -n biatec

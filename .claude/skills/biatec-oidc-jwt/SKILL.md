@@ -5,9 +5,10 @@ description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerServ
 
 # Biatec OIDC / JWT issuer
 
-Condensed from `AlgorandGoogleDriveAccount/OIDC_INTEGRATION_GUIDE.md` and
-`AlgorandGoogleDriveAccount/BIATEC_OIDC_LOGOUT_REQUIREMENTS.md`. Read those files directly only if you need
-exact wording for an external integration doc — for implementation work, this file plus the source is enough.
+All source referenced below lives in the `BiatecOIDC/` project (a separate deployment from `BiatecMCP` — see
+[[../../../CLAUDE.md]] for the split). Condensed from `BiatecOIDC/OIDC_INTEGRATION_GUIDE.md` and
+`BiatecOIDC/BIATEC_OIDC_LOGOUT_REQUIREMENTS.md`. Read those files directly only if you need exact wording for an
+external integration doc — for implementation work, this file plus the source is enough.
 
 ## Endpoints (JwtIssuerController)
 

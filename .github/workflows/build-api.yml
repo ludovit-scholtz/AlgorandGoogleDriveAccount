@@ -8,7 +8,8 @@ permissions:
   contents: write
 
 env:
-  IMAGE: scholtz2/algorand-google-account
+  IMAGE_MCP: scholtz2/biatec-mcp
+  IMAGE_OIDC: scholtz2/biatec-oidc
   NAMESPACE: biatec
 
 jobs:
@@ -39,24 +40,33 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build and push BiatecMCP image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: AlgorandGoogleDriveAccount/Dockerfile
+          file: BiatecMCP/Dockerfile
           push: true
-          tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+          tags: ${{ env.IMAGE_MCP }}:${{ steps.version.outputs.version }}
 
-      - name: Update deployment manifest with new image tag
+      - name: Build and push BiatecOIDC image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: BiatecOIDC/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_OIDC }}:${{ steps.version.outputs.version }}
+
+      - name: Update deployment manifests with new image tags
         run: |
-          sed -i "s~${IMAGE}.*~${IMAGE}:${{ steps.version.outputs.version }}~g" k8s/main/deployment-main.yaml
+          sed -i "s~${IMAGE_MCP}.*~${IMAGE_MCP}:${{ steps.version.outputs.version }}~g" k8s/main/deployment-mcp.yaml
+          sed -i "s~${IMAGE_OIDC}.*~${IMAGE_OIDC}:${{ steps.version.outputs.version }}~g" k8s/main/deployment-oidc.yaml
 
-      - name: Commit updated manifest
+      - name: Commit updated manifests
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet -- k8s/main/deployment-main.yaml; then
-            git add k8s/main/deployment-main.yaml
+          if ! git diff --quiet -- k8s/main/deployment-mcp.yaml k8s/main/deployment-oidc.yaml; then
+            git add k8s/main/deployment-mcp.yaml k8s/main/deployment-oidc.yaml
             git commit -m "cicd deploy ${{ steps.version.outputs.version }} [skip ci]"
             for i in 1 2 3 4 5; do
               git pull --rebase origin master && git push && break
@@ -78,18 +88,24 @@ jobs:
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
 
-      - name: Apply Kubernetes manifest
-        run: kubectl apply -f k8s/main/deployment-main.yaml -n "$NAMESPACE"
-
-      - name: Update config map
+      - name: Apply Kubernetes manifests
         run: |
-          kubectl delete configmap google-account-main-conf -n "$NAMESPACE" --ignore-not-found
-          kubectl create configmap google-account-main-conf --from-file=k8s/main/conf -n "$NAMESPACE"
+          kubectl apply -f k8s/main/deployment-mcp.yaml -n "$NAMESPACE"
+          kubectl apply -f k8s/main/deployment-oidc.yaml -n "$NAMESPACE"
 
-      - name: Roll out deployment
+      - name: Update config maps
         run: |
-          kubectl rollout restart deployment/google-account-main-app-deployment -n "$NAMESPACE"
-          kubectl rollout status deployment/google-account-main-app-deployment -n "$NAMESPACE"
+          kubectl delete configmap biatec-mcp-conf -n "$NAMESPACE" --ignore-not-found
+          kubectl create configmap biatec-mcp-conf --from-file=k8s/main/conf-mcp -n "$NAMESPACE"
+          kubectl delete configmap biatec-oidc-conf -n "$NAMESPACE" --ignore-not-found
+          kubectl create configmap biatec-oidc-conf --from-file=k8s/main/conf-oidc -n "$NAMESPACE"
+
+      - name: Roll out deployments
+        run: |
+          kubectl rollout restart deployment/biatec-mcp-app-deployment -n "$NAMESPACE"
+          kubectl rollout status deployment/biatec-mcp-app-deployment -n "$NAMESPACE"
+          kubectl rollout restart deployment/biatec-oidc-app-deployment -n "$NAMESPACE"
+          kubectl rollout status deployment/biatec-oidc-app-deployment -n "$NAMESPACE"
 
       - name: Remove kubeconfig
         if: always()
