@@ -99,6 +99,12 @@ namespace BiatecOIDC
             builder.Services.AddScoped<BiatecSelfCustodyCore.BusinessLogic.IDriveService, BiatecSelfCustodyCore.BusinessLogic.DriveService>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IJwtIssuerService, BiatecOIDC.BusinessLogic.JwtIssuerService>();
 
+            // Wallet API (WalletController): signs transaction groups gated on the "sign" claim and
+            // manages the per-user spending limit gated on the "manage-limits" claim - see
+            // JwtIssuerService.CreateAccessToken for how those claims get onto the access token.
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.ISpendingLimitService, BiatecOIDC.BusinessLogic.SpendingLimitService>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IWalletService, BiatecOIDC.BusinessLogic.WalletService>();
+
             builder.Services.AddHttpContextAccessor();
 
             // Add Redis distributed cache
@@ -242,12 +248,33 @@ namespace BiatecOIDC
             });
             app.UseSwaggerUI();
 
+            // Serves wwwroot/index.html (the OIDC/wallet API documentation site, reachable at
+            // https://oidc.biatec.io/) and its assets (logo). Only reachable on oidc.biatec.io's own
+            // Ingress - the legacy google.biatec.io alias only carves out this app's OIDC-protocol paths,
+            // not "/", so BiatecMCP's site there is unaffected.
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                OnPrepareResponse = context =>
+                {
+                    if (context.File.Name.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+                    {
+                        context.Context.Response.Headers.Append("Content-Type", "text/html; charset=utf-8");
+                    }
+                }
+            });
+
             app.UseCors();
 
             app.UseAuthentication();
             app.UseAuthorization();
 
             app.MapControllers();
+
+            app.MapGet("/", async context =>
+            {
+                context.Response.ContentType = "text/html; charset=utf-8";
+                await context.Response.SendFileAsync(Path.Combine(app.Environment.WebRootPath, "index.html"));
+            });
 
             // Startup warm-up (do not remove, see CLAUDE.md "Startup warm-up" convention): force
             // controller/action discovery and endpoint/route-table compilation to happen now, during

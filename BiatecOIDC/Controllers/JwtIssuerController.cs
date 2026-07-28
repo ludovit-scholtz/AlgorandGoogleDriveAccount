@@ -325,7 +325,7 @@ namespace BiatecOIDC.Controllers
         [HttpGet("userinfo")]
         public IActionResult UserInfo()
         {
-            var token = ExtractBearerToken();
+            var token = BearerTokenHelper.ExtractBearerToken(Request);
             if (string.IsNullOrWhiteSpace(token))
             {
                 return Unauthorized();
@@ -383,7 +383,7 @@ namespace BiatecOIDC.Controllers
         {
             if (string.IsNullOrWhiteSpace(token))
             {
-                token = ExtractBearerToken();
+                token = BearerTokenHelper.ExtractBearerToken(Request);
             }
 
             if (string.IsNullOrWhiteSpace(token))
@@ -535,18 +535,6 @@ namespace BiatecOIDC.Controllers
                 error,
                 error_description = description
             });
-        }
-
-        private string? ExtractBearerToken()
-        {
-            var header = Request.Headers.Authorization.ToString();
-            const string prefix = "Bearer ";
-            if (string.IsNullOrWhiteSpace(header) || !header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return null;
-            }
-
-            return header[prefix.Length..].Trim();
         }
 
         private static bool IsAllowedPostLogoutRedirectUri(JwtIssuerClientConfiguration client, string postLogoutRedirectUri)

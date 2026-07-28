@@ -74,10 +74,25 @@ manages.
   - `Controllers/JwtIssuerController.cs` — `/authorize` (+ `idp` fast track), `/select-provider` (picker page,
     one button per provider registered in the catalog), `/authorize/challenge`, `/authorize/callback` (verifies
     storage-write access via `catalog.Resolve(idp).HasWriteAccessAsync(...)` before finalizing)
+  - `Controllers/WalletController.cs` — `/wallet/sign` (`sign` claim), `/wallet/limits` get/put (`manage-limits`
+    claim); same manual bearer-token pattern as `JwtIssuerController`'s `/userinfo` (not `[Authorize]` — see
+    `.claude/skills/biatec-oidc-jwt/SKILL.md`)
   - `BusinessLogic/JwtIssuerService.cs` (+ `IJwtIssuerService`) — depends on `BiatecSelfCustodyCore`'s
-    `IDriveService` for the `algorand_address` claim
+    `IDriveService` for the `algorand_address` claim; also stamps `biatec_idp`/`sign`/`manage-limits` claims
+    onto issued access tokens
+  - `BusinessLogic/WalletService.cs` (+ `IWalletService`) — signs a transaction group via `IDriveService`,
+    enforcing `ISpendingLimitService`'s per-user limit on every `pay`/`axfer` first
+  - `BusinessLogic/SpendingLimitService.cs` (+ `ISpendingLimitService`) — Redis-backed per-user (by email)
+    spending limit, global across all relying-party clients
   - `Helper/RedirectUriMatcher.cs` — OIDC redirect URI matching incl. wildcard support
-  - `Model/JwtIssuerModels.cs`, plus local `RedisConfiguration`/`CorsConfiguration` copies
+  - `Helper/AlgorandTransactionInspector.cs` — decodes a transaction's raw msgpack to find its real type/amount
+    (generic map peek first — a `Transaction` subclass's `type` property is a hardcoded constant, not decoded
+    off the wire)
+  - `Helper/BearerTokenHelper.cs` — shared `Authorization: Bearer` header extraction (`JwtIssuerController` +
+    `WalletController`)
+  - `Model/JwtIssuerModels.cs`, `Model/WalletModels.cs`, plus local `RedisConfiguration`/`CorsConfiguration` copies
+  - `wwwroot/index.html` — the OIDC/wallet API documentation site, served at `/` (reachable on `oidc.biatec.io`'s
+    own Ingress; not reachable via the `google.biatec.io` alias, which only carves out this app's protocol paths)
   - `OIDC_INTEGRATION_GUIDE.md`, `BIATEC_OIDC_LOGOUT_REQUIREMENTS.md`, `ENTRA_SETUP_GUIDE.md`
 - `BiatecMCPTests/` — NUnit + Moq tests for `BiatecMCP` + `BiatecSelfCustodyCore` (device pairing, Drive
   controller, AES encryption, transfer policy, `CloudStorageProviderCatalog`, `GoogleCloudStorageProvider`,
@@ -234,6 +249,21 @@ setup stage needs.
   `Microsoft.IdentityModel.Tokens` version in use. Client whitelisting and redirect URI allowlists live under
   `JwtIssuer:Clients` in `appsettings.json`; see `RedirectUriMatcher` for wildcard redirect URI matching rules and
   `OIDC_INTEGRATION_GUIDE.md` for the full integration contract.
+- **Wallet API (`sign`/`manage-limits` scopes)**: `WalletController` (`BiatecOIDC`) exposes `POST /wallet/sign`
+  (signs an Algorand transaction group via the shared `IDriveService`) and `GET`/`PUT /wallet/limits` (the
+  caller's own per-transaction spending limit, via `ISpendingLimitService`, Redis-backed, global per user —
+  not per relying-party client). Both are gated on a dedicated claim of the same name as the scope
+  (`sign`/`manage-limits`), stamped onto the access token by `JwtIssuerService.CreateAccessToken` only when
+  that scope was granted **and** the client's `AllowedScopes` allowlists it — existing clients don't get these
+  implicitly. `AlgorandTransactionInspector` (`BiatecOIDC/Helper`) decodes a raw transaction's msgpack to find
+  its real type (`Transaction` subclasses' `type` property is a hardcoded per-class constant, not something
+  decoded off the wire - the generic map must be peeked first); `TransferPolicy.ExceedsMaxAmount`
+  (`BiatecSelfCustodyCore/Helper`, shared with `BiatecMCP`'s `transferAsset` tool) does the actual limit check,
+  applied only to `pay`/`axfer` transactions, checked for every transaction in the group **before** any of them
+  are signed. The provider needed to read the self-custody file (`biatec_idp`) is now also stamped onto the
+  access token at issuance, never caller-supplied, so it can't be spoofed to point at the wrong storage backend.
+  `BiatecOIDC/wwwroot/index.html` (served at `/`, reachable on `oidc.biatec.io`'s own Ingress) is this API's
+  documentation site.
 - **Service tiers**: `PortfolioValuationService` (`BiatecMCP`) computes a user's Algorand portfolio value to
   auto-assign Free/Professional/Enterprise tiers (device limits, support SLA) — no billing, purely value-based.
 

@@ -1,6 +1,6 @@
 ---
 name: biatec-oidc-jwt
-description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) — endpoints, claims, redirect-URI/logout allowlist rules, signing-key format. Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, JwtIssuerService.cs, JwtIssuerController.cs, RedirectUriMatcher.cs, or JwtIssuer:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
+description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, AlgorandTransactionInspector) — endpoints, claims/scopes, redirect-URI/logout allowlist rules, signing-key format, spending-limit enforcement. Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, or JwtIssuer:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
 ---
 
 # Biatec OIDC / JWT issuer
@@ -32,6 +32,58 @@ external integration doc — for implementation work, this file plus the source 
 request storage scope only right before storage-backed operations; resolved from Google Drive or OneDrive
 depending on the signed-in principal's `biatec_idp` claim, see `AuthSchemeNames`), `preferred_username`/`name`
 (first 4 + last 4 chars of the Algorand address), plus standard `sub`, `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`.
+
+Access tokens (not ID tokens) additionally carry, when applicable:
+- `biatec_idp` — which provider (`Google`/`Microsoft`) the wallet is stored under, same value as the cookie
+  session's `AuthSchemeNames.IdpClaimType` claim, captured onto the `AuthorizationCodeRecord`/`RefreshTokenRecord`
+  at issuance so it survives the code exchange and refresh flows. `WalletController` uses this to resolve the
+  right `ICloudStorageProvider` for `/wallet/sign` - it is never caller-supplied, so it can't be spoofed.
+- `sign` (value `"true"`) — present only if the `sign` scope was requested **and** allowlisted for the client.
+  Required by `WalletController.SignTransactionGroup` (`POST /wallet/sign`).
+- `manage-limits` (value `"true"`) — present only if the `manage-limits` scope was requested and allowlisted.
+  Required by `WalletController.GetSpendingLimit`/`UpdateSpendingLimit` (`GET`/`PUT /wallet/limits`).
+
+These two are deliberately explicit claims, not something callers infer by re-parsing the space-separated `scope`
+claim — see `JwtIssuerService.CreateAccessToken`'s `WalletApiScopes` array. Neither is in any client's
+`AllowedScopes` by default (`{"openid","profile","email"}`) - adding wallet capability to a client is an explicit
+allowlist edit in `JwtIssuer:Clients`, never implicit.
+
+## Wallet API (WalletController, `/wallet/*`)
+
+Not part of the OIDC protocol itself - a Biatec-specific self-custody API layered on top, authenticated the same
+way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `ValidateBearerAccessToken`, **not**
+`[Authorize]`/a JWT Bearer scheme - see "Why manual token parsing" below).
+
+- `POST /wallet/sign` — requires the `sign` claim. Body: `{ "transactions": ["<base64 msgpack>", ...],
+  "accessToken": "<provider access token>" }`. Every `pay`/`axfer` transaction in the group is checked against
+  the caller's spending limit (`ISpendingLimitService.GetMaxAmountPerTransactionAsync`, keyed by email) *before*
+  any of them are signed via the shared `IDriveService.SignTransactionAsync` - a group with one over-limit
+  transaction never partially signs the rest. `accessToken` is the caller-supplied Google/Microsoft token needed
+  to read/decrypt the self-custody file (deliberately not persisted server-side - see
+  `docs/STAGE_ENVIRONMENT.md`-adjacent reasoning in `CLAUDE.md`'s self-custody model notes). Throws (mapped to
+  HTTP by `WalletController`): `SpendingLimitExceededException` → 403, `FormatException` (bad transaction) → 400,
+  `UnauthorizedAccessException` (expired/invalid provider token) → 401.
+- `GET`/`PUT /wallet/limits` — require the `manage-limits` claim. Global per user (by email), not per
+  relying-party client - any app holding a `sign`-scoped token for that user is bound by the same limit,
+  wherever it was last set. `0` means unbounded (same convention as `TransferPolicy.ExceedsMaxAmount`).
+
+`AlgorandTransactionInspector` (`BiatecOIDC/Helper/AlgorandTransactionInspector.cs`) decodes a transaction's raw
+msgpack to find its real type and amount. This needs a generic (untyped) msgpack map decode first - the
+Algorand4 SDK's `Transaction` subclasses' `type` property is a hardcoded C# constant of that subclass, **not**
+something decoded off the wire (verified empirically: decoding a payment's bytes as `AssetTransferTransaction`
+silently reports `type="axfer"`). Handles both a bare `Transaction` and a `SignedTransaction` wrapper (multisig
+co-signing - the real fields are nested one level down, under the wire key `"txn"`). Anything that isn't
+`pay`/`axfer` (app calls, asset config, key registration, ...) returns `AlgorandTransactionKind.Other` and is not
+spending-limit-checked, per the current scope of this feature.
+
+### Why manual token parsing, not `[Authorize]`
+
+Same reasoning as `/userinfo`/`/introspect`/`/verify` in `JwtIssuerController`: the default challenge scheme is
+Google OIDC (browser redirect), so a declarative `[Authorize]` would redirect an API caller instead of returning
+401/403 JSON. `WalletController` mirrors the existing pattern (`[AllowAnonymous]` + `BearerTokenHelper.ExtractBearerToken`
++ `IJwtIssuerService.ValidateBearerAccessToken`) rather than introducing a second, parallel `AddJwtBearer` scheme
+that would have to reimplement the same dynamic per-client audience validation `ValidateBearerAccessToken`
+already does.
 
 ## Client registration (`JwtIssuer:Clients` in appsettings.json)
 

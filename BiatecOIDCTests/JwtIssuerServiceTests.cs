@@ -113,7 +113,8 @@ namespace BiatecOIDCTests
             string algorandAddress = TestAlgorandAddress,
             DateTimeOffset? expiresUtc = null,
             string? codeChallenge = null,
-            string? codeChallengeMethod = null)
+            string? codeChallengeMethod = null,
+            string? provider = null)
         {
             var record = new
             {
@@ -124,6 +125,7 @@ namespace BiatecOIDCTests
                 nonce,
                 email,
                 algorandAddress,
+                provider,
                 subject = "sub-value",
                 shortIdentity = "ABCD" + algorandAddress[^4..],
                 codeChallenge,
@@ -141,7 +143,8 @@ namespace BiatecOIDCTests
             string scope = "openid profile email",
             string email = TestEmail,
             string algorandAddress = TestAlgorandAddress,
-            DateTimeOffset? expiresUtc = null)
+            DateTimeOffset? expiresUtc = null,
+            string? provider = null)
         {
             var record = new
             {
@@ -150,6 +153,7 @@ namespace BiatecOIDCTests
                 subject = "sub-value",
                 email,
                 algorandAddress,
+                provider,
                 shortIdentity = "ABCD" + algorandAddress[^4..],
                 scope,
                 createdUtc = DateTimeOffset.UtcNow,
@@ -943,6 +947,37 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task CodeFlow_StoresProviderFromUserClaimsIntoCodeRecord()
+        {
+            var request = ValidCodeRequest();
+            var client = DefaultConfig.Clients[0];
+            var claims = new[]
+            {
+                new Claim(ClaimTypes.Email, TestEmail),
+                new Claim(BiatecSelfCustodyCore.Model.AuthSchemeNames.IdpClaimType, "Microsoft")
+            };
+            var user = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
+
+            string? storedJson = null;
+            MockDatabase
+                .Setup(d => d.StringSetAsync(
+                    It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:code:")),
+                    It.IsAny<RedisValue>(),
+                    It.IsAny<TimeSpan?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<When>(),
+                    It.IsAny<CommandFlags>()))
+                .Callback<RedisKey, RedisValue, TimeSpan?, bool, When, CommandFlags>((_, value, _, _, _, _) => storedJson = value!)
+                .ReturnsAsync(true);
+
+            await Service.CreateAuthorizeResponseAsync(request, client, user);
+
+            Assert.That(storedJson, Is.Not.Null);
+            using var doc = JsonDocument.Parse(storedJson!);
+            Assert.That(doc.RootElement.GetProperty("provider").GetString(), Is.EqualTo("Microsoft"));
+        }
+
+        [Test]
         public async Task IdTokenFlow_Success_ReturnsIdToken()
         {
             var request = new OidcAuthorizeRequest
@@ -1081,6 +1116,119 @@ namespace BiatecOIDCTests
             Assert.That(result.Response!.AccessToken, Is.Not.Empty);
             Assert.That(result.Response.IdToken, Is.Not.Empty);
             Assert.That(result.Response.RefreshToken, Is.Not.Empty);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_ScopeIncludesSign_AccessTokenHasSignClaim()
+        {
+            var code = "sign-scope-code";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri, scope: "openid profile email sign");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
+            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "sign")?.Value, Is.EqualTo("true"));
+            Assert.That(jwt.Claims.Any(c => c.Type == "manage-limits"), Is.False);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_ScopeIncludesManageLimits_AccessTokenHasManageLimitsClaim()
+        {
+            var code = "manage-limits-scope-code";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri, scope: "openid profile email manage-limits");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
+            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "manage-limits")?.Value, Is.EqualTo("true"));
+            Assert.That(jwt.Claims.Any(c => c.Type == "sign"), Is.False);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_ScopeWithoutWalletScopes_AccessTokenHasNeitherClaim()
+        {
+            var code = "no-wallet-scope-code";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri, scope: "openid profile email");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
+            Assert.That(jwt.Claims.Any(c => c.Type == "sign"), Is.False);
+            Assert.That(jwt.Claims.Any(c => c.Type == "manage-limits"), Is.False);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_ProviderOnCodeRecord_AccessTokenHasIdpClaim()
+        {
+            var code = "provider-code";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri, provider: "Microsoft");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
+            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "biatec_idp")?.Value, Is.EqualTo("Microsoft"));
+        }
+
+        [Test]
+        public async Task RefreshTokenGrant_ScopeIncludesSign_NewAccessTokenHasSignClaim()
+        {
+            var refreshToken = "refresh-with-sign-scope";
+            var refreshJson = BuildRefreshTokenRecordJson(refreshToken, TestClientId, scope: "openid profile email sign", provider: "Google");
+            SetupCacheGet("oidc:refresh:" + refreshToken, refreshJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "refresh_token",
+                RefreshToken = refreshToken,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
+            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "sign")?.Value, Is.EqualTo("true"));
+            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "biatec_idp")?.Value, Is.EqualTo("Google"));
         }
 
         [Test]

@@ -1,4 +1,4 @@
-using BiatecMCP.Helper;
+using BiatecSelfCustodyCore.Helper;
 
 namespace BiatecMCPTests
 {

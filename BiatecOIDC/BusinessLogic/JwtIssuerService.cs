@@ -86,8 +86,11 @@ namespace BiatecOIDC.BusinessLogic
                 id_token_signing_alg_values_supported = new[] { "RS256" },
                 token_endpoint_auth_methods_supported = new[] { "client_secret_post", "client_secret_basic", "none" },
                 code_challenge_methods_supported = new[] { "S256", "plain" },
-                scopes_supported = new[] { "openid", "profile", "email" },
-                claims_supported = new[] { "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "email", "name", "preferred_username", "algorand_address" }
+                // "sign" and "manage-limits" are wallet-API authorization scopes (see BiatecOIDC's
+                // WalletController) - granting them stamps a matching claim of the same name onto the
+                // issued access token; see JwtIssuerService.CreateAccessToken.
+                scopes_supported = new[] { "openid", "profile", "email", "sign", "manage-limits" },
+                claims_supported = new[] { "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "email", "name", "preferred_username", "algorand_address", "biatec_idp", "sign", "manage-limits" }
             };
         }
 
@@ -314,10 +317,11 @@ namespace BiatecOIDC.BusinessLogic
                 return (false, "access_denied", "Authenticated user does not have an email claim.", null);
             }
 
+            var provider = user.FindFirst(AuthSchemeNames.IdpClaimType)?.Value;
+
             string? algorandAddress = null;
             try
             {
-                var provider = user.FindFirst(AuthSchemeNames.IdpClaimType)?.Value;
                 algorandAddress = await _driveService.GetAccountAddressAsync(email, provider ?? string.Empty);
             }
             catch (Exception ex)
@@ -351,6 +355,7 @@ namespace BiatecOIDC.BusinessLogic
                 Nonce = request.Nonce,
                 Email = email,
                 AlgorandAddress = algorandAddress,
+                Provider = provider,
                 Subject = subject,
                 ShortIdentity = shortIdentity,
                 CodeChallenge = request.CodeChallenge,
@@ -428,6 +433,7 @@ namespace BiatecOIDC.BusinessLogic
                     codeRecord.Subject,
                     codeRecord.Email,
                     codeRecord.AlgorandAddress,
+                    codeRecord.Provider,
                     codeRecord.ShortIdentity,
                     codeRecord.Nonce,
                     codeRecord.Scope,
@@ -471,6 +477,7 @@ namespace BiatecOIDC.BusinessLogic
                     refreshRecord.Subject,
                     refreshRecord.Email,
                     refreshRecord.AlgorandAddress,
+                    refreshRecord.Provider,
                     refreshRecord.ShortIdentity,
                     nonce: null,
                     refreshRecord.Scope,
@@ -583,12 +590,13 @@ namespace BiatecOIDC.BusinessLogic
             string subject,
             string email,
             string? algorandAddress,
+            string? provider,
             string shortIdentity,
             string? nonce,
             string scope,
             bool includeRefreshToken)
         {
-            var accessToken = CreateAccessToken(subject, clientId, email, algorandAddress, shortIdentity, scope);
+            var accessToken = CreateAccessToken(subject, clientId, email, algorandAddress, provider, shortIdentity, scope);
             var idToken = CreateIdToken(subject, clientId, email, algorandAddress, shortIdentity, nonce);
 
             string? refreshToken = null;
@@ -602,6 +610,7 @@ namespace BiatecOIDC.BusinessLogic
                     Subject = subject,
                     Email = email,
                     AlgorandAddress = algorandAddress,
+                    Provider = provider,
                     ShortIdentity = shortIdentity,
                     Scope = scope,
                     CreatedUtc = DateTimeOffset.UtcNow,
@@ -659,7 +668,16 @@ namespace BiatecOIDC.BusinessLogic
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
-        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string shortIdentity, string scope)
+        /// <summary>
+        /// OIDC scopes that, when granted, stamp a matching claim of the same name (value <c>"true"</c>)
+        /// onto the issued access token - checked by <see cref="BiatecOIDC.Controllers.WalletController"/>
+        /// to authorize <c>/wallet/sign</c> (requires <c>sign</c>) and the spending-limit endpoints
+        /// (requires <c>manage-limits</c>). Deliberately explicit claims rather than re-parsing the
+        /// <c>scope</c> claim's space-separated string at authorization time.
+        /// </summary>
+        private static readonly string[] WalletApiScopes = { "sign", "manage-limits" };
+
+        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string? provider, string shortIdentity, string scope)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.AccessTokenLifetimeMinutes);
@@ -677,6 +695,20 @@ namespace BiatecOIDC.BusinessLogic
             if (!string.IsNullOrWhiteSpace(algorandAddress))
             {
                 claims.Add(new Claim("algorand_address", algorandAddress));
+            }
+
+            if (!string.IsNullOrWhiteSpace(provider))
+            {
+                claims.Add(new Claim(AuthSchemeNames.IdpClaimType, provider));
+            }
+
+            var grantedScopes = scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var walletScope in WalletApiScopes)
+            {
+                if (grantedScopes.Contains(walletScope, StringComparer.Ordinal))
+                {
+                    claims.Add(new Claim(walletScope, "true"));
+                }
             }
 
             var token = new JwtSecurityToken(
@@ -912,6 +944,7 @@ namespace BiatecOIDC.BusinessLogic
             public string? Nonce { get; set; }
             public string Email { get; set; } = string.Empty;
             public string? AlgorandAddress { get; set; }
+            public string? Provider { get; set; }
             public string Subject { get; set; } = string.Empty;
             public string ShortIdentity { get; set; } = string.Empty;
             public string? CodeChallenge { get; set; }
@@ -927,6 +960,7 @@ namespace BiatecOIDC.BusinessLogic
             public string Subject { get; set; } = string.Empty;
             public string Email { get; set; } = string.Empty;
             public string? AlgorandAddress { get; set; }
+            public string? Provider { get; set; }
             public string ShortIdentity { get; set; } = string.Empty;
             public string Scope { get; set; } = "openid profile email";
             public DateTimeOffset CreatedUtc { get; set; }

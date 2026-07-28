@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Biatec OIDC — the OpenID Connect identity provider and self-custody Algorand wallet API. Sign in with Google or Microsoft, issue Algorand-identity JWTs, and sign transaction groups under a spending limit you control.">
+    <title>Biatec OIDC — Self-Custody Algorand Identity &amp; Wallet API</title>
+    <link rel="icon" href="/logo-biatec.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-0: #05060d;
+            --bg-1: #0a0d1a;
+            --bg-2: #10142a;
+            --panel: rgba(18, 22, 42, 0.6);
+            --panel-border: rgba(140, 160, 255, 0.14);
+            --panel-border-hover: rgba(140, 200, 255, 0.35);
+            --text-0: #eef1fb;
+            --text-1: #aab1cf;
+            --text-2: #6d759a;
+            --accent-cyan: #4de3ff;
+            --accent-violet: #9b7bff;
+            --accent-green: #35e6a4;
+            --accent-pink: #ff6bd6;
+            --accent-amber: #ffb84d;
+            --font-display: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+            --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: var(--font-display);
+            color: var(--text-0);
+            background: var(--bg-0);
+            min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* ---------- Ambient futuristic backdrop ---------- */
+        .aurora {
+            position: fixed;
+            inset: 0;
+            z-index: -2;
+            background:
+                radial-gradient(60vw 60vw at 12% 8%, rgba(77, 227, 255, 0.16), transparent 60%),
+                radial-gradient(55vw 55vw at 88% 18%, rgba(155, 123, 255, 0.18), transparent 60%),
+                radial-gradient(70vw 70vw at 50% 100%, rgba(53, 230, 164, 0.10), transparent 60%),
+                linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 45%, var(--bg-2) 100%);
+            animation: driftAurora 24s ease-in-out infinite alternate;
+        }
+
+        @keyframes driftAurora {
+            0%   { filter: hue-rotate(0deg) brightness(1); }
+            100% { filter: hue-rotate(18deg) brightness(1.08); }
+        }
+
+        .grid-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            background-image:
+                linear-gradient(rgba(140, 160, 255, 0.055) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(140, 160, 255, 0.055) 1px, transparent 1px);
+            background-size: 44px 44px;
+            mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 30%, transparent 90%);
+        }
+
+        ::selection { background: var(--accent-violet); color: #05060d; }
+
+        a { color: inherit; }
+
+        .glow-text {
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet) 55%, var(--accent-pink));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        /* ---------- Nav ---------- */
+        .navbar {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+            background: rgba(6, 8, 18, 0.55);
+            backdrop-filter: blur(18px) saturate(140%);
+            -webkit-backdrop-filter: blur(18px) saturate(140%);
+            border-bottom: 1px solid var(--panel-border);
+        }
+
+        .nav-container {
+            max-width: 1240px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.9rem 2rem;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+
+        .logo img { height: 26px; width: auto; display: block; }
+
+        .nav-links {
+            display: flex;
+            list-style: none;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .nav-links a {
+            text-decoration: none;
+            color: var(--text-1);
+            font-weight: 500;
+            font-size: 0.92rem;
+            transition: color 0.25s ease;
+            position: relative;
+        }
+
+        .nav-links a:hover { color: var(--text-0); }
+
+        .nav-cta {
+            padding: 0.55rem 1.15rem;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
+            color: #05060d !important;
+            font-weight: 600;
+            transition: transform 0.25s ease, box-shadow 0.25s ease;
+        }
+
+        .nav-cta:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 28px rgba(77, 227, 255, 0.35);
+        }
+
+        .nav-toggle { display: none; }
+
+        /* ---------- Layout ---------- */
+        .container {
+            max-width: 1240px;
+            margin: 0 auto;
+            padding: 9rem 2rem 4rem;
+        }
+
+        /* ---------- Hero ---------- */
+        .hero {
+            text-align: center;
+            margin-bottom: 5rem;
+            position: relative;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 1rem;
+            border-radius: 999px;
+            border: 1px solid var(--panel-border);
+            background: var(--panel);
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--accent-cyan);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin-bottom: 1.75rem;
+        }
+
+        .eyebrow .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            box-shadow: 0 0 10px var(--accent-green);
+            animation: pulseDot 1.8s ease-in-out infinite;
+        }
+
+        @keyframes pulseDot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.75); }
+        }
+
+        .hero h1 {
+            font-size: clamp(2.4rem, 5.4vw, 4.2rem);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.08;
+            margin-bottom: 1.4rem;
+        }
+
+        .hero p.subtitle {
+            font-size: clamp(1.02rem, 1.6vw, 1.25rem);
+            color: var(--text-1);
+            max-width: 720px;
+            margin: 0 auto 2.5rem;
+        }
+
+        .hero-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .cta-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
+            color: #05060d;
+            padding: 0.95rem 1.9rem;
+            text-decoration: none;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 0.98rem;
+            transition: transform 0.25s ease, box-shadow 0.25s ease;
+        }
+
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 36px rgba(77, 227, 255, 0.32);
+        }
+
+        .cta-button.secondary {
+            background: var(--panel);
+            color: var(--text-0);
+            border: 1px solid var(--panel-border);
+        }
+
+        .cta-button.secondary:hover {
+            border-color: var(--panel-border-hover);
+            box-shadow: 0 10px 30px rgba(140, 160, 255, 0.14);
+        }
+
+        /* ---------- Stat strip ---------- */
+        .stat-strip {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            max-width: 880px;
+            margin: 3rem auto 0;
+        }
+
+        .stat-strip .stat {
+            padding: 1.1rem 0.5rem;
+            border-radius: 14px;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            text-align: center;
+        }
+
+        .stat .num {
+            font-family: var(--font-mono);
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: var(--text-0);
+        }
+
+        .stat .label {
+            font-size: 0.78rem;
+            color: var(--text-2);
+            margin-top: 0.25rem;
+        }
+
+        /* ---------- Section heading ---------- */
+        .section-head {
+            text-align: center;
+            max-width: 680px;
+            margin: 0 auto 3rem;
+        }
+
+        .section-head .kicker {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--accent-violet);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 0.6rem;
+        }
+
+        .section-head h2 {
+            font-size: clamp(1.7rem, 3vw, 2.3rem);
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            margin-bottom: 0.75rem;
+        }
+
+        .section-head p { color: var(--text-1); }
+
+        section { margin: 6rem 0; scroll-margin-top: 6rem; }
+
+        /* ---------- Feature / endpoint / scope cards ---------- */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .feature-card {
+            position: relative;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            padding: 1.75rem;
+            border-radius: 18px;
+            backdrop-filter: blur(10px);
+            transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+            overflow: hidden;
+        }
+
+        .feature-card::before {
+            content: "";
+            position: absolute;
+            inset: -1px;
+            border-radius: 18px;
+            padding: 1px;
+            background: linear-gradient(135deg, rgba(77,227,255,0.4), rgba(155,123,255,0) 40%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            pointer-events: none;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--panel-border-hover);
+            box-shadow: 0 20px 50px rgba(8, 10, 24, 0.5);
+        }
+
+        .feature-card:hover::before { opacity: 1; }
+
+        .feature-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            background: linear-gradient(135deg, rgba(77,227,255,0.18), rgba(155,123,255,0.18));
+            border: 1px solid var(--panel-border);
+            margin-bottom: 1rem;
+        }
+
+        .feature-card h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 0.55rem;
+            color: var(--text-0);
+        }
+
+        .feature-card p { color: var(--text-1); font-size: 0.92rem; }
+
+        .method-row {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin-bottom: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .method-badge {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            padding: 0.22rem 0.55rem;
+            border-radius: 6px;
+            flex-shrink: 0;
+        }
+
+        .method-badge.get { background: rgba(77, 227, 255, 0.16); color: var(--accent-cyan); border: 1px solid rgba(77, 227, 255, 0.35); }
+        .method-badge.post { background: rgba(53, 230, 164, 0.16); color: var(--accent-green); border: 1px solid rgba(53, 230, 164, 0.35); }
+        .method-badge.put { background: rgba(255, 184, 77, 0.16); color: var(--accent-amber); border: 1px solid rgba(255, 184, 77, 0.35); }
+
+        .method-path {
+            font-family: var(--font-mono);
+            font-size: 0.88rem;
+            color: var(--text-0);
+            word-break: break-all;
+        }
+
+        .scope-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 999px;
+            background: rgba(155, 123, 255, 0.14);
+            border: 1px solid rgba(155, 123, 255, 0.35);
+            color: var(--accent-violet);
+            margin-bottom: 0.9rem;
+        }
+
+        .scope-badge.wallet {
+            background: rgba(255, 107, 214, 0.14);
+            border-color: rgba(255, 107, 214, 0.35);
+            color: var(--accent-pink);
+        }
+
+        .claim-arrow {
+            font-family: var(--font-mono);
+            font-size: 0.82rem;
+            color: var(--text-2);
+        }
+
+        /* ---------- Tabbed reference / setup ---------- */
+        .setup-section {
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            padding: 2.5rem;
+            border-radius: 22px;
+            backdrop-filter: blur(10px);
+        }
+
+        .setup-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--panel-border);
+            flex-wrap: wrap;
+        }
+
+        .tab-button {
+            background: none;
+            border: none;
+            padding: 0.85rem 1.4rem;
+            cursor: pointer;
+            font-family: var(--font-display);
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-2);
+            border-bottom: 2px solid transparent;
+            transition: color 0.25s ease, border-color 0.25s ease;
+        }
+
+        .tab-button.active,
+        .tab-button:hover { color: var(--accent-cyan); }
+
+        .tab-button.active { border-bottom-color: var(--accent-cyan); }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; animation: fadeIn 0.35s ease; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .step {
+            margin: 1.25rem 0;
+            padding: 1.25rem 1.4rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+        }
+
+        .step h4 {
+            color: var(--text-0);
+            font-size: 0.98rem;
+            margin-bottom: 0.4rem;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .step h4 .step-num {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet));
+            color: #05060d;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .step p { color: var(--text-1); font-size: 0.92rem; }
+        .step code {
+            font-family: var(--font-mono);
+            background: rgba(255,255,255,0.06);
+            padding: 0.1rem 0.4rem;
+            border-radius: 5px;
+            font-size: 0.85em;
+            color: var(--accent-cyan);
+        }
+
+        /* ---------- Copyable code blocks ---------- */
+        .code-block {
+            position: relative;
+            background: #060811;
+            border: 1px solid var(--panel-border);
+            border-left: 3px solid var(--accent-cyan);
+            border-radius: 12px;
+            margin: 1rem 0;
+        }
+
+        .code-block pre {
+            margin: 0;
+            padding: 1.1rem 3.6rem 1.1rem 1.2rem;
+            overflow-x: auto;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.55;
+            color: #d7ddff;
+            white-space: pre;
+        }
+
+        .code-block .copy-btn {
+            position: absolute;
+            top: 0.65rem;
+            right: 0.65rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--panel-border);
+            color: var(--text-1);
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            padding: 0.4rem 0.7rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .code-block .copy-btn:hover {
+            color: var(--text-0);
+            border-color: var(--panel-border-hover);
+            background: rgba(255,255,255,0.1);
+        }
+
+        .code-block .copy-btn.copied {
+            color: #05060d;
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+        }
+
+        .code-block .copy-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+
+        /* ---------- Reference table ---------- */
+        .ref-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .ref-table th, .ref-table td {
+            text-align: left;
+            padding: 0.9rem 1.2rem;
+            font-size: 0.88rem;
+            border-bottom: 1px solid var(--panel-border);
+        }
+
+        .ref-table th {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-2);
+            background: rgba(255,255,255,0.02);
+        }
+
+        .ref-table td { color: var(--text-1); }
+        .ref-table td code, .ref-table td .mono { font-family: var(--font-mono); color: var(--accent-cyan); font-size: 0.85em; }
+        .ref-table tr:last-child td { border-bottom: none; }
+
+        .table-wrap { overflow-x: auto; border-radius: 16px; }
+
+        /* ---------- Callout ---------- */
+        .callout {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-start;
+            background: linear-gradient(180deg, rgba(255, 184, 77, 0.08), var(--panel) 70%);
+            border: 1px solid rgba(255, 184, 77, 0.3);
+            border-radius: 16px;
+            padding: 1.25rem 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .callout .callout-icon { font-size: 1.3rem; flex-shrink: 0; }
+        .callout p { color: var(--text-1); font-size: 0.9rem; margin: 0; }
+        .callout strong { color: var(--text-0); }
+
+        /* ---------- Footer ---------- */
+        .footer {
+            border-top: 1px solid var(--panel-border);
+            padding: 2.5rem 0 3rem;
+            text-align: center;
+            color: var(--text-2);
+        }
+
+        .footer-links { margin-bottom: 1rem; }
+
+        .footer-links a {
+            color: var(--text-1);
+            text-decoration: none;
+            margin: 0 1rem;
+            font-size: 0.9rem;
+            transition: color 0.25s ease;
+        }
+
+        .footer-links a:hover { color: var(--accent-cyan); }
+
+        .footer p { font-size: 0.82rem; }
+
+        @media (max-width: 768px) {
+            .nav-links {
+                display: none;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                flex-direction: column;
+                background: rgba(6, 8, 18, 0.97);
+                padding: 1.25rem 2rem;
+                border-bottom: 1px solid var(--panel-border);
+                gap: 1.1rem;
+            }
+
+            .nav-links.open { display: flex; }
+
+            .nav-toggle {
+                display: inline-flex;
+                background: none;
+                border: 1px solid var(--panel-border);
+                color: var(--text-0);
+                border-radius: 8px;
+                padding: 0.4rem 0.6rem;
+                cursor: pointer;
+            }
+
+            .container { padding: 7.5rem 1.25rem 3rem; }
+            .setup-section { padding: 1.5rem; }
+            section { margin: 4rem 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="aurora"></div>
+    <div class="grid-overlay"></div>
+
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="logo">
+                <img src="/logo-biatec.png" alt="Biatec logo">
+                <span>Biatec OIDC</span>
+            </div>
+            <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">☰</button>
+            <ul class="nav-links" id="navLinks">
+                <li><a href="#endpoints">Endpoints</a></li>
+                <li><a href="#scopes">Scopes &amp; Claims</a></li>
+                <li><a href="#wallet-api">Wallet API</a></li>
+                <li><a href="#clients">Client Registration</a></li>
+                <li><a href="/.well-known/openid-configuration" class="nav-cta">Discovery Document</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section class="hero">
+            <div class="eyebrow"><span class="dot"></span> OpenID Connect · Live on oidc.biatec.io</div>
+            <h1>Identity and a self-custody wallet,<br><span class="glow-text">behind one OIDC token.</span></h1>
+            <p class="subtitle">Biatec OIDC lets your app delegate sign-in to Google or Microsoft and receive a standard OpenID Connect token carrying an Algorand identity — then, with the right scope, use that same token to sign transaction groups against a spending limit the wallet owner controls. Keys stay in the owner's own Google Drive or OneDrive, never on our servers.</p>
+            <div class="hero-actions">
+                <a href="#endpoints" class="cta-button">Explore the API →</a>
+                <a href="#wallet-api" class="cta-button secondary">Wallet API reference</a>
+            </div>
+            <div class="stat-strip">
+                <div class="stat"><div class="num">RS256</div><div class="label">Token signing</div></div>
+                <div class="stat"><div class="num">5</div><div class="label">Scopes, incl. wallet API</div></div>
+                <div class="stat"><div class="num">2</div><div class="label">Identity providers: Google &amp; Microsoft</div></div>
+                <div class="stat"><div class="num">100%</div><div class="label">Self-custody, always</div></div>
+            </div>
+        </section>
+
+        <section id="endpoints">
+            <div class="section-head">
+                <div class="kicker">Protocol reference</div>
+                <h2>Standard OIDC, plus a wallet API</h2>
+                <p>Everything below is anchored at <code style="font-family:var(--font-mono);color:var(--accent-cyan);">https://oidc.biatec.io</code>. Discovery advertises the exact same set.</p>
+            </div>
+            <div class="features">
+                <div class="feature-card">
+                    <div class="method-row"><span class="method-badge get">GET</span><span class="method-path">/.well-known/openid-configuration</span></div>
+                    <h3>Discovery document</h3>
+                    <p>Standard OIDC discovery metadata — issuer, endpoints, supported scopes/claims, and <code>jwks_uri</code>. Start integration here.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="method-row"><span class="method-badge get">GET</span><span class="method-path">/.well-known/jwks.json</span></div>
+                    <h3>JSON Web Key Set</h3>
+                    <p>The RS256 public key(s) used to verify tokens issued by this provider. Rotate your cached copy on <code>kid</code> change.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="method-row"><span class="method-badge get">GET</span><span class="method-path">/authorize</span></div>
+                    <h3>Authorization endpoint</h3>
+                    <p>Standard <code>response_type=code</code> flow with optional PKCE, plus a legacy direct <code>id_token</code> flow. Shows the Google/Microsoft picker unless <code>idp=</code> is set.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="method-row"><span class="method-badge post">POST</span><span class="method-path">/token</span></div>
+                    <h3>Token endpoint</h3>
+                    <p><code>grant_type=authorization_code</code> (with PKCE <code>code_verifier</code>) or <code>refresh_token</code>. Confidential clients authenticate with a client secret; public clients rely on PKCE.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="method-row"><span class="method-badge get">GET</span><span class="method-path">/userinfo</span></div>
+                    <h3>UserInfo</h3>
+                    <p>Claims for the caller's own access token, sent as <code>Authorization: Bearer</code>. Returns <code>algorand_address</code> when the user granted storage access.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="method-row"><span class="method-badge post">POST</span><span class="method-path">/introspect</span> <span class="method-path" style="color:var(--text-2)">· /verify</span></div>
+                    <h3>Introspection &amp; verification</h3>
+                    <p>RFC 7662-style token introspection. <code>/verify</code> returns the identical shape and also accepts the token via the Authorization header.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="method-row"><span class="method-badge get">GET</span><span class="method-path">/connect/endsession</span></div>
+                    <h3>RP-Initiated Logout</h3>
+                    <p>Clears the provider session cookie and redirects to an allowlisted <code>post_logout_redirect_uri</code>. Also reachable as <code>/logout</code>.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="scopes">
+            <div class="section-head">
+                <div class="kicker">Authorization model</div>
+                <h2>Scopes, and the claims they grant</h2>
+                <p>Request only what you need. <code style="font-family:var(--font-mono);color:var(--accent-pink);">sign</code> and <code style="font-family:var(--font-mono);color:var(--accent-pink);">manage-limits</code> are wallet-API scopes — they must be explicitly allowlisted for your client, they are never granted implicitly.</p>
+            </div>
+            <div class="features">
+                <div class="feature-card">
+                    <span class="scope-badge">openid</span>
+                    <h3>Required for every flow</h3>
+                    <p>Establishes the OIDC flow itself. Grants <span class="claim-arrow">→</span> <code>sub</code>, <code>iss</code>, <code>aud</code>, <code>exp</code>, <code>iat</code>, <code>nonce</code>.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="scope-badge">profile</span>
+                    <h3>Display identity</h3>
+                    <p>Grants <span class="claim-arrow">→</span> <code>name</code>, <code>preferred_username</code> — a short form derived from the Algorand address when one exists.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="scope-badge">email</span>
+                    <h3>Verified email</h3>
+                    <p>Grants <span class="claim-arrow">→</span> <code>email</code>, and (when Drive/OneDrive access was granted) <code>algorand_address</code> and <code>biatec_idp</code> (which provider backs the wallet).</p>
+                </div>
+                <div class="feature-card">
+                    <span class="scope-badge wallet">sign</span>
+                    <h3>Sign transactions</h3>
+                    <p>Grants <span class="claim-arrow">→</span> a <code>sign: true</code> claim on the access token. Required to call <code>POST /wallet/sign</code> — see the Wallet API section below.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="scope-badge wallet">manage-limits</span>
+                    <h3>Manage spending limits</h3>
+                    <p>Grants <span class="claim-arrow">→</span> a <code>manage-limits: true</code> claim on the access token. Required to read or update the wallet owner's own spending limit.</p>
+                </div>
+            </div>
+            <div class="callout">
+                <span class="callout-icon">🛡️</span>
+                <p><strong>Claims are explicit, not inferred.</strong> The wallet API never re-parses the space-separated <code>scope</code> claim at request time — each granted wallet scope stamps its own dedicated claim onto the access token when it's issued, and every wallet endpoint checks that exact claim before doing anything.</p>
+            </div>
+        </section>
+
+        <section id="wallet-api" class="setup-section">
+            <div class="section-head" style="margin-bottom:2rem;">
+                <div class="kicker">Self-custody wallet API</div>
+                <h2>Sign transactions, under a limit the owner sets</h2>
+                <p>Every call below requires <code>Authorization: Bearer &lt;access_token&gt;</code> from <code>/token</code>, with the matching scope granted at <code>/authorize</code>.</p>
+            </div>
+            <div class="setup-tabs">
+                <button class="tab-button active" onclick="showTab('wallet-sign')">Sign transaction group</button>
+                <button class="tab-button" onclick="showTab('wallet-get-limit')">Get spending limit</button>
+                <button class="tab-button" onclick="showTab('wallet-set-limit')">Update spending limit</button>
+            </div>
+
+            <div id="wallet-sign" class="tab-content active">
+                <div class="step">
+                    <h4><span class="step-num">1</span>Requires the <code>sign</code> scope</h4>
+                    <p>The presented access token must carry the <code>sign</code> claim, or the request is rejected with <code>403 insufficient_scope</code>.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">2</span>Build the transaction group</h4>
+                    <p>Assemble your Algorand transaction(s) client-side as usual (assign a group id across them if it's more than one), then base64-encode each transaction's msgpack bytes.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">3</span>Call the endpoint</h4>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>curl -X POST https://oidc.biatec.io/wallet/sign \
+  -H "Authorization: Bearer &lt;access_token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transactions": ["<base64-msgpack-txn-1>", "<base64-msgpack-txn-2>"],
+    "accessToken": "<google-or-microsoft-access-token>"
+  }'</pre>
+                    </div>
+                    <p><code>accessToken</code> is the wallet owner's current Google/Microsoft access token — it's what lets Biatec OIDC read and decrypt the self-custody account file for this one call. It is never stored.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">4</span>Every payment / asset transfer is checked first</h4>
+                    <p>Before anything is signed, each <code>pay</code> or <code>axfer</code> transaction in the group is checked against the owner's spending limit. If any one exceeds it, the whole group is rejected with <code>403 spending_limit_exceeded</code> and <em>nothing</em> is signed — never a partial group.</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>{
+  "signedTransactions": ["<base64-msgpack-signed-txn-1>", "<base64-msgpack-signed-txn-2>"]
+}</pre>
+                    </div>
+                </div>
+            </div>
+
+            <div id="wallet-get-limit" class="tab-content">
+                <div class="step">
+                    <h4><span class="step-num">1</span>Requires the <code>manage-limits</code> scope</h4>
+                    <p>Reading the limit is gated the same as changing it — a <code>sign</code>-only token cannot call this.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">2</span>Call the endpoint</h4>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>curl https://oidc.biatec.io/wallet/limits \
+  -H "Authorization: Bearer &lt;access_token&gt;"</pre>
+                    </div>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>{ "maxAmountPerTransaction": 5000000 }</pre>
+                    </div>
+                    <p>The limit is in microAlgos for a payment, or base units of the relevant asset for an asset transfer. <code>0</code> means unbounded (no limit configured yet).</p>
+                </div>
+            </div>
+
+            <div id="wallet-set-limit" class="tab-content">
+                <div class="step">
+                    <h4><span class="step-num">1</span>Requires the <code>manage-limits</code> scope</h4>
+                    <p>Only the wallet owner's own token can change their own limit — there is no way for a client to set a limit on behalf of a different user.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">2</span>Call the endpoint</h4>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>curl -X PUT https://oidc.biatec.io/wallet/limits \
+  -H "Authorization: Bearer &lt;access_token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{ "maxAmountPerTransaction": 5000000 }'</pre>
+                    </div>
+                    <p>Applies immediately to every subsequent <code>/wallet/sign</code> call, from any application the owner has authorized — the limit is per wallet owner, not per relying-party app.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="clients">
+            <div class="section-head">
+                <div class="kicker">Getting started</div>
+                <h2>Register your application</h2>
+                <p>Biatec OIDC is a whitelisted-client provider — every relying party is registered up front with its redirect URIs and allowed scopes.</p>
+            </div>
+            <div class="table-wrap">
+                <table class="ref-table">
+                    <thead>
+                        <tr><th>What you provide</th><th>Notes</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Client type</td><td>Confidential (server-side, with a client secret) or public (mobile/desktop/SPA, PKCE required)</td></tr>
+                        <tr><td>Redirect URIs</td><td>Exact or <code>*</code>-wildcard-subdomain allowlist for the authorization code flow</td></tr>
+                        <tr><td>Post-logout redirect URIs</td><td>Where RP-Initiated Logout sends the browser back to; falls back to your redirect URIs if omitted</td></tr>
+                        <tr><td>Allowed scopes</td><td><code>openid profile email</code> by default — request <code>sign</code> and/or <code>manage-limits</code> explicitly if your integration needs the wallet API</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="callout">
+                <span class="callout-icon">✉️</span>
+                <p>Contact <strong>Biatec</strong> to register a new client and get a <code>client_id</code>/<code>client_secret</code> issued.</p>
+            </div>
+        </section>
+
+        <footer class="footer">
+            <div class="footer-links">
+                <a href="/.well-known/openid-configuration">Discovery Document</a>
+                <a href="https://google.biatec.io/privacy.html">Privacy Policy</a>
+                <a href="https://google.biatec.io/terms.html">Terms of Service</a>
+            </div>
+            <p>&copy; 2026 Biatec (Scholtz &amp; Company, j.s.a.). All rights reserved.</p>
+        </footer>
+    </div>
+
+    <script>
+        function showTab(tab) {
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+            document.querySelector('.tab-button[onclick*="' + tab + '"]').classList.add('active');
+            document.getElementById(tab).classList.add('active');
+        }
+
+        function copyCode(btn) {
+            const pre = btn.parentElement.querySelector('pre');
+            const text = pre.innerText;
+            navigator.clipboard.writeText(text).then(() => {
+                const original = btn.innerHTML;
+                btn.classList.add('copied');
+                btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied';
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    btn.innerHTML = original;
+                }, 1800);
+            });
+        }
+
+        document.getElementById('navToggle').addEventListener('click', () => {
+            document.getElementById('navLinks').classList.toggle('open');
+        });
+
+        document.querySelectorAll('.nav-links a').forEach(link => {
+            link.addEventListener('click', () => document.getElementById('navLinks').classList.remove('open'));
+        });
+    </script>
+</body>
+</html>

@@ -1,9 +1,10 @@
-namespace BiatecMCP.Helper
+namespace BiatecSelfCustodyCore.Helper
 {
     /// <summary>
-    /// Server-side spend ceiling / receiver allowlist checks enforced by the MCP <c>transferAsset</c> tool
-    /// (F-04), independent of the pure business logic of building/signing/broadcasting the transaction -
-    /// kept here as small, directly unit-testable pure functions.
+    /// Server-side spend ceiling / receiver allowlist checks - shared by BiatecMCP's <c>transferAsset</c>
+    /// tool (F-04) and BiatecOIDC's wallet <c>/wallet/sign</c> endpoint, independent of the pure business
+    /// logic of building/signing/broadcasting the transaction - kept here as small, directly
+    /// unit-testable pure functions.
     /// </summary>
     public static class TransferPolicy
     {

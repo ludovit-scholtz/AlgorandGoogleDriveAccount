@@ -49,6 +49,10 @@ for a given client (don't mix the two for the same integration).
   - RFC-like active token introspection response.
 - `POST /verify`
   - Convenience token verification endpoint.
+- `POST /wallet/sign`
+  - Signs an Algorand transaction group. Requires the `sign` scope (see "Wallet API" below).
+- `GET`/`PUT /wallet/limits`
+  - Reads/sets the caller's own spending limit for `/wallet/sign`. Requires the `manage-limits` scope.
 
 ## Important Claims in Tokens
 
@@ -60,12 +64,40 @@ ID token and access token contain these relevant claims:
 - `algorand_address`: full Algorand account address.
 - Standard claims: `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`.
 
+Access tokens additionally carry, when applicable:
+
+- `biatec_idp`: which provider (`Google`/`Microsoft`) the wallet is stored under.
+- `sign`: `"true"` — only present if the `sign` scope was requested and is allowlisted for your client.
+- `manage-limits`: `"true"` — only present if the `manage-limits` scope was requested and allowlisted.
+
 Important behavior for Drive consent:
 
 - Login no longer fails when Google Drive access is denied.
 - Tokens are still issued for `openid profile email` authentication.
 - `algorand_address` is optional and omitted when Drive access is unavailable.
 - Integrator apps should treat `algorand_address` as nullable and request incremental consent only when Drive-backed actions are needed.
+
+## Wallet API (`sign` / `manage-limits` scopes)
+
+Beyond identity, Biatec OIDC can sign Algorand transaction groups directly on behalf of the wallet owner, subject
+to a spending limit the owner controls. This is a separate, opt-in capability — request these scopes at
+`/authorize` only if your integration needs them, and they must be explicitly added to your client's allowed
+scopes when it's registered (never granted implicitly, regardless of what you request).
+
+Full request/response examples, curl snippets, and a live discovery link are on the documentation site at
+`https://oidc.biatec.io/` (the `#wallet-api` section) — this section is a summary.
+
+- **`POST /wallet/sign`** (needs `sign`) — body: `{ "transactions": ["<base64 msgpack>", ...],
+  "accessToken": "<your current Google/Microsoft access token>" }`. Every payment/asset-transfer in the group is
+  checked against the caller's configured spending limit *before* anything is signed — if any one transaction
+  exceeds it, the whole request is rejected (`403 spending_limit_exceeded`) and nothing is signed. Returns
+  `{ "signedTransactions": ["<base64 msgpack>", ...] }` in the same order as the request.
+- **`GET /wallet/limits`** / **`PUT /wallet/limits`** (need `manage-limits`) — read or set the caller's own
+  per-transaction limit: `{ "maxAmountPerTransaction": 5000000 }` (microAlgos for a payment, base units of the
+  asset for a transfer; `0` means unbounded). The limit belongs to the wallet owner, not to your application —
+  it applies the same way across every app the owner has authorized with a `sign`-scoped token.
+- The `accessToken` passed to `/wallet/sign` is used once, in-memory, to read and decrypt the owner's self-custody
+  file, and is never persisted — same self-custody model as the rest of this service (see the root `CLAUDE.md`).
 
 ## Configuration
 
@@ -121,6 +153,10 @@ Android/iOS/desktop apps and browser SPAs, which cannot keep a secret confidenti
 `RedirectUris` accepts custom (non-`http`/`https`) URI schemes, e.g. `io.example.myapp:/oauth2redirect` for an
 Android app-link/custom-scheme redirect — the same allowlist and wildcard rules apply, matched on scheme + host +
 port + path.
+
+To let a client use the wallet API, add `"sign"` and/or `"manage-limits"` to its `AllowedScopes` — e.g.
+`["openid", "profile", "email", "sign", "manage-limits"]`. Neither is included by default; a client that never
+lists them can request them at `/authorize` all it wants, it will get `invalid_scope` back.
 
 Notes:
 

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Algorand;
 using Algorand.Algod;
 using BiatecMCP.BusinessLogic;
+using BiatecSelfCustodyCore.Helper;
 using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
@@ -133,7 +134,7 @@ namespace BiatecMCP.MCP
                 // Server-side spend ceiling / receiver allowlist (F-04) - checked before touching the
                 // Drive/Algod/credential path so a disallowed transfer is rejected as cheaply as possible.
                 var maxAmount = _transferLimits.CurrentValue.MaxAmount;
-                if (Helper.TransferPolicy.ExceedsMaxAmount(amount, maxAmount))
+                if (TransferPolicy.ExceedsMaxAmount(amount, maxAmount))
                 {
                     return new TransferAssetResponse
                     {
@@ -142,7 +143,7 @@ namespace BiatecMCP.MCP
                     };
                 }
 
-                if (!Helper.TransferPolicy.IsReceiverAllowed(receiverAccount, deviceInfo.AllowedReceivers))
+                if (!TransferPolicy.IsReceiverAllowed(receiverAccount, deviceInfo.AllowedReceivers))
                 {
                     return new TransferAssetResponse
                     {
