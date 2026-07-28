@@ -1,9 +1,9 @@
 using BiatecMCP.Controllers;
 using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Providers;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Routing;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -28,7 +28,8 @@ namespace BiatecMCPTests
         {
             _mockDriveService = new Mock<IDriveService>();
             _mockLogger = new Mock<ILogger<DriveController>>();
-            _controller = new DriveController(_mockDriveService.Object, _mockLogger.Object)
+            var providerCatalog = new CloudStorageProviderCatalog(new ICloudStorageProvider[] { new FakeCloudStorageProvider() });
+            _controller = new DriveController(_mockDriveService.Object, providerCatalog, _mockLogger.Object)
             {
                 ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
             };

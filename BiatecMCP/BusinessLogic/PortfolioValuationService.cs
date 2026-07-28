@@ -1,8 +1,6 @@
-using BiatecSelfCustodyCore.Model;
+using System.Text.Json;
 using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Options;
-using System.Text.Json;
 
 namespace BiatecMCP.BusinessLogic
 {
@@ -11,8 +9,6 @@ namespace BiatecMCP.BusinessLogic
         private readonly ICloudAccountRepository _cloudAccountRepository;
         private readonly IDistributedCache _cache;
         private readonly ILogger<PortfolioValuationService> _logger;
-        private readonly IOptionsMonitor<Configuration> _config;
-        private readonly HttpClient _httpClient;
 
         // Current EUR prices (in a real implementation, these would come from a price API)
         private readonly decimal _algoEurPrice = 0.20m; // Example: 1 ALGO = 0.20 EUR
@@ -20,18 +16,14 @@ namespace BiatecMCP.BusinessLogic
         public PortfolioValuationService(
             ICloudAccountRepository cloudAccountRepository,
             IDistributedCache cache,
-            ILogger<PortfolioValuationService> logger,
-            IOptionsMonitor<Configuration> config,
-            HttpClient httpClient)
+            ILogger<PortfolioValuationService> logger)
         {
             _cloudAccountRepository = cloudAccountRepository;
             _cache = cache;
             _logger = logger;
-            _config = config;
-            _httpClient = httpClient;
         }
 
-        public async Task<decimal> GetPortfolioValueAsync(string email, StorageProvider provider, string accessToken)
+        public async Task<decimal> GetPortfolioValueAsync(string email, string provider, string accessToken)
         {
             try
             {
@@ -62,13 +54,13 @@ namespace BiatecMCP.BusinessLogic
             }
         }
 
-        public async Task<ServiceTier> GetServiceTierAsync(string email, StorageProvider provider, string accessToken)
+        public async Task<ServiceTier> GetServiceTierAsync(string email, string provider, string accessToken)
         {
             var portfolioValue = await GetPortfolioValueAsync(email, provider, accessToken);
             return DetermineServiceTier(portfolioValue);
         }
 
-        public async Task<PortfolioSummary> GetPortfolioSummaryAsync(string email, StorageProvider provider, string accessToken)
+        public async Task<PortfolioSummary> GetPortfolioSummaryAsync(string email, string provider, string accessToken)
         {
             try
             {
@@ -121,7 +113,7 @@ namespace BiatecMCP.BusinessLogic
             }
         }
 
-        public async Task UpdatePortfolioValuationAsync(string email, StorageProvider provider, string accessToken)
+        public async Task UpdatePortfolioValuationAsync(string email, string provider, string accessToken)
         {
             try
             {
@@ -143,7 +135,7 @@ namespace BiatecMCP.BusinessLogic
             }
         }
 
-        private async Task<decimal> CalculatePortfolioValueAsync(string email, StorageProvider provider, string accessToken)
+        private async Task<decimal> CalculatePortfolioValueAsync(string email, string provider, string accessToken)
         {
             try
             {

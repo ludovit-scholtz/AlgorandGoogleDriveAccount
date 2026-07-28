@@ -1,6 +1,6 @@
-using BiatecSelfCustodyCore.Helper;
 using System.Security.Cryptography;
 using System.Text;
+using BiatecSelfCustodyCore.Helper;
 
 namespace BiatecMCPTests
 {

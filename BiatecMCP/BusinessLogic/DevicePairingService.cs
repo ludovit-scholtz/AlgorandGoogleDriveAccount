@@ -1,6 +1,6 @@
+using System.Text.Json;
 using BiatecMCP.Model;
 using Microsoft.Extensions.Caching.Distributed;
-using System.Text.Json;
 
 namespace BiatecMCP.BusinessLogic
 {
@@ -61,7 +61,7 @@ namespace BiatecMCP.BusinessLogic
                 // Get temporary session data
                 var tempKey = $"temp_session:{sessionId}";
                 var tempDataJson = await _cache.GetStringAsync(tempKey);
-                
+
                 if (string.IsNullOrEmpty(tempDataJson))
                 {
                     return new DevicePairingResponse
@@ -160,7 +160,7 @@ namespace BiatecMCP.BusinessLogic
                 }
 
                 var deviceInfo = JsonSerializer.Deserialize<PairedDeviceInfo>(deviceInfoJson);
-                
+
                 if (deviceInfo == null)
                 {
                     return null;
@@ -200,7 +200,7 @@ namespace BiatecMCP.BusinessLogic
                 }
 
                 var deviceInfo = JsonSerializer.Deserialize<PairedDeviceInfo>(deviceInfoJson);
-                
+
                 if (deviceInfo == null)
                 {
                     return null;
@@ -254,7 +254,7 @@ namespace BiatecMCP.BusinessLogic
                 }
 
                 var deviceInfo = JsonSerializer.Deserialize<PairedDeviceInfo>(deviceInfoJson);
-                
+
                 if (deviceInfo == null)
                 {
                     return null;
@@ -271,7 +271,7 @@ namespace BiatecMCP.BusinessLogic
                 // The GoogleCredential.FromAccessToken method should handle token validation
                 // If the token is expired, the Google API will return an unauthorized error
                 // and the calling code should handle re-authentication
-                
+
                 // Return the actual device info with real tokens for internal use
                 return deviceInfo;
             }

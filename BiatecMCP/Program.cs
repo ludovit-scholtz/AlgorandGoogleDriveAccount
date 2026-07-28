@@ -1,18 +1,14 @@
-using BiatecMCP.MCP;
+using System.Security.Claims;
 using BiatecMCP.Model;
 using BiatecMCP.Swagger;
 using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
+using BiatecSelfCustodyCore.Providers;
 using BiatecSelfCustodyCore.Repository;
 using Google.Apis.Auth.AspNetCore3;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
-using ModelContextProtocol.Server;
-using System.Security.Claims;
-using System.Linq;
 
 namespace BiatecMCP
 {
@@ -131,19 +127,22 @@ namespace BiatecMCP
                 });
             });
 
-            // Self-custody storage backends (BiatecSelfCustodyCore) - GoogleDriveFileStore/OneDriveFileStore
-            // are dumb byte transports; ICloudAccountRepository owns the shared AES/ARC76 account logic and
-            // dispatches to whichever backend the signed-in user's biatec_idp claim/paired session names.
-            builder.Services.AddSingleton<GoogleDriveFileStore>();
-            builder.Services.AddHttpClient<OneDriveFileStore>();
-            builder.Services.AddHttpClient<StorageAccessVerifier>();
-            builder.Services.AddScoped<IMicrosoftAuthProvider, MicrosoftAuthProvider>();
+            // Self-custody storage providers (BiatecSelfCustodyCore/Providers). Each provider is a
+            // single ICloudStorageProvider implementation registered here; ICloudAccountRepository
+            // owns the shared AES/ARC76 account logic and resolves the right one via the catalog,
+            // so it never needs to change when a provider is added. To add a new provider: implement
+            // ICloudStorageProvider, register it the same way as the two below, and add a matching
+            // AddOpenIdConnect(...) scheme block further down (copy the Microsoft block as a template).
+            builder.Services.AddHttpClient<GoogleCloudStorageProvider>();
+            builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<GoogleCloudStorageProvider>());
+            builder.Services.AddHttpClient<MicrosoftCloudStorageProvider>();
+            builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<MicrosoftCloudStorageProvider>());
+            builder.Services.AddScoped<ICloudStorageProviderCatalog, CloudStorageProviderCatalog>();
             builder.Services.AddScoped<ICloudAccountRepository, CloudAccountRepository>();
 
             // Add business logic services
             builder.Services.AddScoped<BiatecMCP.BusinessLogic.IDevicePairingService, BiatecMCP.BusinessLogic.DevicePairingService>();
             builder.Services.AddScoped<BiatecSelfCustodyCore.BusinessLogic.IDriveService, BiatecSelfCustodyCore.BusinessLogic.DriveService>();
-            builder.Services.AddScoped<BiatecMCP.BusinessLogic.IGoogleAuthorizationService, BiatecMCP.BusinessLogic.GoogleAuthorizationService>();
             builder.Services.AddScoped<BiatecMCP.BusinessLogic.ICrossAccountProtectionService, BiatecMCP.BusinessLogic.CrossAccountProtectionService>();
             builder.Services.AddScoped<BiatecMCP.BusinessLogic.IPortfolioValuationService, BiatecMCP.BusinessLogic.PortfolioValuationService>();
 
@@ -161,6 +160,12 @@ namespace BiatecMCP
                 options.Configuration = redisConfig.ConnectionString;
             });
 
+            // Each provider registered above gets one OIDC scheme block here, named after its
+            // ICloudStorageProvider.Name. To add provider #3: copy the Microsoft block (plain
+            // AddOpenIdConnect - Google's uses AddGoogleOpenIdConnect from Google.Apis.Auth.AspNetCore3
+            // purely because that package ships a small wrapper around the same handler), point it at
+            // the new provider's OIDC endpoint/scopes, and stamp its ProviderName via
+            // CloudStorageProviderClaims.Stamp in OnTokenValidated.
             builder.Services
                 .AddAuthentication(options =>
                 {
@@ -212,9 +217,9 @@ namespace BiatecMCP
                                 return Task.CompletedTask;
                             }
 
-                            // Record which provider signed this session in, so the storage backend
-                            // (Google Drive vs OneDrive) can be resolved from the cookie later.
-                            (context.Principal?.Identity as ClaimsIdentity)?.AddClaim(new Claim(AuthSchemeNames.IdpClaimType, AuthSchemeNames.Google));
+                            // Record which provider signed this session in, so the right
+                            // ICloudStorageProvider can be resolved from the cookie later.
+                            CloudStorageProviderClaims.Stamp(context.Principal, GoogleCloudStorageProvider.ProviderName);
 
                             return Task.CompletedTask;
                         },
@@ -240,7 +245,7 @@ namespace BiatecMCP
                     // Configure protocol validator to be more lenient with nonce validation for device flows
                     options.ProtocolValidator.RequireNonce = false;
                 })
-                .AddOpenIdConnect(AuthSchemeNames.Microsoft, options =>
+                .AddOpenIdConnect(MicrosoftCloudStorageProvider.ProviderName, options =>
                 {
                     options.Authority = $"https://login.microsoftonline.com/{entraConfig.TenantId}/v2.0";
                     options.ClientId = entraConfig.ClientId;
@@ -274,7 +279,7 @@ namespace BiatecMCP
                         },
                         OnTokenValidated = context =>
                         {
-                            (context.Principal?.Identity as ClaimsIdentity)?.AddClaim(new Claim(AuthSchemeNames.IdpClaimType, AuthSchemeNames.Microsoft));
+                            CloudStorageProviderClaims.Stamp(context.Principal, MicrosoftCloudStorageProvider.ProviderName);
                             return Task.CompletedTask;
                         },
                         OnAuthenticationFailed = context =>
@@ -380,9 +385,6 @@ namespace BiatecMCP
                 context.Response.ContentType = "text/html; charset=utf-8";
                 await context.Response.SendFileAsync(Path.Combine(app.Environment.WebRootPath, "index.html"));
             });
-
-            _ = app.Services.GetService<GoogleDriveFileStore>();
-            _ = app.Services.GetService<BiatecMCPGoogle>();
 
             app.Run();
         }

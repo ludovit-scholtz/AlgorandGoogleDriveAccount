@@ -1,16 +1,19 @@
-using BiatecSelfCustodyCore.Repository;
-using Moq;
-using Moq.Protected;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json;
+using BiatecSelfCustodyCore.Providers;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+using Moq;
+using Moq.Protected;
 
 namespace BiatecMCPTests
 {
     [TestFixture]
-    public class OneDriveFileStoreTests
+    public class MicrosoftCloudStorageProviderTests
     {
         private Mock<HttpMessageHandler> _mockHandler = null!;
-        private OneDriveFileStore _store = null!;
+        private MicrosoftCloudStorageProvider _provider = null!;
         private HttpRequestMessage? _capturedRequest;
         private byte[]? _capturedRequestBody;
 
@@ -19,7 +22,13 @@ namespace BiatecMCPTests
         {
             _mockHandler = new Mock<HttpMessageHandler>();
             var httpClient = new HttpClient(_mockHandler.Object);
-            _store = new OneDriveFileStore(httpClient);
+            var httpContextAccessor = new Mock<IHttpContextAccessor>();
+            httpContextAccessor.Setup(a => a.HttpContext).Returns((HttpContext?)null);
+
+            _provider = new MicrosoftCloudStorageProvider(
+                httpClient,
+                httpContextAccessor.Object,
+                new Mock<ILogger<MicrosoftCloudStorageProvider>>().Object);
         }
 
         private void SetupResponse(HttpStatusCode statusCode, byte[]? content = null)
@@ -45,7 +54,7 @@ namespace BiatecMCPTests
             var expected = new byte[] { 1, 2, 3, 4 };
             SetupResponse(HttpStatusCode.OK, expected);
 
-            var result = await _store.TryDownloadAsync("AVMAccount.dat", "token");
+            var result = await _provider.TryDownloadAsync("AVMAccount.dat", "token");
 
             Assert.That(result, Is.EqualTo(expected));
             Assert.That(_capturedRequest!.Method, Is.EqualTo(HttpMethod.Get));
@@ -58,7 +67,7 @@ namespace BiatecMCPTests
         {
             SetupResponse(HttpStatusCode.NotFound);
 
-            var result = await _store.TryDownloadAsync("AVMAccount.dat", "token");
+            var result = await _provider.TryDownloadAsync("AVMAccount.dat", "token");
 
             Assert.That(result, Is.Null);
         }
@@ -68,7 +77,7 @@ namespace BiatecMCPTests
         {
             SetupResponse(HttpStatusCode.Unauthorized);
 
-            Assert.That(async () => await _store.TryDownloadAsync("AVMAccount.dat", "token"),
+            Assert.That(async () => await _provider.TryDownloadAsync("AVMAccount.dat", "token"),
                 Throws.InstanceOf<UnauthorizedAccessException>());
         }
 
@@ -78,7 +87,7 @@ namespace BiatecMCPTests
             // Missing/insufficient Files.ReadWrite.AppFolder consent surfaces as 403, not 401.
             SetupResponse(HttpStatusCode.Forbidden);
 
-            Assert.That(async () => await _store.TryDownloadAsync("AVMAccount.dat", "token"),
+            Assert.That(async () => await _provider.TryDownloadAsync("AVMAccount.dat", "token"),
                 Throws.InstanceOf<UnauthorizedAccessException>());
         }
 
@@ -88,7 +97,7 @@ namespace BiatecMCPTests
             SetupResponse(HttpStatusCode.OK);
             var content = new byte[] { 5, 6, 7 };
 
-            await _store.UploadAsync("AVMAccount.dat", content, "token");
+            await _provider.UploadAsync("AVMAccount.dat", content, "token");
 
             Assert.That(_capturedRequest!.Method, Is.EqualTo(HttpMethod.Put));
             Assert.That(_capturedRequestBody, Is.EqualTo(content));
@@ -99,8 +108,34 @@ namespace BiatecMCPTests
         {
             SetupResponse(HttpStatusCode.Unauthorized);
 
-            Assert.That(async () => await _store.UploadAsync("AVMAccount.dat", new byte[] { 1 }, "token"),
+            Assert.That(async () => await _provider.UploadAsync("AVMAccount.dat", new byte[] { 1 }, "token"),
                 Throws.InstanceOf<UnauthorizedAccessException>());
+        }
+
+        [Test]
+        public async Task HasWriteAccessAsync_AppFolderReachable_ReturnsTrue()
+        {
+            SetupResponse(HttpStatusCode.OK, System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { id = "approot-id" })));
+
+            var result = await _provider.HasWriteAccessAsync("token");
+
+            Assert.That(result, Is.True);
+        }
+
+        [Test]
+        public async Task HasWriteAccessAsync_AppFolderForbidden_ReturnsFalse()
+        {
+            SetupResponse(HttpStatusCode.Forbidden);
+
+            var result = await _provider.HasWriteAccessAsync("token");
+
+            Assert.That(result, Is.False);
+        }
+
+        [Test]
+        public void Name_IsMicrosoft()
+        {
+            Assert.That(_provider.Name, Is.EqualTo("Microsoft"));
         }
     }
 }

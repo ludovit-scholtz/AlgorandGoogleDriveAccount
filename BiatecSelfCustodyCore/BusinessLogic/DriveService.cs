@@ -1,6 +1,5 @@
 using Algorand;
 using Algorand.Algod.Model.Transactions;
-using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Logging;
 
@@ -19,7 +18,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             _logger = logger;
         }
 
-        public async Task<byte[]> SignTransactionAsync(string email, byte[] txMsgPack, StorageProvider provider, string? accessToken = null)
+        public async Task<byte[]> SignTransactionAsync(string email, byte[] txMsgPack, string provider, string? accessToken = null)
         {
             if (string.IsNullOrEmpty(email))
             {
@@ -82,7 +81,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             }
         }
 
-        public async Task<string> GetAccountAddressAsync(string email, StorageProvider provider, string? accessToken = null)
+        public async Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null)
         {
             if (string.IsNullOrEmpty(email))
             {

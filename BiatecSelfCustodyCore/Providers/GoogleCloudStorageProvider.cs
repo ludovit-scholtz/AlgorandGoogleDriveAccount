@@ -1,33 +1,85 @@
+using System.Text.Json;
+using Google.Apis.Auth.AspNetCore3;
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
 using Google.Apis.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace BiatecSelfCustodyCore.Repository
+namespace BiatecSelfCustodyCore.Providers
 {
     /// <summary>
-    /// Stores the account file in a Google Drive folder (created on first use) owned by the app, named per
-    /// <see cref="Model.Configuration.StorageFolderName"/>. Takes a <see cref="GoogleCredential"/> directly
-    /// (rather than a raw bearer string) so callers can either build one from an explicit access token
-    /// (device-pairing path) or hand in the ambient, auto-refreshing credential from
-    /// <c>IGoogleAuthProvider.GetCredentialAsync()</c> (cookie-session path) - matching how the Google API
-    /// client library is meant to be used.
+    /// Google Drive-backed <see cref="ICloudStorageProvider"/>: stores the account file in a Drive
+    /// folder (created on first use, named per <see cref="Model.Configuration.StorageFolderName"/>)
+    /// owned by the app, scoped to the <c>drive.file</c> permission (the app can only ever see files
+    /// it created itself).
     /// </summary>
-    public class GoogleDriveFileStore
+    public class GoogleCloudStorageProvider : ICloudStorageProvider
     {
-        private readonly IOptionsMonitor<Model.Configuration> _config;
+        /// <summary>Canonical provider name - also the Google OIDC authentication scheme name.</summary>
+        public const string ProviderName = "Google";
 
-        public GoogleDriveFileStore(IOptionsMonitor<Model.Configuration> config)
+        private const string DriveFileScope = "https://www.googleapis.com/auth/drive.file";
+
+        private readonly IGoogleAuthProvider _googleAuth;
+        private readonly IOptionsMonitor<Model.Configuration> _config;
+        private readonly HttpClient _httpClient;
+        private readonly ILogger<GoogleCloudStorageProvider> _logger;
+
+        public GoogleCloudStorageProvider(
+            IGoogleAuthProvider googleAuth,
+            IOptionsMonitor<Model.Configuration> config,
+            HttpClient httpClient,
+            ILogger<GoogleCloudStorageProvider> logger)
         {
+            _googleAuth = googleAuth;
             _config = config;
+            _httpClient = httpClient;
+            _logger = logger;
         }
 
-        /// <summary>Escapes a value for safe interpolation into a Google Drive API <c>q</c> search string.</summary>
-        private static string EscapeDriveQueryValue(string value) => value.Replace("\\", "\\\\").Replace("'", "\\'");
+        public string Name => ProviderName;
+        public string DisplayName => "Google";
+        public string RequiredScope => DriveFileScope;
 
-        public async Task<byte[]?> TryDownloadAsync(string fileName, GoogleCredential credential)
+        public async Task<string?> GetAmbientAccessTokenAsync()
         {
-            var service = CreateDriveService(credential);
+            var credential = await _googleAuth.GetCredentialAsync();
+            return await credential.UnderlyingCredential.GetAccessTokenForRequestAsync();
+        }
+
+        public async Task<bool> HasWriteAccessAsync(string accessToken)
+        {
+            try
+            {
+                var tokenInfoUrl = $"https://oauth2.googleapis.com/tokeninfo?access_token={Uri.EscapeDataString(accessToken)}";
+                var response = await _httpClient.GetAsync(tokenInfoUrl);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return false;
+                }
+
+                using var tokenInfo = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                if (!tokenInfo.RootElement.TryGetProperty("scope", out var scopeProperty))
+                {
+                    return false;
+                }
+
+                var grantedScopes = (scopeProperty.GetString() ?? string.Empty)
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+                return grantedScopes.Contains(DriveFileScope, StringComparer.Ordinal);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to verify Google Drive write access; treating as not granted.");
+                return false;
+            }
+        }
+
+        public async Task<byte[]?> TryDownloadAsync(string fileName, string accessToken)
+        {
+            var service = CreateDriveService(accessToken);
 
             try
             {
@@ -55,9 +107,9 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
-        public async Task UploadAsync(string fileName, byte[] content, GoogleCredential credential)
+        public async Task UploadAsync(string fileName, byte[] content, string accessToken)
         {
-            var service = CreateDriveService(credential);
+            var service = CreateDriveService(accessToken);
 
             try
             {
@@ -86,8 +138,12 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
-        private DriveService CreateDriveService(GoogleCredential credential)
+        /// <summary>Escapes a value for safe interpolation into a Google Drive API <c>q</c> search string.</summary>
+        private static string EscapeDriveQueryValue(string value) => value.Replace("\\", "\\\\").Replace("'", "\\'");
+
+        private DriveService CreateDriveService(string accessToken)
         {
+            var credential = GoogleCredential.FromAccessToken(accessToken);
             return new DriveService(new BaseClientService.Initializer
             {
                 HttpClientInitializer = credential,

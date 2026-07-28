@@ -1,30 +1,16 @@
-﻿using Algorand;
+using System.ComponentModel;
+using Algorand;
 using Algorand.Algod;
 using BiatecMCP.BusinessLogic;
-using BiatecMCP.Model;
-using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
-using Google.Apis.Auth.OAuth2;
-using Google.Apis.Drive.v3;
-using Google.Apis.Services;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
-using ModelContextProtocol;
-using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
-using System.ComponentModel;
-using System.IO;
-using System.Text.Json;
 
 namespace BiatecMCP.MCP
 {
     [McpServerToolType]
     public class BiatecMCPGoogle
     {
-        private readonly IDistributedCache _cache;
         private readonly ICloudAccountRepository _cloudAccountRepository;
         private readonly IDevicePairingService _devicePairingService;
         private readonly IOptionsMonitor<BiatecSelfCustodyCore.Model.Configuration> _config;
@@ -32,7 +18,6 @@ namespace BiatecMCP.MCP
         private readonly IOptionsMonitor<BiatecMCP.Model.McpTransferLimitsConfiguration> _transferLimits;
 
         public BiatecMCPGoogle(
-            IDistributedCache cache,
             ICloudAccountRepository cloudAccountRepository,
             IDevicePairingService devicePairingService,
             IOptionsMonitor<BiatecSelfCustodyCore.Model.Configuration> config,
@@ -40,7 +25,6 @@ namespace BiatecMCP.MCP
             IOptionsMonitor<BiatecMCP.Model.McpTransferLimitsConfiguration> transferLimits
             )
         {
-            _cache = cache;
             _cloudAccountRepository = cloudAccountRepository;
             _devicePairingService = devicePairingService;
             _config = config;
@@ -51,7 +35,7 @@ namespace BiatecMCP.MCP
         private (string apiAddress, string apiToken, string explorerBaseUrl) GetAlgodSettings(string genesisId)
         {
             var algodConfig = _algodConfig.CurrentValue;
-            
+
             if (algodConfig.Networks.TryGetValue(genesisId.ToLowerInvariant(), out var networkSettings))
             {
                 return (networkSettings.ApiAddress, networkSettings.ApiToken, networkSettings.ExplorerBaseUrl);
@@ -85,7 +69,7 @@ namespace BiatecMCP.MCP
                     throw new Exception($"Unable to determine the email from the access token. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
                 }
 
-                var provider = StorageProviderExtensions.Parse(deviceInfo.Provider);
+                var provider = deviceInfo.Provider;
                 var account = await _cloudAccountRepository.LoadAccountAsync(deviceInfo.Email, slot, provider, deviceInfo.AccessToken);
                 if (account == null)
                 {
@@ -120,7 +104,7 @@ namespace BiatecMCP.MCP
             public string TxId { get; set; } = string.Empty;
             public string Error { get; set; } = string.Empty;
             public string ErrorType { get; set; } = string.Empty;
-            public string ExplorerLink { get; internal set; }
+            public string? ExplorerLink { get; internal set; }
         }
 
         [McpServerTool(Name = "transferAsset"), Description("Allows the google store account transfer the assets.")]
@@ -177,7 +161,7 @@ namespace BiatecMCP.MCP
                     throw new Exception($"Unable to determine the email from the access token. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
                 }
 
-                var provider = StorageProviderExtensions.Parse(deviceInfo.Provider);
+                var provider = deviceInfo.Provider;
                 var account = await _cloudAccountRepository.LoadAccountAsync(deviceInfo.Email, slot, provider, deviceInfo.AccessToken);
                 if (account == null)
                 {
@@ -263,7 +247,7 @@ namespace BiatecMCP.MCP
                     throw new Exception($"Unable to determine the email from the access token. You can try login again at {_config.CurrentValue.Host}/pair.html?session={sessionId}");
                 }
 
-                var provider = StorageProviderExtensions.Parse(deviceInfo.Provider);
+                var provider = deviceInfo.Provider;
                 var account = await _cloudAccountRepository.LoadAccountAsync(deviceInfo.Email, slot, provider, deviceInfo.AccessToken);
                 if (account == null)
                 {

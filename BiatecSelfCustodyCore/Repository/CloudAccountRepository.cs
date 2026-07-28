@@ -1,82 +1,53 @@
-using Algorand.Algod.Model;
-using BiatecSelfCustodyCore.BusinessLogic;
-using BiatecSelfCustodyCore.Helper;
-using BiatecSelfCustodyCore.Model;
-using Google.Apis.Auth.AspNetCore3;
-using Google.Apis.Auth.OAuth2;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
+using Algorand.Algod.Model;
+using BiatecSelfCustodyCore.Helper;
+using BiatecSelfCustodyCore.Model;
+using BiatecSelfCustodyCore.Providers;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BiatecSelfCustodyCore.Repository
 {
     /// <summary>
     /// Owns the AES encrypt/decrypt + ARC76 account-derivation logic for the self-custody account
-    /// file, once, regardless of which cloud backend it's stored in - <see cref="GoogleDriveFileStore"/>
-    /// and <see cref="OneDriveFileStore"/> are just dumb byte transports (Google Drive vs OneDrive).
+    /// file, once, regardless of which cloud provider it's stored with - resolves the provider from
+    /// <see cref="ICloudStorageProviderCatalog"/> and only ever talks to it through
+    /// <see cref="ICloudStorageProvider"/>, so adding a new provider never requires touching this class.
     /// </summary>
     public class CloudAccountRepository : ICloudAccountRepository
     {
-        private readonly IGoogleAuthProvider _googleAuth;
-        private readonly IMicrosoftAuthProvider _microsoftAuth;
-        private readonly GoogleDriveFileStore _googleStore;
-        private readonly OneDriveFileStore _oneDriveStore;
+        private readonly ICloudStorageProviderCatalog _catalog;
         private readonly IOptionsMonitor<Configuration> _config;
         private readonly IOptionsMonitor<AesOptions> _aes;
         private readonly ILogger<CloudAccountRepository> _logger;
 
         public CloudAccountRepository(
-            IGoogleAuthProvider googleAuth,
-            IMicrosoftAuthProvider microsoftAuth,
-            GoogleDriveFileStore googleStore,
-            OneDriveFileStore oneDriveStore,
+            ICloudStorageProviderCatalog catalog,
             IOptionsMonitor<Configuration> config,
             IOptionsMonitor<AesOptions> aes,
             ILogger<CloudAccountRepository> logger)
         {
-            _googleAuth = googleAuth;
-            _microsoftAuth = microsoftAuth;
-            _googleStore = googleStore;
-            _oneDriveStore = oneDriveStore;
+            _catalog = catalog;
             _config = config;
             _aes = aes;
             _logger = logger;
         }
 
-        public async Task<Account> LoadAccountAsync(string email, int slot, StorageProvider provider, string? accessToken = null)
+        public async Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null)
         {
+            var storageProvider = _catalog.Resolve(provider);
+
             try
             {
+                var token = accessToken ?? await storageProvider.GetAmbientAccessTokenAsync();
+                if (string.IsNullOrEmpty(token))
+                {
+                    throw new UnauthorizedAccessException($"No {storageProvider.Name} access token available. Please sign in again.");
+                }
+
                 var fileName = BuildFileName();
-
-                byte[]? existing;
-                Func<byte[], Task> upload;
-
-                if (provider == StorageProvider.Microsoft)
-                {
-                    var token = accessToken ?? await _microsoftAuth.GetAccessTokenAsync();
-                    if (string.IsNullOrEmpty(token))
-                    {
-                        throw new UnauthorizedAccessException("No Microsoft access token available. Please sign in again.");
-                    }
-
-                    existing = await _oneDriveStore.TryDownloadAsync(fileName, token);
-                    upload = content => _oneDriveStore.UploadAsync(fileName, content, token);
-                }
-                else
-                {
-                    var credential = accessToken != null
-                        ? GoogleCredential.FromAccessToken(accessToken)
-                        : await _googleAuth.GetCredentialAsync();
-                    if (credential == null)
-                    {
-                        throw new UnauthorizedAccessException("No Google access token available. Please sign in again.");
-                    }
-
-                    existing = await _googleStore.TryDownloadAsync(fileName, credential);
-                    upload = content => _googleStore.UploadAsync(fileName, content, credential);
-                }
+                var existing = await storageProvider.TryDownloadAsync(fileName, token);
 
                 byte[] mnemonicBytes;
                 if (existing == null)
@@ -84,7 +55,7 @@ namespace BiatecSelfCustodyCore.Repository
                     var newAccount = new Account();
                     mnemonicBytes = Encoding.UTF8.GetBytes(newAccount.ToMnemonic());
                     var encrypted = AesEncryptionHelper.Encrypt(mnemonicBytes, AesKey(), AesIv(), email);
-                    await upload(encrypted);
+                    await storageProvider.UploadAsync(fileName, encrypted, token);
                 }
                 else
                 {
@@ -119,8 +90,8 @@ namespace BiatecSelfCustodyCore.Repository
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error loading account from {Provider} for email {Email}", provider, email);
-                throw new InvalidOperationException($"Error loading account from {provider}.");
+                _logger.LogError(ex, "Error loading account from {Provider} for email {Email}", storageProvider.Name, email);
+                throw new InvalidOperationException($"Error loading account from {storageProvider.Name}.");
             }
         }
 

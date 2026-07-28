@@ -1,17 +1,15 @@
-using BiatecOIDC.Helper;
-using BiatecOIDC.Model;
-using BiatecSelfCustodyCore.BusinessLogic;
-using BiatecSelfCustodyCore.Model;
-using Microsoft.AspNetCore.WebUtilities;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
-using StackExchange.Redis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using BiatecOIDC.Helper;
+using BiatecOIDC.Model;
+using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Model;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 
 namespace BiatecOIDC.BusinessLogic
 {
@@ -319,8 +317,8 @@ namespace BiatecOIDC.BusinessLogic
             string? algorandAddress = null;
             try
             {
-                var provider = StorageProviderExtensions.Parse(user.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
-                algorandAddress = await _driveService.GetAccountAddressAsync(email, provider);
+                var provider = user.FindFirst(AuthSchemeNames.IdpClaimType)?.Value;
+                algorandAddress = await _driveService.GetAccountAddressAsync(email, provider ?? string.Empty);
             }
             catch (Exception ex)
             {

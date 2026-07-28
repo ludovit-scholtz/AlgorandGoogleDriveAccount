@@ -1,20 +1,16 @@
+using System.Security.Claims;
 using BiatecMCP.BusinessLogic;
 using BiatecMCP.Model;
 using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
-using Google.Apis.Auth.AspNetCore3;
+using BiatecSelfCustodyCore.Providers;
 using Google.Apis.Auth.OAuth2;
-using Google.Apis.Drive.v3;
 using Google.Apis.Services;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using System.Security.Claims;
 
 namespace BiatecMCP.Controllers
 {
@@ -29,25 +25,29 @@ namespace BiatecMCP.Controllers
     public class DevicePairingController : ControllerBase
     {
         private readonly IDevicePairingService _devicePairingService;
-        private readonly StorageAccessVerifier _storageAccessVerifier;
+        private readonly ICloudStorageProviderCatalog _providerCatalog;
         private readonly ILogger<DevicePairingController> _logger;
         private readonly IHostEnvironment _environment;
 
         public DevicePairingController(
             IDevicePairingService devicePairingService,
-            StorageAccessVerifier storageAccessVerifier,
+            ICloudStorageProviderCatalog providerCatalog,
             ILogger<DevicePairingController> logger,
             IHostEnvironment environment)
         {
             _devicePairingService = devicePairingService;
-            _storageAccessVerifier = storageAccessVerifier;
+            _providerCatalog = providerCatalog;
             _logger = logger;
             _environment = environment;
         }
 
-        /// <summary>Resolves a caller-supplied <c>idp</c> value ("google"/"microsoft") to its auth scheme name. Defaults to Google for anything else.</summary>
-        private static string ResolveScheme(string? idp) =>
-            string.Equals(idp, "microsoft", StringComparison.OrdinalIgnoreCase) ? AuthSchemeNames.Microsoft : AuthSchemeNames.Google;
+        /// <summary>Returns the list of registered providers, for <c>pair.html</c>'s picker to render buttons from.</summary>
+        [AllowAnonymous]
+        [HttpGet("providers")]
+        public ActionResult<object> GetProviders()
+        {
+            return Ok(_providerCatalog.All.Select(p => new { name = p.Name, displayName = p.DisplayName }));
+        }
 
         /// <summary>
         /// Serves the device pairing app page
@@ -79,7 +79,7 @@ namespace BiatecMCP.Controllers
                 await _devicePairingService.InitiatePairingAsync(sessionId, deviceName);
 
                 var redirectUri = Url.Action("PairedDevice", "DevicePairing", new { sessionId }, Request.Scheme);
-                var scheme = ResolveScheme(idp);
+                var provider = _providerCatalog.Resolve(idp);
 
                 var authProperties = new AuthenticationProperties
                 {
@@ -94,12 +94,10 @@ namespace BiatecMCP.Controllers
                 // Support incremental authorization for storage access
                 if (requestDriveAccess)
                 {
-                    authProperties.Items["incremental_scopes"] = scheme == AuthSchemeNames.Microsoft
-                        ? "https://graph.microsoft.com/Files.ReadWrite.AppFolder"
-                        : Google.Apis.Drive.v3.DriveService.Scope.DriveFile;
+                    authProperties.Items[OpenIdConnectIncrementalAuth.IncrementalScopesKey] = provider.RequiredScope;
                 }
 
-                return Challenge(authProperties, scheme);
+                return Challenge(authProperties, provider.Name);
             }
             catch (ArgumentException ex)
             {
@@ -132,9 +130,9 @@ namespace BiatecMCP.Controllers
                 var email = User.FindFirst(ClaimTypes.Email)?.Value;
                 var accessToken = await HttpContext.GetTokenAsync("access_token");
                 var refreshToken = await HttpContext.GetTokenAsync("refresh_token");
-                var provider = User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value ?? AuthSchemeNames.Google;
+                var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
 
-                var result = await _devicePairingService.ProcessPairingCallbackAsync(sessionId, email!, accessToken!, refreshToken, provider);
+                var result = await _devicePairingService.ProcessPairingCallbackAsync(sessionId, email!, accessToken!, refreshToken, provider.Name);
 
                 if (!result.Success)
                 {
@@ -142,9 +140,9 @@ namespace BiatecMCP.Controllers
                     return Redirect($"/pair.html?error=pairing_failed&sessionId={sessionId}");
                 }
 
-                if (!retried && !await _storageAccessVerifier.HasWriteAccessAsync(accessToken!, StorageProviderExtensions.Parse(provider)))
+                if (!retried && !await provider.HasWriteAccessAsync(accessToken!))
                 {
-                    return RequestStorageAccessRedirect(sessionId, provider, retried: true);
+                    return RequestStorageAccessRedirect(sessionId, provider.Name, retried: true);
                 }
 
                 // Redirect to pair.html with success message
@@ -190,9 +188,9 @@ namespace BiatecMCP.Controllers
             }
         }
 
-        private ActionResult RequestStorageAccessRedirect(string sessionId, string? provider, bool retried)
+        private ActionResult RequestStorageAccessRedirect(string sessionId, string? providerName, bool retried)
         {
-            var scheme = ResolveScheme(provider);
+            var provider = _providerCatalog.Resolve(providerName);
             var redirectUri = Url.Action("StorageAccessCallback", "DevicePairing", new { sessionId, retried }, Request.Scheme);
 
             var authProperties = new AuthenticationProperties
@@ -201,14 +199,12 @@ namespace BiatecMCP.Controllers
                 Items =
                 {
                     ["sessionId"] = sessionId,
-                    [OpenIdConnectIncrementalAuth.IncrementalScopesKey] = scheme == AuthSchemeNames.Microsoft
-                        ? "https://graph.microsoft.com/Files.ReadWrite.AppFolder"
-                        : Google.Apis.Drive.v3.DriveService.Scope.DriveFile,
+                    [OpenIdConnectIncrementalAuth.IncrementalScopesKey] = provider.RequiredScope,
                     [OpenIdConnectIncrementalAuth.ForceConsentKey] = "true"
                 }
             };
 
-            return Challenge(authProperties, scheme);
+            return Challenge(authProperties, provider.Name);
         }
 
         /// <summary>
@@ -227,10 +223,10 @@ namespace BiatecMCP.Controllers
                 var email = User.FindFirst(ClaimTypes.Email)?.Value;
                 var accessToken = await HttpContext.GetTokenAsync("access_token");
                 var refreshToken = await HttpContext.GetTokenAsync("refresh_token");
-                var provider = User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value ?? AuthSchemeNames.Google;
+                var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
 
                 // Update the device info with new tokens that include storage access
-                var result = await _devicePairingService.ProcessPairingCallbackAsync(sessionId, email!, accessToken!, refreshToken, provider);
+                var result = await _devicePairingService.ProcessPairingCallbackAsync(sessionId, email!, accessToken!, refreshToken, provider.Name);
 
                 if (!result.Success)
                 {
@@ -399,8 +395,8 @@ namespace BiatecMCP.Controllers
 
                 if (!folderResult.Files.Any())
                 {
-                    return Ok(new 
-                    { 
+                    return Ok(new
+                    {
                         email = deviceInfo.Email,
                         folderFound = false,
                         message = "Biatec folder not found. Account file doesn't exist yet.",
@@ -418,8 +414,8 @@ namespace BiatecMCP.Controllers
 
                 if (!existingFiles.Files.Any())
                 {
-                    return Ok(new 
-                    { 
+                    return Ok(new
+                    {
                         email = deviceInfo.Email,
                         folderFound = true,
                         fileFound = false,
@@ -430,8 +426,8 @@ namespace BiatecMCP.Controllers
 
                 var file = existingFiles.Files.First();
 
-                return Ok(new 
-                { 
+                return Ok(new
+                {
                     email = deviceInfo.Email,
                     emailLength = deviceInfo.Email?.Length,
                     folderFound = true,
@@ -516,8 +512,8 @@ namespace BiatecMCP.Controllers
 
                 var capService = HttpContext.RequestServices.GetRequiredService<ICrossAccountProtectionService>();
                 var success = await capService.ReportSecurityEventAsync(
-                    deviceInfo.Email ?? sessionId, 
-                    request.EventType, 
+                    deviceInfo.Email ?? sessionId,
+                    request.EventType,
                     request.Details);
 
                 return Ok(new
@@ -580,7 +576,7 @@ namespace BiatecMCP.Controllers
                 }
 
                 var portfolioService = HttpContext.RequestServices.GetRequiredService<IPortfolioValuationService>();
-                var portfolioSummary = await portfolioService.GetPortfolioSummaryAsync(deviceInfo.Email!, StorageProviderExtensions.Parse(deviceInfo.Provider), deviceInfo.AccessToken);
+                var portfolioSummary = await portfolioService.GetPortfolioSummaryAsync(deviceInfo.Email!, _providerCatalog.Resolve(deviceInfo.Provider).Name, deviceInfo.AccessToken);
 
                 return Ok(new
                 {
@@ -616,7 +612,7 @@ namespace BiatecMCP.Controllers
             try
             {
                 var capConfig = HttpContext.RequestServices.GetRequiredService<IOptionsMonitor<CrossAccountProtectionConfiguration>>();
-                
+
                 return Ok(new
                 {
                     crossAccountProtection = new
@@ -628,7 +624,7 @@ namespace BiatecMCP.Controllers
                         enableGranularConsent = capConfig.CurrentValue.EnableGranularConsent,
                         filterInternalScopes = capConfig.CurrentValue.FilterInternalScopes
                     },
-                    message = capConfig.CurrentValue.Enabled 
+                    message = capConfig.CurrentValue.Enabled
                         ? "Cross-Account Protection is enabled for enhanced security monitoring"
                         : "Cross-Account Protection is disabled - basic security validation only"
                 });

@@ -1,5 +1,5 @@
-using BiatecOIDC.Model;
 using System.Security.Claims;
+using BiatecOIDC.Model;
 
 namespace BiatecOIDC.BusinessLogic
 {

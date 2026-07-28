@@ -1,0 +1,18 @@
+<Project>
+
+  <!--
+    Auto-imported by every .csproj under this directory (MSBuild convention) - keeps analyzer/style
+    settings defined once instead of duplicated across BiatecMCP, BiatecOIDC, BiatecSelfCustodyCore,
+    BiatecMCPTests and BiatecOIDCTests.
+  -->
+  <PropertyGroup>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>Recommended</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- Unused using directives fail the build outright; everything else stays a warning. -->
+    <WarningsAsErrors>$(WarningsAsErrors);IDE0005</WarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

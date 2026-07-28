@@ -1,6 +1,6 @@
-using BiatecSelfCustodyCore.Model;
 using System.Security.Cryptography;
 using System.Text;
+using BiatecSelfCustodyCore.Model;
 
 namespace BiatecSelfCustodyCore.Helper
 {

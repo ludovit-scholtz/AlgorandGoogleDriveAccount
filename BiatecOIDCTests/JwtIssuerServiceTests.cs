@@ -1,18 +1,17 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.BusinessLogic;
-using BiatecSelfCustodyCore.Model;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Moq;
 using StackExchange.Redis;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 
 namespace BiatecOIDCTests
 {
@@ -828,7 +827,7 @@ namespace BiatecOIDCTests
             var request = ValidCodeRequest();
             var id = await Service.StorePendingAuthorizeRequestAsync(request);
 
-            Assert.That(id, Is.Not.Null.Or.Empty);
+            Assert.That(id, Is.Not.Null.And.Not.Empty);
         }
 
         [Test]
@@ -892,7 +891,7 @@ namespace BiatecOIDCTests
         {
             base.SetUp();
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<StorageProvider>()))
+                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
                 .ReturnsAsync(TestAlgorandAddress);
         }
 
@@ -1004,7 +1003,7 @@ namespace BiatecOIDCTests
         public async Task DriveServiceThrows_ContinuesWithoutAlgorandAddress()
         {
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<StorageProvider>()))
+                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
                 .ThrowsAsync(new InvalidOperationException("Drive unavailable"));
 
             var request = ValidCodeRequest();
@@ -1022,7 +1021,7 @@ namespace BiatecOIDCTests
         public async Task IdTokenFlow_WhenDriveUnavailable_DoesNotIncludeAlgorandAddressClaim()
         {
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<StorageProvider>()))
+                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
                 .ThrowsAsync(new InvalidOperationException("Drive unavailable"));
 
             var request = new OidcAuthorizeRequest
@@ -1585,7 +1584,7 @@ namespace BiatecOIDCTests
         private async Task<string> IssueRealAccessTokenAsync()
         {
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<StorageProvider>()))
+                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
                 .ReturnsAsync(TestAlgorandAddress);
 
             var code = "real-code";
@@ -1749,7 +1748,7 @@ namespace BiatecOIDCTests
         private async Task<string> IssueRealAccessTokenAsync()
         {
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<StorageProvider>()))
+                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
                 .ReturnsAsync(TestAlgorandAddress);
 
             var code = "introspect-code";
@@ -1827,7 +1826,7 @@ namespace BiatecOIDCTests
         {
             base.SetUp();
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<StorageProvider>()))
+                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
                 .ReturnsAsync(TestAlgorandAddress);
         }
 
@@ -2122,7 +2121,7 @@ namespace BiatecOIDCTests
         [Test]
         public async Task GenuineSelfIssuedIdToken_ReturnsAudience()
         {
-            MockDriveService.Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<StorageProvider>())).ReturnsAsync(TestAlgorandAddress);
+            MockDriveService.Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>())).ReturnsAsync(TestAlgorandAddress);
 
             var request = ValidCodeRequest("test-nonce");
             request.ResponseType = "id_token";

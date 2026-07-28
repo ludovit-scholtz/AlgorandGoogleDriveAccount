@@ -1,10 +1,10 @@
+using System.Text;
+using System.Text.Json;
 using BiatecMCP.BusinessLogic;
 using BiatecMCP.Model;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Logging;
 using Moq;
-using System.Text;
-using System.Text.Json;
 
 namespace BiatecMCPTests
 {
@@ -103,7 +103,7 @@ namespace BiatecMCPTests
             public void InitiatePairingAsync_InvalidSessionId_ThrowsArgumentException(string sessionId)
             {
                 // Arrange & Act & Assert
-                var ex = Assert.ThrowsAsync<ArgumentException>(() => 
+                var ex = Assert.ThrowsAsync<ArgumentException>(() =>
                     _service.InitiatePairingAsync(sessionId, "Test Device"));
                 Assert.That(ex!.ParamName, Is.EqualTo("sessionId"));
                 Assert.That(ex.Message, Does.Contain("Session ID is required for device pairing"));
@@ -113,7 +113,7 @@ namespace BiatecMCPTests
             public void InitiatePairingAsync_NullSessionId_ThrowsArgumentException()
             {
                 // Arrange & Act & Assert
-                var ex = Assert.ThrowsAsync<ArgumentException>(() => 
+                var ex = Assert.ThrowsAsync<ArgumentException>(() =>
                     _service.InitiatePairingAsync(null!, "Test Device"));
                 Assert.That(ex!.ParamName, Is.EqualTo("sessionId"));
                 Assert.That(ex.Message, Does.Contain("Session ID is required for device pairing"));
@@ -448,7 +448,7 @@ namespace BiatecMCPTests
             public void GetDeviceAccessTokenAsync_InvalidSessionId_ThrowsArgumentException(string sessionId)
             {
                 // Act & Assert
-                var ex = Assert.ThrowsAsync<ArgumentException>(() => 
+                var ex = Assert.ThrowsAsync<ArgumentException>(() =>
                     _service.GetDeviceAccessTokenAsync(sessionId));
                 Assert.That(ex!.ParamName, Is.EqualTo("sessionId"));
             }
@@ -457,7 +457,7 @@ namespace BiatecMCPTests
             public void GetDeviceAccessTokenAsync_NullSessionId_ThrowsArgumentException()
             {
                 // Act & Assert
-                var ex = Assert.ThrowsAsync<ArgumentException>(() => 
+                var ex = Assert.ThrowsAsync<ArgumentException>(() =>
                     _service.GetDeviceAccessTokenAsync(null!));
                 Assert.That(ex!.ParamName, Is.EqualTo("sessionId"));
             }
@@ -473,7 +473,7 @@ namespace BiatecMCPTests
                     .ReturnsAsync(Encoding.UTF8.GetBytes("invalid json"));
 
                 // Act & Assert
-                Assert.ThrowsAsync<JsonException>(() => 
+                Assert.ThrowsAsync<JsonException>(() =>
                     _service.GetDeviceAccessTokenAsync(sessionId));
             }
         }
@@ -562,7 +562,7 @@ namespace BiatecMCPTests
             public void GetDeviceInfoAsync_InvalidSessionId_ThrowsArgumentException(string sessionId)
             {
                 // Act & Assert
-                var ex = Assert.ThrowsAsync<ArgumentException>(() => 
+                var ex = Assert.ThrowsAsync<ArgumentException>(() =>
                     _service.GetDeviceInfoAsync(sessionId));
                 Assert.That(ex!.ParamName, Is.EqualTo("sessionId"));
             }
@@ -571,7 +571,7 @@ namespace BiatecMCPTests
             public void GetDeviceInfoAsync_NullSessionId_ThrowsArgumentException()
             {
                 // Act & Assert
-                var ex = Assert.ThrowsAsync<ArgumentException>(() => 
+                var ex = Assert.ThrowsAsync<ArgumentException>(() =>
                     _service.GetDeviceInfoAsync(null!));
                 Assert.That(ex!.ParamName, Is.EqualTo("sessionId"));
             }

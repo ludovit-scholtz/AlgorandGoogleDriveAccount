@@ -1,7 +1,8 @@
+using System.Security.Claims;
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Controllers;
 using BiatecOIDC.Model;
-using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Providers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Routing;
@@ -9,9 +10,6 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
-using System.Security.Claims;
-using System.Text;
-using System.Text.Json;
 
 namespace BiatecOIDCTests
 {
@@ -176,8 +174,8 @@ namespace BiatecOIDCTests
 
         private static JwtIssuerController CreateController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, bool authenticated, IConfiguration? configuration = null)
         {
-            var storageAccessVerifier = new StorageAccessVerifier(new HttpClient(), new Mock<Microsoft.Extensions.Logging.ILogger<StorageAccessVerifier>>().Object);
-            var controller = new JwtIssuerController(jwtIssuerService, cache, storageAccessVerifier);
+            var providerCatalog = new CloudStorageProviderCatalog(new ICloudStorageProvider[] { new FakeCloudStorageProvider() });
+            var controller = new JwtIssuerController(jwtIssuerService, cache, providerCatalog);
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Scheme = "https";
             httpContext.Request.Host = new HostString("google.biatec.io");
@@ -201,6 +199,18 @@ namespace BiatecOIDCTests
             controller.Url = urlHelper.Object;
 
             return controller;
+        }
+
+        /// <summary>Minimal test double standing in for the real Google/Microsoft providers, which need heavier dependencies to construct.</summary>
+        private sealed class FakeCloudStorageProvider : ICloudStorageProvider
+        {
+            public string Name => "Google";
+            public string DisplayName => "Google";
+            public string RequiredScope => "fake-scope";
+            public Task<byte[]?> TryDownloadAsync(string fileName, string accessToken) => Task.FromResult<byte[]?>(null);
+            public Task UploadAsync(string fileName, byte[] content, string accessToken) => Task.CompletedTask;
+            public Task<bool> HasWriteAccessAsync(string accessToken) => Task.FromResult(true);
+            public Task<string?> GetAmbientAccessTokenAsync() => Task.FromResult<string?>(null);
         }
 
         private sealed class InMemoryDistributedCache : IDistributedCache

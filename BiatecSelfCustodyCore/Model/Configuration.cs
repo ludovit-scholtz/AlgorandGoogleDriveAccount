@@ -16,9 +16,9 @@ namespace BiatecSelfCustodyCore.Model
         public string ApplicationName { get; set; } = "Biatec";
 
         /// <summary>Google OAuth 2.0 client ID.</summary>
-        public string ClientId { get; set; }
+        public string? ClientId { get; set; }
 
         /// <summary>Google OAuth 2.0 client secret.</summary>
-        public string ClientSecret { get; set; }
+        public string? ClientSecret { get; set; }
     }
 }

@@ -1,10 +1,9 @@
+using System.Text.Json;
 using BiatecMCP.Model;
 using BiatecSelfCustodyCore.Model;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
-using System.Net.Http.Headers;
-using System.Text.Json;
 
 namespace BiatecMCP.BusinessLogic
 {
@@ -93,18 +92,18 @@ namespace BiatecMCP.BusinessLogic
 
                 // Use Google's tokeninfo endpoint to validate the token and get security information
                 var tokenInfoUrl = $"https://oauth2.googleapis.com/tokeninfo?access_token={Uri.EscapeDataString(token)}";
-                
+
                 var response = await _httpClient.GetAsync(tokenInfoUrl);
-                
+
                 if (response.IsSuccessStatusCode)
                 {
                     var content = await response.Content.ReadAsStringAsync();
                     var tokenInfo = JsonSerializer.Deserialize<JsonElement>(content);
-                    
+
                     var warnings = new List<string>();
                     var isSecure = true;
                     var requiresReauth = false;
-                    
+
                     // Check token expiration
                     if (tokenInfo.TryGetProperty("expires_in", out var expiresIn))
                     {
@@ -115,34 +114,34 @@ namespace BiatecMCP.BusinessLogic
                             requiresReauth = true;
                         }
                     }
-                    
+
                     // Check token scope - ensure it has the required scopes
                     if (tokenInfo.TryGetProperty("scope", out var scope))
                     {
                         var scopes = scope.GetString()?.Split(' ') ?? Array.Empty<string>();
                         var requiredScopes = new[] { "openid", "email", "profile" };
                         var missingScopes = requiredScopes.Where(rs => !scopes.Contains(rs)).ToArray();
-                        
+
                         if (missingScopes.Any())
                         {
                             warnings.Add($"Missing required scopes: {string.Join(", ", missingScopes)}");
                             isSecure = false;
                         }
-                        
+
                         // Check for additional security-related scopes (optional)
-                        var securityScopes = new[] { 
+                        var securityScopes = new[] {
                             "https://www.googleapis.com/auth/drive.file",
                             "https://www.googleapis.com/auth/userinfo.email",
                             "https://www.googleapis.com/auth/userinfo.profile"
                         };
-                        
+
                         var grantedSecurityScopes = securityScopes.Where(ss => scopes.Contains(ss)).ToArray();
                         if (grantedSecurityScopes.Any())
                         {
                             warnings.Add($"Enhanced security monitoring enabled with scopes: {string.Join(", ", grantedSecurityScopes)}");
                         }
                     }
-                    
+
                     // Validate audience (client ID)
                     if (tokenInfo.TryGetProperty("aud", out var audience))
                     {
@@ -154,7 +153,7 @@ namespace BiatecMCP.BusinessLogic
                             requiresReauth = true;
                         }
                     }
-                    
+
                     // Additional security checks
                     var securityChecks = PerformAdditionalSecurityChecks(tokenInfo);
                     warnings.AddRange(securityChecks.warnings);
@@ -210,7 +209,7 @@ namespace BiatecMCP.BusinessLogic
             var warnings = new List<string>();
             var isSecure = true;
             var requiresReauth = false;
-            
+
             try
             {
                 // Check if token was issued recently (security best practice)
@@ -218,19 +217,19 @@ namespace BiatecMCP.BusinessLogic
                 {
                     var issuedTime = DateTimeOffset.FromUnixTimeSeconds(issuedAt.GetInt64());
                     var timeSinceIssued = DateTimeOffset.UtcNow - issuedTime;
-                    
+
                     if (timeSinceIssued.TotalHours > 24)
                     {
                         warnings.Add("Token is older than 24 hours - consider refreshing for better security");
                     }
-                    
+
                     if (timeSinceIssued.TotalDays > 7)
                     {
                         warnings.Add("Token is older than 7 days - refresh recommended for enhanced security");
                         requiresReauth = true;
                     }
                 }
-                
+
                 // Check for email verification
                 if (tokenInfo.TryGetProperty("email_verified", out var emailVerified))
                 {
@@ -240,7 +239,7 @@ namespace BiatecMCP.BusinessLogic
                         requiresReauth = true;
                     }
                 }
-                
+
                 // Validate issuer
                 if (tokenInfo.TryGetProperty("iss", out var issuer))
                 {
@@ -252,18 +251,18 @@ namespace BiatecMCP.BusinessLogic
                         requiresReauth = true;
                     }
                 }
-                
+
                 // Check token usage patterns (basic Cross-Account Protection concept)
                 var userId = "";
                 if (tokenInfo.TryGetProperty("sub", out var subject))
                 {
                     userId = subject.GetString() ?? "";
-                    
+
                     // In a real implementation, you would check against stored usage patterns
                     // For now, we'll just log that Cross-Account Protection monitoring is active
                     warnings.Add("Cross-Account Protection monitoring active for enhanced security");
                 }
-                
+
                 return (warnings.ToArray(), isSecure, requiresReauth);
             }
             catch (Exception ex)
@@ -317,18 +316,18 @@ namespace BiatecMCP.BusinessLogic
                 {
                     AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(30) // Keep for 30 days
                 };
-                
+
                 await _cache.SetStringAsync(eventKey, JsonSerializer.Serialize(securityEvent), cacheOptions);
-                
+
                 // Log the security event for monitoring
-                _logger.LogWarning("Security event reported: {EventType} for user {UserId}. Details: {Details} (Cross-Account Protection: {CAPEnabled})", 
+                _logger.LogWarning("Security event reported: {EventType} for user {UserId}. Details: {Details} (Cross-Account Protection: {CAPEnabled})",
                     eventType, userId, details, _capConfig.CurrentValue.Enabled ? "Enabled" : "Disabled");
 
                 // In a production environment, you would:
                 // 1. Send to your security monitoring system
                 // 2. Send to Google via proper RISC API setup (requires publisher verification)
                 // 3. Trigger automated security responses
-                
+
                 return true;
             }
             catch (Exception ex)
@@ -345,7 +344,7 @@ namespace BiatecMCP.BusinessLogic
                 var scopeString = string.Join(" ", scopes);
                 var clientId = _config.CurrentValue.ClientId;
                 var host = _config.CurrentValue.Host;
-                
+
                 var reauthUrl = $"https://accounts.google.com/o/oauth2/v2/auth?" +
                     $"client_id={Uri.EscapeDataString(clientId)}&" +
                     $"response_type=code&" +

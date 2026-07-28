@@ -1,14 +1,13 @@
+using System.Security.Claims;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
+using BiatecSelfCustodyCore.Providers;
 using BiatecSelfCustodyCore.Repository;
 using Google.Apis.Auth.AspNetCore3;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.OpenApi;
-using System.Linq;
-using System.Security.Claims;
 
 namespace BiatecOIDC
 {
@@ -83,13 +82,16 @@ namespace BiatecOIDC
                 });
             });
 
-            // Self-custody storage backends (BiatecSelfCustodyCore) - see BiatecMCP/Program.cs for why
-            // both apps register the same set: ICloudAccountRepository is what JwtIssuerService uses
-            // to resolve the algorand_address claim, regardless of which provider the user signed in with.
-            builder.Services.AddSingleton<GoogleDriveFileStore>();
-            builder.Services.AddHttpClient<OneDriveFileStore>();
-            builder.Services.AddHttpClient<StorageAccessVerifier>();
-            builder.Services.AddScoped<IMicrosoftAuthProvider, MicrosoftAuthProvider>();
+            // Self-custody storage providers (BiatecSelfCustodyCore/Providers) - see BiatecMCP/Program.cs
+            // for why both apps register the same set: ICloudAccountRepository is what JwtIssuerService
+            // uses to resolve the algorand_address claim, regardless of which provider the user signed
+            // in with. To add a new provider, mirror both the registrations below and the matching
+            // AddOpenIdConnect(...) scheme block further down in both apps.
+            builder.Services.AddHttpClient<GoogleCloudStorageProvider>();
+            builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<GoogleCloudStorageProvider>());
+            builder.Services.AddHttpClient<MicrosoftCloudStorageProvider>();
+            builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<MicrosoftCloudStorageProvider>());
+            builder.Services.AddScoped<ICloudStorageProviderCatalog, CloudStorageProviderCatalog>();
             builder.Services.AddScoped<ICloudAccountRepository, CloudAccountRepository>();
 
             // Add business logic services
@@ -161,7 +163,7 @@ namespace BiatecOIDC
                                 return Task.CompletedTask;
                             }
 
-                            (context.Principal?.Identity as ClaimsIdentity)?.AddClaim(new Claim(AuthSchemeNames.IdpClaimType, AuthSchemeNames.Google));
+                            CloudStorageProviderClaims.Stamp(context.Principal, GoogleCloudStorageProvider.ProviderName);
                             return Task.CompletedTask;
                         },
                         OnAuthenticationFailed = context =>
@@ -172,7 +174,7 @@ namespace BiatecOIDC
                         }
                     };
                 })
-                .AddOpenIdConnect(AuthSchemeNames.Microsoft, options =>
+                .AddOpenIdConnect(MicrosoftCloudStorageProvider.ProviderName, options =>
                 {
                     options.Authority = $"https://login.microsoftonline.com/{entraConfig.TenantId}/v2.0";
                     options.ClientId = entraConfig.ClientId;
@@ -204,7 +206,7 @@ namespace BiatecOIDC
                         },
                         OnTokenValidated = context =>
                         {
-                            (context.Principal?.Identity as ClaimsIdentity)?.AddClaim(new Claim(AuthSchemeNames.IdpClaimType, AuthSchemeNames.Microsoft));
+                            CloudStorageProviderClaims.Stamp(context.Principal, MicrosoftCloudStorageProvider.ProviderName);
                             return Task.CompletedTask;
                         },
                         OnAuthenticationFailed = context =>
@@ -245,8 +247,6 @@ namespace BiatecOIDC
             app.UseAuthorization();
 
             app.MapControllers();
-
-            _ = app.Services.GetService<GoogleDriveFileStore>();
 
             app.Run();
         }

@@ -1,19 +1,20 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Net;
+using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Helper;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
+using BiatecSelfCustodyCore.Providers;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Distributed;
-using System.IdentityModel.Tokens.Jwt;
-using System.Net;
-using System.Security.Claims;
-using System.Text;
-using System.Text.Json;
 
 namespace BiatecOIDC.Controllers
 {
@@ -34,18 +35,14 @@ namespace BiatecOIDC.Controllers
 
         private readonly IJwtIssuerService _jwtIssuerService;
         private readonly IDistributedCache _cache;
-        private readonly StorageAccessVerifier _storageAccessVerifier;
+        private readonly ICloudStorageProviderCatalog _providerCatalog;
 
-        public JwtIssuerController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, StorageAccessVerifier storageAccessVerifier)
+        public JwtIssuerController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, ICloudStorageProviderCatalog providerCatalog)
         {
             _jwtIssuerService = jwtIssuerService;
             _cache = cache;
-            _storageAccessVerifier = storageAccessVerifier;
+            _providerCatalog = providerCatalog;
         }
-
-        /// <summary>Resolves a caller-supplied <c>idp</c> value ("google"/"microsoft") to its auth scheme name. Defaults to Google for anything else.</summary>
-        private static string ResolveScheme(string? idp) =>
-            string.Equals(idp, "microsoft", StringComparison.OrdinalIgnoreCase) ? AuthSchemeNames.Microsoft : AuthSchemeNames.Google;
 
         /// <summary>
         /// OIDC discovery document. Includes <c>end_session_endpoint</c>; front/back-channel logout
@@ -167,16 +164,20 @@ namespace BiatecOIDC.Controllers
         [HttpGet("select-provider")]
         public IActionResult SelectProvider([FromQuery] string requestId)
         {
-            var googleUrl = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = "google" }, Request.Scheme);
-            var microsoftUrl = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = "microsoft" }, Request.Scheme);
-
             var sb = new StringBuilder();
             sb.Append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Sign in to Biatec</title></head>");
             sb.Append("<body style=\"font-family:sans-serif;max-width:420px;margin:4rem auto;text-align:center;\">");
             sb.Append("<h1>Sign in to Biatec</h1>");
-            sb.Append("<p>Choose how you'd like to sign in. Your self-custody account is stored in the matching cloud storage (Google Drive or OneDrive).</p>");
-            sb.Append($"<p><a href=\"{WebUtility.HtmlEncode(googleUrl)}\" style=\"display:block;margin:1rem 0;padding:0.75rem;background:#4285F4;color:#fff;text-decoration:none;border-radius:6px;\">Continue with Google</a></p>");
-            sb.Append($"<p><a href=\"{WebUtility.HtmlEncode(microsoftUrl)}\" style=\"display:block;margin:1rem 0;padding:0.75rem;background:#0067B8;color:#fff;text-decoration:none;border-radius:6px;\">Continue with Microsoft</a></p>");
+            sb.Append("<p>Choose how you'd like to sign in. Your self-custody account is stored in the matching cloud storage.</p>");
+
+            // One button per registered ICloudStorageProvider - adding a new provider needs no
+            // change here, it just shows up.
+            foreach (var provider in _providerCatalog.All)
+            {
+                var url = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = provider.Name }, Request.Scheme);
+                sb.Append($"<p><a href=\"{WebUtility.HtmlEncode(url)}\" style=\"display:block;margin:1rem 0;padding:0.75rem;background:#333;color:#fff;text-decoration:none;border-radius:6px;\">Continue with {WebUtility.HtmlEncode(provider.DisplayName)}</a></p>");
+            }
+
             sb.Append("</body></html>");
 
             return Content(sb.ToString(), "text/html; charset=utf-8", Encoding.UTF8);
@@ -196,7 +197,7 @@ namespace BiatecOIDC.Controllers
         [HttpGet("authorize/challenge")]
         public IActionResult AuthorizeChallenge([FromQuery] string requestId, [FromQuery] string idp, [FromQuery] bool retried = false)
         {
-            var scheme = ResolveScheme(idp);
+            var provider = _providerCatalog.Resolve(idp);
             var callbackUrl = Url.Action(nameof(AuthorizeCallback), "JwtIssuer", new { requestId, retried }, Request.Scheme);
 
             var properties = new AuthenticationProperties
@@ -207,12 +208,10 @@ namespace BiatecOIDC.Controllers
             if (retried)
             {
                 properties.Items[OpenIdConnectIncrementalAuth.ForceConsentKey] = "true";
-                properties.Items[OpenIdConnectIncrementalAuth.IncrementalScopesKey] = scheme == AuthSchemeNames.Microsoft
-                    ? "https://graph.microsoft.com/Files.ReadWrite.AppFolder"
-                    : "https://www.googleapis.com/auth/drive.file";
+                properties.Items[OpenIdConnectIncrementalAuth.IncrementalScopesKey] = provider.RequiredScope;
             }
 
-            return Challenge(properties, scheme);
+            return Challenge(properties, provider.Name);
         }
 
         /// <summary>
@@ -258,13 +257,12 @@ namespace BiatecOIDC.Controllers
 
             if (!retried)
             {
-                var providerScheme = User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value ?? AuthSchemeNames.Google;
-                var accessToken = await HttpContext.GetTokenAsync(providerScheme, "access_token");
-                if (!string.IsNullOrEmpty(accessToken) &&
-                    !await _storageAccessVerifier.HasWriteAccessAsync(accessToken, StorageProviderExtensions.Parse(providerScheme)))
+                var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
+                var accessToken = await HttpContext.GetTokenAsync(provider.Name, "access_token");
+                if (!string.IsNullOrEmpty(accessToken) && !await provider.HasWriteAccessAsync(accessToken))
                 {
                     var retryRequestId = await _jwtIssuerService.StorePendingAuthorizeRequestAsync(validation.NormalizedRequest);
-                    return AuthorizeChallenge(retryRequestId, providerScheme, retried: true);
+                    return AuthorizeChallenge(retryRequestId, provider.Name, retried: true);
                 }
             }
 

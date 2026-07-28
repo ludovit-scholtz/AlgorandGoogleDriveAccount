@@ -1,7 +1,7 @@
 using BiatecMCP.BusinessLogic;
 using BiatecMCP.Controllers;
 using BiatecMCP.Model;
-using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Providers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -20,7 +20,7 @@ namespace BiatecMCPTests
         private Mock<IDevicePairingService> _mockDevicePairingService = null!;
         private Mock<ILogger<DevicePairingController>> _mockLogger = null!;
         private Mock<IHostEnvironment> _mockEnvironment = null!;
-        private StorageAccessVerifier _storageAccessVerifier = null!;
+        private ICloudStorageProviderCatalog _providerCatalog = null!;
         private DevicePairingController _controller = null!;
 
         [SetUp]
@@ -29,8 +29,8 @@ namespace BiatecMCPTests
             _mockDevicePairingService = new Mock<IDevicePairingService>();
             _mockLogger = new Mock<ILogger<DevicePairingController>>();
             _mockEnvironment = new Mock<IHostEnvironment>();
-            _storageAccessVerifier = new StorageAccessVerifier(new HttpClient(), new Mock<ILogger<StorageAccessVerifier>>().Object);
-            _controller = new DevicePairingController(_mockDevicePairingService.Object, _storageAccessVerifier, _mockLogger.Object, _mockEnvironment.Object);
+            _providerCatalog = new CloudStorageProviderCatalog(new ICloudStorageProvider[] { new FakeCloudStorageProvider() });
+            _controller = new DevicePairingController(_mockDevicePairingService.Object, _providerCatalog, _mockLogger.Object, _mockEnvironment.Object);
         }
 
         [TestFixture]

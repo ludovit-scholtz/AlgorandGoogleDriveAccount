@@ -1,10 +1,11 @@
+using System.Security.Claims;
 using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
+using BiatecSelfCustodyCore.Providers;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System.Security.Claims;
 
 namespace BiatecMCP.Controllers
 {
@@ -18,13 +19,16 @@ namespace BiatecMCP.Controllers
     public class DriveController : ControllerBase
     {
         private readonly IDriveService _driveService;
+        private readonly ICloudStorageProviderCatalog _providerCatalog;
         private readonly ILogger<DriveController> _logger;
 
         public DriveController(
             IDriveService driveService,
+            ICloudStorageProviderCatalog providerCatalog,
             ILogger<DriveController> logger)
         {
             _driveService = driveService;
+            _providerCatalog = providerCatalog;
             _logger = logger;
         }
 
@@ -46,7 +50,7 @@ namespace BiatecMCP.Controllers
                     return BadRequest(new ProblemDetails() { Detail = "Email not found in claims. Please login first." });
                 }
 
-                var provider = StorageProviderExtensions.Parse(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
+                var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value).Name;
                 var signedTransaction = await _driveService.SignTransactionAsync(email, txMsgPack, provider);
                 return Ok(signedTransaction);
             }
@@ -76,7 +80,7 @@ namespace BiatecMCP.Controllers
                 {
                     return BadRequest(new ProblemDetails() { Detail = "No access token found. Please login first." });
                 }
-                
+
                 return Ok(accessToken);
             }
             catch (Exception exc)
@@ -102,7 +106,7 @@ namespace BiatecMCP.Controllers
                     return BadRequest(new ProblemDetails() { Detail = "Email not found in claims. Please login first." });
                 }
 
-                var provider = StorageProviderExtensions.Parse(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
+                var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value).Name;
                 var address = await _driveService.GetAccountAddressAsync(email, provider);
                 return Ok(address);
             }
@@ -130,14 +134,12 @@ namespace BiatecMCP.Controllers
         [HttpGet("login")]
         public IActionResult Login(string? redirectUri = null, string idp = "google")
         {
-            var scheme = string.Equals(idp, "microsoft", StringComparison.OrdinalIgnoreCase)
-                ? AuthSchemeNames.Microsoft
-                : AuthSchemeNames.Google;
+            var provider = _providerCatalog.Resolve(idp);
 
             return Challenge(new AuthenticationProperties
             {
                 RedirectUri = ResolveLocalRedirectUri(redirectUri)
-            }, scheme);
+            }, provider.Name);
         }
 
         /// <summary>

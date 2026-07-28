@@ -114,7 +114,7 @@ namespace BiatecOIDC.Helper
                 return "/";
             }
 
-            if (absolutePath.Length > 1 && absolutePath.EndsWith("/", StringComparison.Ordinal))
+            if (absolutePath.Length > 1 && absolutePath.EndsWith('/'))
             {
                 return absolutePath.TrimEnd('/');
             }

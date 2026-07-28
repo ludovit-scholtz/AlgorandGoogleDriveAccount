@@ -197,9 +197,8 @@
             <input type="text" id="deviceName" placeholder="e.g., My Desktop, Mobile App, etc.">
         </div>
 
-        <div class="button-container">
-            <button onclick="pairDevice('google')">Continue with Google</button>
-            <button onclick="pairDevice('microsoft')">Continue with Microsoft</button>
+        <div class="button-container" id="providerButtons">
+            <!-- Populated from GET /api/device/providers so adding a new provider needs no HTML change -->
             <!--<button onclick="requestDriveAccess()" id="driveAccessBtn" disabled>Request Drive Access</button>
             <button onclick="checkPortfolio()" id="portfolioBtn" disabled>Check Portfolio</button>
             <button onclick="checkSecurityStatus()" id="securityBtn" disabled>Check Security Status</button>
@@ -339,10 +338,27 @@
             document.getElementById('showInfoBtn').disabled = true;
         }
 
+        async function loadProviderButtons() {
+            const container = document.getElementById('providerButtons');
+            try {
+                const response = await fetch('/api/device/providers');
+                const providers = await response.json();
+                container.innerHTML = providers
+                    .map(p => `<button onclick="pairDevice('${p.name}')">Continue with ${p.displayName}</button>`)
+                    .join('');
+            } catch (error) {
+                // Fall back to the two known providers if the endpoint is unreachable, rather than
+                // leaving the page with no way to start pairing at all.
+                container.innerHTML =
+                    '<button onclick="pairDevice(\'Google\')">Continue with Google</button>' +
+                    '<button onclick="pairDevice(\'Microsoft\')">Continue with Microsoft</button>';
+            }
+        }
+
         function pairDevice(idp) {
             let sessionId = document.getElementById('sessionId').value.trim();
             const deviceName = document.getElementById('deviceName').value.trim() || 'MCP';
-            idp = (idp === 'microsoft') ? 'microsoft' : 'google';
+            idp = idp || 'Google';
 
             if (!sessionId) {
                 sessionId = generateSessionId();
@@ -565,6 +581,8 @@
 
         // Check if we're returning from OAuth flow or if session parameter is provided
         window.onload = function() {
+            loadProviderButtons();
+
             const urlParams = new URLSearchParams(window.location.search);
             const sessionId = urlParams.get('sessionId');
             const sessionParam = urlParams.get('session');
