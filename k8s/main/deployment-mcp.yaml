@@ -94,8 +94,10 @@ metadata:
     nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
     cert-manager.io/cluster-issuer: letsencrypt
     nginx.ingress.kubernetes.io/rewrite-target: /$1
-    # Required alongside a regex path (`/(.*)`) under pathType: Prefix - without it, ingress-nginx's
-    # admission webhook rejects the Ingress outright ("path /(.*) cannot be used with pathType Prefix").
+    # Required for the regex path (`/(.*)`) below. Also requires pathType: ImplementationSpecific on
+    # that path, not Prefix - Prefix means a literal path-segment match per the Ingress spec, so
+    # ingress-nginx's admission webhook rejects a regex there even with this annotation set
+    # ("path /(.*) cannot be used with pathType Prefix").
     nginx.ingress.kubernetes.io/use-regex: "true"
 
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
@@ -116,7 +118,7 @@ spec:
       http:
         paths:
           - path: /(.*)
-            pathType: Prefix
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: biatec-mcp-service

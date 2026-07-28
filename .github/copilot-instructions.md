@@ -127,6 +127,12 @@ a carved-out set of paths on `google.biatec.io` (a legacy alias, kept working fo
 - `k8s/main/deployment-mcp.yaml` — `biatec-mcp-app-deployment`/`biatec-mcp-service`/`biatec-mcp-ingress`.
   Catch-all path (`/(.*)`, `rewrite-target: /$1`) on `google.biatec.io` — this is the default backend for the
   host, so `/mcp`, `/api/drive`, `/api/device`, `/`, and all static `wwwroot` pages keep resolving here unchanged.
+  Any Ingress using this regex-catch-all idiom (this one, `biatec-oidc-domain-ingress`, and both `k8s/stage/*`
+  Ingresses) needs **both** `nginx.ingress.kubernetes.io/use-regex: "true"` **and**
+  `pathType: ImplementationSpecific` on that path — `pathType: Prefix` means a literal path-segment match per
+  the Ingress spec, so ingress-nginx's admission webhook rejects a regex path there even with `use-regex` set
+  (`path /(.*) cannot be used with pathType Prefix`). The literal/`Exact`-path `biatec-oidc-ingress` below needs
+  neither, since none of its paths are regexes.
 - `k8s/main/deployment-oidc.yaml` — two Ingress objects for `biatec-oidc-app-deployment`/`biatec-oidc-service`:
   - `biatec-oidc-ingress` — claims only the OIDC-specific literal paths on the shared `google.biatec.io` host
     (`/.well-known`, `/authorize`, `/token`, `/userinfo`, `/introspect`, `/verify`, `/connect/endsession`,
