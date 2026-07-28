@@ -6,11 +6,19 @@ identity claims (`algorand_address`).
 
 This service was split out of the original combined `AlgorandGoogleDriveAccount` project so the
 OIDC/JWT issuer can be deployed, scaled, and rolled out independently from the `BiatecMCP` MCP
-server. It's deployed separately but reachable at the same public host,
-`https://google.biatec.io`, via its own Kubernetes Ingress that claims only the OIDC-specific
-paths (`/authorize`, `/token`, `/.well-known/*`, `/userinfo`, `/introspect`, `/verify`,
-`/connect/endsession`, `/logout`, `/select-provider`, `/oidc/signin-google`,
-`/oidc/signin-microsoft`) — everything else on that host is routed to `BiatecMCP`.
+server. It's deployed separately, and reachable at two public hosts:
+
+- `https://oidc.biatec.io` — its own dedicated domain, the recommended host for new integrations,
+  routed entirely to this service via its own Kubernetes Ingress (`biatec-oidc-domain-ingress`).
+- `https://google.biatec.io` — the original shared host, kept working as a legacy alias for
+  existing integrations, via a separate Ingress that claims only the OIDC-specific paths
+  (`/authorize`, `/token`, `/.well-known/*`, `/userinfo`, `/introspect`, `/verify`,
+  `/connect/endsession`, `/logout`, `/select-provider`, `/oidc/signin-google`,
+  `/oidc/signin-microsoft`) — everything else on that host is routed to `BiatecMCP`.
+
+Both hosts are internally self-consistent: the `iss` claim and discovery `issuer` field are derived
+from whichever host actually received the request (see `JwtIssuerService.GetIssuer`), not hardcoded
+to one value, so neither host's discovery document is broken by the other's existence.
 
 It depends on the sibling `BiatecSelfCustodyCore` class library (also referenced by `BiatecMCP`)
 to read the user's self-custody Algorand account address (Google Drive or OneDrive, depending on

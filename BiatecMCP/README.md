@@ -357,6 +357,7 @@ This project is proprietary software owned by Scholtz & Company, j.s.a.
 
 The OIDC/JWT identity provider (whitelisted apps authenticating via Biatec Google auth and
 receiving signed JWTs with Algorand identity claims) has moved to a separate deployment,
-`BiatecOIDC/` (see its `README.md` and `OIDC_INTEGRATION_GUIDE.md`). It's still reachable at the
-same `https://google.biatec.io` host, on its own set of paths (`/authorize`, `/token`,
-`/.well-known/*`, etc.) via a separate Kubernetes Ingress.
+`BiatecOIDC/` (see its `README.md` and `OIDC_INTEGRATION_GUIDE.md`). It has its own dedicated
+domain, `https://oidc.biatec.io`, and remains reachable on this host's own set of paths
+(`/authorize`, `/token`, `/.well-known/*`, etc., via a separate Kubernetes Ingress) as a legacy
+alias for existing integrations.

@@ -17,8 +17,8 @@ itself created, never the rest of the user's Drive. The direct Microsoft Graph e
 delegated permission **`Files.ReadWrite.AppFolder`**, which confines the app to a special,
 per-app folder (`/me/drive/special/approot`) that Microsoft manages - the app can never browse,
 list, or read anything else in the user's OneDrive. This is the permission this codebase is built
-around (see `BiatecSelfCustodyCore/Repository/OneDriveFileStore.cs`); do not substitute the
-broader `Files.ReadWrite` (all files) permission.
+around (see `BiatecSelfCustodyCore/Providers/MicrosoftCloudStorageProvider.cs`); do not substitute
+the broader `Files.ReadWrite` (all files) permission.
 
 ## 1. Create the App Registration
 
@@ -33,9 +33,12 @@ broader `Files.ReadWrite` (all files) permission.
      organization - use that tenant's ID (or `organizations`) as `MicrosoftEntra:TenantId` instead.
 4. **Redirect URI** (platform: **Web**) - add all of these that apply to your deployment:
    - `https://google.biatec.io/signin-microsoft` (BiatecMCP, production)
-   - `https://google.biatec.io/oidc/signin-microsoft` (BiatecOIDC, production - **note the
-     different path** from BiatecMCP's, required so the callback lands on the right service; see
-     `k8s/main/deployment-oidc.yaml`)
+   - `https://google.biatec.io/oidc/signin-microsoft` (BiatecOIDC, production, legacy alias host -
+     **note the different path** from BiatecMCP's, required so the callback lands on the right
+     service; see `k8s/main/deployment-oidc.yaml`)
+   - `https://oidc.biatec.io/oidc/signin-microsoft` (BiatecOIDC, production, **oidc.biatec.io is
+     the recommended host for new integrations** - same `CallbackPath` as the alias above, just a
+     different host, so it needs its own redirect URI entry here)
    - `https://localhost:7203/signin-microsoft` (BiatecMCP, local dev - adjust the port to match
      your `launchSettings.json`)
    - `https://localhost:7204/oidc/signin-microsoft` (BiatecOIDC, local dev)

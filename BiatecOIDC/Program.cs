@@ -7,6 +7,7 @@ using BiatecSelfCustodyCore.Repository;
 using Google.Apis.Auth.AspNetCore3;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.OpenApi;
 
 namespace BiatecOIDC
@@ -247,6 +248,16 @@ namespace BiatecOIDC
             app.UseAuthorization();
 
             app.MapControllers();
+
+            // Startup warm-up (do not remove, see CLAUDE.md "Startup warm-up" convention): force
+            // controller/action discovery and endpoint/route-table compilation to happen now, during
+            // startup, instead of lazily on whichever request Kubernetes routes here first once the
+            // pod's readiness probe passes.
+            _ = app.Services.GetRequiredService<IActionDescriptorCollectionProvider>().ActionDescriptors;
+            foreach (var dataSource in ((Microsoft.AspNetCore.Routing.IEndpointRouteBuilder)app).DataSources)
+            {
+                _ = dataSource.Endpoints;
+            }
 
             app.Run();
         }

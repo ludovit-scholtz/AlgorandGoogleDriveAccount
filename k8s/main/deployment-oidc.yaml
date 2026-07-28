@@ -192,3 +192,45 @@ spec:
                 name: biatec-oidc-service
                 port:
                   number: 5443
+
+---
+# Dedicated Ingress for oidc.biatec.io - this domain belongs entirely to BiatecOIDC (no MCP catch-all
+# to share it with), so it's a full catch-all straight to biatec-oidc-service, using the same
+# regex-path + rewrite-target idiom as biatec-mcp-ingress in deployment-mcp.yaml. Kept as its own
+# Ingress object rather than an extra host block on biatec-oidc-ingress above, because the
+# rewrite-target annotation needed for the catch-all applies to the whole Ingress object and would
+# also change how that Ingress's literal/Exact paths for google.biatec.io are matched.
+#
+# google.biatec.io's /authorize, /token, /.well-known/*, etc. (biatec-oidc-ingress above) keep
+# working unchanged as a legacy alias for existing integrations - JwtIssuerService derives the
+# `iss` claim and discovery `issuer` field from the actual incoming request host whenever
+# JwtIssuer:Issuer isn't set in config (see JwtIssuerService.GetIssuer), and it deliberately isn't
+# set here, so each host stays internally self-consistent (its own discovery document always
+# matches the host used to fetch it) without any per-host configuration. oidc.biatec.io is simply
+# the recommended host to hand out for new integrations going forward.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: biatec-oidc-domain-ingress
+  namespace: biatec
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/rewrite-target: /$1
+spec:
+  ingressClassName: "nginx"
+  tls:
+    - hosts:
+        - oidc.biatec.io
+      secretName: tls-oidc.biatec.io
+  rules:
+    - host: oidc.biatec.io
+      http:
+        paths:
+          - path: /(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: biatec-oidc-service
+                port:
+                  number: 5443

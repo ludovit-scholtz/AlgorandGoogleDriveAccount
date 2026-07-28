@@ -106,3 +106,9 @@ Expected frontend behavior:
 
 Recommended value:
 - `VITE_BIATEC_OIDC_END_SESSION_URL=https://google.biatec.io/connect/endsession`
+
+(Capitalism is already integrated against `google.biatec.io`; keep using it there unless you
+deliberately migrate. `https://oidc.biatec.io/connect/endsession` is the equivalent recommended
+endpoint for any *new* integration — see `OIDC_INTEGRATION_GUIDE.md`. Don't mix hosts within the
+same integration: whichever host you authorized against is the one whose `/connect/endsession` you
+must call, since `iss` is derived per-host.)

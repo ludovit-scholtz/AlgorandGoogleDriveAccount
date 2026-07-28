@@ -2,6 +2,13 @@
 
 This project now exposes a standards-oriented OpenID Connect style identity provider so other applications can delegate login to Biatec Google authentication and receive signed JWT tokens containing Algorand identity claims.
 
+**Host**: `https://oidc.biatec.io` is the recommended host for new integrations — use it below. The
+service is also still reachable at `https://google.biatec.io` (its original, shared host, kept
+working as a legacy alias for existing integrations). Each host is internally self-consistent: the
+`iss` claim and the discovery document's `issuer` field always match whichever host you actually
+call — they are derived from the request, not hardcoded — so pick one host and use it consistently
+for a given client (don't mix the two for the same integration).
+
 ## Goals
 
 - Reuse Google login session from this service.
@@ -62,12 +69,16 @@ Important behavior for Drive consent:
 
 ## Configuration
 
-Configure `JwtIssuer` in `appsettings.json`.
+Configure `JwtIssuer` in `appsettings.json`. Leave `Issuer` blank/unset to have it derived from
+each incoming request's own scheme+host instead of a fixed value — this is what the production
+deployment actually does, specifically so both `oidc.biatec.io` and the legacy `google.biatec.io`
+alias each serve their own internally-consistent `iss`/discovery `issuer` without one breaking the
+other. Only set `Issuer` explicitly (as below) if this service is reachable at exactly one host.
 
 ```json
 "JwtIssuer": {
   "Enabled": true,
-  "Issuer": "https://google.biatec.io",
+  "Issuer": "https://oidc.biatec.io",
   "KeyId": "biatec-main-key",
   "SigningPrivateKeyPem": "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----",
   "AuthorizationCodeLifetimeSeconds": 120,
@@ -150,7 +161,7 @@ Use authorization code flow.
 1. Redirect browser to:
 
 ```text
-GET https://google.biatec.io/authorize
+GET https://oidc.biatec.io/authorize
   ?client_id=my-app
   &redirect_uri=https%3A%2F%2Fmy-app.example.com%2Fauth%2Fcallback
   &response_type=code
@@ -164,7 +175,7 @@ GET https://google.biatec.io/authorize
 4. Your backend exchanges code at token endpoint:
 
 ```text
-POST https://google.biatec.io/token
+POST https://oidc.biatec.io/token
 Content-Type: application/x-www-form-urlencoded
 Authorization: Basic base64(client_id:client_secret)
 
@@ -195,7 +206,7 @@ This is the standard flow for an Android app using AppAuth (or an equivalent PKC
 2. Open the system browser / Custom Tab to:
 
 ```text
-GET https://google.biatec.io/authorize
+GET https://oidc.biatec.io/authorize
   ?client_id=my-mobile-app
   &redirect_uri=io.example.myapp%3A%2Foauth2redirect
   &response_type=code
@@ -213,7 +224,7 @@ GET https://google.biatec.io/authorize
 5. The app exchanges the code directly from the device — no `client_secret`, no backend needed:
 
 ```text
-POST https://google.biatec.io/token
+POST https://oidc.biatec.io/token
 Content-Type: application/x-www-form-urlencoded
 
 grant_type=authorization_code
@@ -249,7 +260,7 @@ Dedicated requirements doc for Capitalism integrators:
 2. Redirect browser to:
 
 ```text
-GET https://google.biatec.io/connect/endsession
+GET https://oidc.biatec.io/connect/endsession
   ?id_token_hint=<last_id_token>
   &post_logout_redirect_uri=https%3A%2F%2Fmy-app.example.com%2Flogin
   &state=<csrf_or_logout_state>
@@ -269,7 +280,7 @@ Notes:
 - For best interoperability, send both `id_token_hint` and `client_id`.
 - Discovery metadata includes `end_session_endpoint` for dynamic client configuration.
 - Capitalism frontend environment variable:
-  - `VITE_BIATEC_OIDC_END_SESSION_URL=https://google.biatec.io/connect/endsession`
+  - `VITE_BIATEC_OIDC_END_SESSION_URL=https://oidc.biatec.io/connect/endsession`
 
 Example accepted logout redirect:
 
@@ -306,7 +317,7 @@ This path defaults to `response_type=id_token` and `response_mode=form_post` for
 Use this prompt in your destination project so Copilot can scaffold integration quickly:
 
 ```text
-Implement OpenID Connect authorization code login against issuer https://google.biatec.io.
+Implement OpenID Connect authorization code login against issuer https://oidc.biatec.io.
 Requirements:
 - Discover metadata from /.well-known/openid-configuration.
 - Start login by redirecting to /authorize with client_id, redirect_uri, response_type=code, scope=openid profile email, state, nonce.
