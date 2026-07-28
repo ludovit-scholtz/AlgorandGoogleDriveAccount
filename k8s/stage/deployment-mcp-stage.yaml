@@ -105,6 +105,9 @@ metadata:
     nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
     cert-manager.io/cluster-issuer: letsencrypt
     nginx.ingress.kubernetes.io/rewrite-target: /$1
+    # Required alongside a regex path (`/(.*)`) under pathType: Prefix - without it, ingress-nginx's
+    # admission webhook rejects the Ingress outright ("path /(.*) cannot be used with pathType Prefix").
+    nginx.ingress.kubernetes.io/use-regex: "true"
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
     nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
