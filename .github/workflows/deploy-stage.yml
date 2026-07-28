@@ -96,17 +96,22 @@ jobs:
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
 
+      # Must run BEFORE "Apply Kubernetes manifests": on a brand-new Deployment, `kubectl apply`
+      # schedules its Pods immediately, so if the ConfigMap a Pod's volume mounts doesn't exist yet,
+      # the Pod fails to start (MountVolume.SetUp failed: configmap "..." not found). Creating/updating
+      # the ConfigMap first guarantees it always exists before any Pod that mounts it is scheduled -
+      # whether that's the first-ever apply of a new Deployment or a later rollout restart. Uses
+      # `apply` (via `--dry-run=client -o yaml | kubectl apply -f -`) instead of `delete` + `create` so
+      # there's never a window where the ConfigMap doesn't exist at all.
+      - name: Update stage config maps
+        run: |
+          kubectl create configmap biatec-mcp-stage-conf --from-file=k8s/stage/conf-mcp-stage -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create configmap biatec-oidc-stage-conf --from-file=k8s/stage/conf-oidc-stage -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Apply Kubernetes manifests (stage)
         run: |
           kubectl apply -f k8s/stage/deployment-mcp-stage.yaml -n "$NAMESPACE"
           kubectl apply -f k8s/stage/deployment-oidc-stage.yaml -n "$NAMESPACE"
-
-      - name: Update stage config maps
-        run: |
-          kubectl delete configmap biatec-mcp-stage-conf -n "$NAMESPACE" --ignore-not-found
-          kubectl create configmap biatec-mcp-stage-conf --from-file=k8s/stage/conf-mcp-stage -n "$NAMESPACE"
-          kubectl delete configmap biatec-oidc-stage-conf -n "$NAMESPACE" --ignore-not-found
-          kubectl create configmap biatec-oidc-stage-conf --from-file=k8s/stage/conf-oidc-stage -n "$NAMESPACE"
 
       - name: Roll out stage deployments
         run: |
