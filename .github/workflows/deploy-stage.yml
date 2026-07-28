@@ -1,0 +1,120 @@
+name: Build and Deploy to Stage
+
+# Every push to master builds both images and deploys them straight to the stage environment only
+# (k8s/stage/*, host stage.google.biatec.io / stage.oidc.biatec.io) - production (k8s/main/*) is never
+# touched by this workflow. Once stage has been tested, promote the exact same image tag to production
+# with the separate, manually-triggered "promote-production.yml" workflow. See
+# docs/CICD_GITHUB_ACTIONS.md and docs/STAGE_ENVIRONMENT.md.
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+env:
+  IMAGE_MCP: scholtz2/biatec-mcp
+  IMAGE_OIDC: scholtz2/biatec-oidc
+  NAMESPACE: biatec
+
+jobs:
+  build-and-deploy-stage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Same versioning scheme historically used by deploy.sh: 1.<year>.<month>.<day>-main. This is
+      # the same tag that promote-production.yml later applies to production, unchanged - the image
+      # is built exactly once here and never rebuilt for production.
+      - name: Compute version
+        id: version
+        run: |
+          ver="1.$(date -u '+%Y').$(date -u '+%m').$(date -u '+%d')"
+          version="$ver-main"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Computed version: $version"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push BiatecMCP image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: BiatecMCP/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_MCP }}:${{ steps.version.outputs.version }}
+
+      - name: Build and push BiatecOIDC image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: BiatecOIDC/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_OIDC }}:${{ steps.version.outputs.version }}
+
+      - name: Update stage manifests with new image tags
+        run: |
+          sed -i "s~${IMAGE_MCP}.*~${IMAGE_MCP}:${{ steps.version.outputs.version }}~g" k8s/stage/deployment-mcp-stage.yaml
+          sed -i "s~${IMAGE_OIDC}.*~${IMAGE_OIDC}:${{ steps.version.outputs.version }}~g" k8s/stage/deployment-oidc-stage.yaml
+
+      - name: Commit updated stage manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- k8s/stage/deployment-mcp-stage.yaml k8s/stage/deployment-oidc-stage.yaml; then
+            git add k8s/stage/deployment-mcp-stage.yaml k8s/stage/deployment-oidc-stage.yaml
+            git commit -m "cicd deploy ${{ steps.version.outputs.version }} to stage [skip ci]"
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin master && git push && break
+              echo "Push attempt $i failed, retrying..."
+              sleep $((i * 3))
+            done
+          else
+            echo "No manifest changes to commit"
+          fi
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBE_CONFIG" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Apply Kubernetes manifests (stage)
+        run: |
+          kubectl apply -f k8s/stage/deployment-mcp-stage.yaml -n "$NAMESPACE"
+          kubectl apply -f k8s/stage/deployment-oidc-stage.yaml -n "$NAMESPACE"
+
+      - name: Update stage config maps
+        run: |
+          kubectl delete configmap biatec-mcp-stage-conf -n "$NAMESPACE" --ignore-not-found
+          kubectl create configmap biatec-mcp-stage-conf --from-file=k8s/stage/conf-mcp-stage -n "$NAMESPACE"
+          kubectl delete configmap biatec-oidc-stage-conf -n "$NAMESPACE" --ignore-not-found
+          kubectl create configmap biatec-oidc-stage-conf --from-file=k8s/stage/conf-oidc-stage -n "$NAMESPACE"
+
+      - name: Roll out stage deployments
+        run: |
+          kubectl rollout restart deployment/biatec-mcp-stage-app-deployment -n "$NAMESPACE"
+          kubectl rollout status deployment/biatec-mcp-stage-app-deployment -n "$NAMESPACE"
+          kubectl rollout restart deployment/biatec-oidc-stage-app-deployment -n "$NAMESPACE"
+          kubectl rollout status deployment/biatec-oidc-stage-app-deployment -n "$NAMESPACE"
+
+      - name: Remove kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"

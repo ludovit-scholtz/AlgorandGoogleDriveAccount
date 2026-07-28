@@ -100,12 +100,17 @@ dotnet run --project BiatecOIDC/BiatecOIDC.csproj
 
 Both services require Redis (`Redis:ConnectionString` in their respective `appsettings.json`), Google OAuth 2.0
 credentials (`App:ClientId`/`App:ClientSecret`), and Microsoft Entra ID credentials
-(`MicrosoftEntra:TenantId`/`ClientId`/`ClientSecret` — see `BiatecOIDC/ENTRA_SETUP_GUIDE.md`) to run. CI
-(`.github/workflows/build-api.yml`) builds/pushes two Docker images (one per service) and applies both straight to
-the Kubernetes cluster on push to `master` — no staging server or SSH involved. See
-[docs/CICD_GITHUB_ACTIONS.md](../docs/CICD_GITHUB_ACTIONS.md) for the required GitHub secrets and
-[docs/KUBE_CONFIG_SECURITY.md](../docs/KUBE_CONFIG_SECURITY.md) for why the CI kubeconfig is namespace-scoped and
-short-lived. There is no automated test job in CI, so run tests locally before pushing.
+(`MicrosoftEntra:TenantId`/`ClientId`/`ClientSecret` — see `BiatecOIDC/ENTRA_SETUP_GUIDE.md`) to run.
+
+CI is two separate GitHub Actions workflows, not one — nothing pushed to `master` reaches production
+automatically. `.github/workflows/deploy-stage.yml` builds/pushes both Docker images and deploys them
+straight to the **stage** environment on every push to `master`. `.github/workflows/promote-production.yml`
+is manually triggered (`workflow_dispatch`) and re-deploys an already-built, already-stage-tested image tag
+to **production** — it never rebuilds anything. See [docs/STAGE_ENVIRONMENT.md](../docs/STAGE_ENVIRONMENT.md)
+for the full stage/production architecture and [docs/CICD_GITHUB_ACTIONS.md](../docs/CICD_GITHUB_ACTIONS.md)
+for the required GitHub secrets (shared by both workflows) and
+[docs/KUBE_CONFIG_SECURITY.md](../docs/KUBE_CONFIG_SECURITY.md) for why the CI kubeconfig is namespace-scoped
+and short-lived. There is no automated test job in CI, so run tests locally before pushing.
 
 Root `.editorconfig` + `Directory.Build.props` (auto-imported by all 5 `.csproj`s) enable the built-in Roslyn
 analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. Run `dotnet format Biatec.slnx` to
@@ -157,6 +162,21 @@ Both deployments reuse the same secrets (`google-account-main-app-secret` for ap
 `csharp-cert`/`csharp-cert-password` for the internal Kestrel HTTPS cert) — there was no need to provision new
 ones. Config is split per-service: `k8s/main/conf-mcp/` / `biatec-mcp-conf` and `k8s/main/conf-oidc/` /
 `biatec-oidc-conf`.
+
+## Stage environment
+
+`k8s/stage/` mirrors `k8s/main/` for both services, at `stage.google.biatec.io` /
+`stage.oidc.biatec.io`, in the **same `biatec` namespace** with `-stage`-suffixed resource names
+(not a separate namespace — the existing namespace-scoped CI `Role` grants verbs on resource
+*types*, so stage needed no new RBAC). `deploy-stage.yml` deploys here on every push to `master`;
+`k8s/main/*` (production) only changes via the manually-triggered `promote-production.yml`. Stage
+reuses the same `google-account-main-app-secret` as production, EXCEPT `App:StorageFolderName` is
+`"BiatecStage"` there (vs `"Biatec"` in production) — set directly in the stage ConfigMaps, this is
+what actually keeps self-custody files isolated even when a tester signs in with a real
+Google/Microsoft account in both environments. See
+[docs/STAGE_ENVIRONMENT.md](../docs/STAGE_ENVIRONMENT.md) for the full picture, including what is
+*not* isolated between stage and production (shared Redis DB, shared JWT signing key today) and the
+one-time DNS/OAuth-redirect-URI setup stage needs.
 
 ## Architecture notes
 

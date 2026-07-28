@@ -1,27 +1,46 @@
 # CI/CD via GitHub Actions
 
-The `build-api.yml` workflow (`.github/workflows/build-api.yml`) builds two Docker images — one for
-the `BiatecMCP` service (MCP server + Google Drive self-custody backend) and one for the
-`BiatecOIDC` service (OIDC/JWT identity provider) — pushes them to Docker Hub, updates the
-Kubernetes manifests with the new image tags, and applies both directly to the cluster from the
-GitHub Actions runner. Everything is managed by the pipeline itself; there is no staging server or
-SSH involved.
+Two workflows, not one, deploy `BiatecMCP` and `BiatecOIDC` — nothing pushed to `master` reaches
+production automatically:
 
-## What the pipeline does, on every push to `master`
+- **`deploy-stage.yml`** — runs on every push to `master`. Builds both Docker images, pushes them
+  to Docker Hub, and deploys them to the **stage** environment (`k8s/stage/*`,
+  `stage.google.biatec.io` / `stage.oidc.biatec.io`) only.
+- **`promote-production.yml`** — runs only when manually triggered (Actions tab → **Run
+  workflow**). Takes a version tag that stage already ran and re-deploys that exact image to
+  **production** (`k8s/main/*`), without rebuilding anything.
+
+See [STAGE_ENVIRONMENT.md](STAGE_ENVIRONMENT.md) for the full architecture: what is/isn't isolated
+between stage and production, the one-time DNS/OAuth-redirect-URI setup stage needs, and how to run
+a promotion. This document covers what's shared between both pipelines: Docker Hub, the CI
+kubeconfig, and the one-time cluster setup.
+
+## What `deploy-stage.yml` does, on every push to `master`
 
 1. Computes a version tag `1.<year>.<month>.<day>-main`, matching the scheme the old `deploy.sh`
-   used (e.g. `1.2026.07.23-main`). Both images share the same version tag.
+   used (e.g. `1.2026.07.23-main`). Both images share the same version tag — `promote-production.yml`
+   later applies this exact tag to production, unchanged.
 2. Builds `BiatecMCP/Dockerfile` and pushes `scholtz2/biatec-mcp:<version>`, and builds
    `BiatecOIDC/Dockerfile` and pushes `scholtz2/biatec-oidc:<version>`, to Docker Hub.
-3. Updates the image tags in `k8s/main/deployment-mcp.yaml` and `k8s/main/deployment-oidc.yaml`
-   and commits that change back to `master` with `[skip ci]` (so it doesn't retrigger the
-   workflow) — this keeps the manifests in git as the source of truth, same as before.
+3. Updates the image tags in `k8s/stage/deployment-mcp-stage.yaml` and
+   `k8s/stage/deployment-oidc-stage.yaml` and commits that change back to `master` with
+   `[skip ci]` (so it doesn't retrigger the workflow) — this keeps the manifests in git as the
+   source of truth, same as before.
 4. Applies both manifests to the `biatec` namespace using a namespace-scoped kubeconfig (see
    below — the cluster's `Namespace` object itself is **not** managed by CI, see "One-time
    setup").
-5. Recreates the `biatec-mcp-conf` ConfigMap from `k8s/main/conf-mcp`, and the `biatec-oidc-conf`
-   ConfigMap from `k8s/main/conf-oidc`.
-6. Restarts both deployments and waits for each rollout to complete.
+5. Recreates the `biatec-mcp-stage-conf` ConfigMap from `k8s/stage/conf-mcp-stage`, and the
+   `biatec-oidc-stage-conf` ConfigMap from `k8s/stage/conf-oidc-stage`.
+6. Restarts both stage deployments and waits for each rollout to complete.
+
+## What `promote-production.yml` does, when manually triggered
+
+Given a `version` input (and a `service` choice: `both`/`mcp`/`oidc`), it repeats steps 3–6 above
+against `k8s/main/deployment-mcp.yaml`/`deployment-oidc.yaml` and the `biatec-mcp-conf`/
+`biatec-oidc-conf` ConfigMaps instead — no build/push step, since the image already exists in
+Docker Hub from when `deploy-stage.yml` built it. See
+[STAGE_ENVIRONMENT.md](STAGE_ENVIRONMENT.md#promoting-a-version-to-production) for the full
+promotion walkthrough.
 
 ## Microsoft Entra ID support
 
@@ -40,9 +59,9 @@ Configure these under **Settings → Secrets and variables → Actions → Repos
 |----------------------|--------------------------------------------------------------------------|
 | `DOCKERHUB_USERNAME` | Docker Hub account/organization that owns `scholtz2/biatec-mcp` and `scholtz2/biatec-oidc`. |
 | `DOCKERHUB_TOKEN`    | A Docker Hub [access token](https://hub.docker.com/settings/security) (not your password) scoped to read/write for those repos. |
-| `KUBE_CONFIG`        | Base64-encoded, namespace-scoped, time-limited kubeconfig for the `biatec` namespace. Generate it with `k8s/main/generate-ci-kubeconfig.sh` — see [below](#generating-the-scoped-kube_config-secret) and never paste an admin kubeconfig here. |
+| `KUBE_CONFIG`        | Base64-encoded, namespace-scoped, time-limited kubeconfig for the `biatec` namespace. Generate it with `k8s/main/generate-ci-kubeconfig.sh` — see [below](#generating-the-scoped-kube_config-secret) and never paste an admin kubeconfig here. Used by both `deploy-stage.yml` and `promote-production.yml` — one secret, since stage and production resources live in the same namespace (see [STAGE_ENVIRONMENT.md](STAGE_ENVIRONMENT.md)). |
 
-The old `SSH_USER`, `SSH_KEY`, and `SSH_HOST` secrets are no longer used by this workflow and can
+The old `SSH_USER`, `SSH_KEY`, and `SSH_HOST` secrets are no longer used by these workflows and can
 be removed once you've confirmed the new pipeline is working. Both new Docker Hub repos
 (`scholtz2/biatec-mcp`, `scholtz2/biatec-oidc`) must exist (or be auto-creatable) under the same
 Docker Hub account as the old `scholtz2/algorand-google-account` repo — no new

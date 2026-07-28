@@ -1,0 +1,131 @@
+# Stage environment for BiatecMCP - deployed automatically by .github/workflows/deploy-stage.yml on
+# every push to master. Lives in the same "biatec" namespace as production (k8s/main/deployment-mcp.yaml)
+# but under entirely distinct resource names/host/ConfigMap, so it can never collide with or be confused
+# for the production Deployment/Service/Ingress. See docs/CICD_GITHUB_ACTIONS.md for the full pipeline
+# and docs/STAGE_ENVIRONMENT.md for what is (and isn't) isolated between stage and production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: biatec-mcp-stage-app-deployment
+  namespace: biatec
+spec:
+  selector:
+    matchLabels:
+      app: biatec-mcp-stage-app
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: biatec-mcp-stage-app
+    spec:
+      containers:
+        - name: biatec-mcp-stage-app
+          image: scholtz2/biatec-mcp:1.2026.07.24-main
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 100m
+              memory: "150Mi"
+            limits:
+              cpu: 1000m
+              memory: "500Mi"
+          ports:
+            - containerPort: 5443
+              protocol: TCP
+          envFrom:
+            # Same secret as production - reused deliberately (see docs/STAGE_ENVIRONMENT.md). The
+            # StorageFolderName set in conf-mcp-stage/appsettings.json (mounted below), not this
+            # secret, is what actually keeps stage's self-custody files separate from production's,
+            # even when a tester signs in with the same real Google/Microsoft account in both places.
+            - secretRef:
+                name: google-account-main-app-secret
+          env:
+            - name: ASPNETCORE_Kestrel__Certificates__Default__Path
+              value: /https/cert.pfx
+            - name: ASPNETCORE_Kestrel__Certificates__Default__Password
+              valueFrom:
+                secretKeyRef:
+                  name: csharp-cert-password
+                  key: password
+            - name: ASPNETCORE_Kestrel__Endpoints__Https__Url
+              value: https://biatec-mcp-stage-app-deployment.biatec:5443
+          readinessProbe:
+            tcpSocket:
+              port: 5443
+            initialDelaySeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            tcpSocket:
+              port: 5443
+            initialDelaySeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 2
+            terminationGracePeriodSeconds: 1
+          volumeMounts:
+            - name: biatec-mcp-stage-conf
+              mountPath: /app/appsettings.json
+              subPath: appsettings.json
+            - name: https-cert
+              mountPath: /https
+              readOnly: true
+      volumes:
+        - name: biatec-mcp-stage-conf
+          configMap:
+            name: biatec-mcp-stage-conf
+        - name: https-cert
+          secret:
+            secretName: csharp-cert
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: biatec-mcp-stage-service
+  namespace: biatec
+spec:
+  type: ClusterIP
+  selector:
+    app: biatec-mcp-stage-app
+  ports:
+    - name: https
+      protocol: TCP
+      appProtocol: https
+      port: 5443
+      targetPort: 5443
+---
+# Full catch-all straight to biatec-mcp-stage-service, same regex-path + rewrite-target idiom as
+# biatec-mcp-ingress in k8s/main/deployment-mcp.yaml. stage.google.biatec.io is dedicated entirely to
+# this deployment (no other Ingress/service shares the host), so no path carve-out is needed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: biatec-mcp-stage-ingress
+  namespace: biatec
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/rewrite-target: /$1
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.org/websocket-services: "biatec-mcp-stage-service"
+spec:
+  ingressClassName: "nginx"
+  tls:
+    - hosts:
+        - stage.google.biatec.io
+      secretName: tls-stage.google.biatec.io
+  rules:
+    - host: stage.google.biatec.io
+      http:
+        paths:
+          - path: /(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: biatec-mcp-stage-service
+                port:
+                  number: 5443

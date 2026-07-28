@@ -1,0 +1,121 @@
+name: Promote to Production
+
+# Manually-triggered only - this workflow never runs on push. It does NOT build anything: it takes an
+# image tag that deploy-stage.yml already built, pushed, and deployed to stage, and re-deploys that
+# exact same image to production (k8s/main/*). Run it from the Actions tab ("Run workflow") once a
+# version has been tested in stage by humans/other projects and is ready for mainnet. See
+# docs/CICD_GITHUB_ACTIONS.md and docs/STAGE_ENVIRONMENT.md.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag to promote (must already exist in stage, e.g. 1.2026.07.28-main - check k8s/stage/deployment-*.yaml or Docker Hub for what's currently in stage)"
+        required: true
+        type: string
+      service:
+        description: "Which service(s) to promote"
+        required: true
+        type: choice
+        options:
+          - both
+          - mcp
+          - oidc
+        default: both
+
+permissions:
+  contents: write
+
+env:
+  IMAGE_MCP: scholtz2/biatec-mcp
+  IMAGE_OIDC: scholtz2/biatec-oidc
+  NAMESPACE: biatec
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version input looks like an existing tag
+        run: |
+          version="${{ inputs.version }}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}-.+$ ]]; then
+            echo "::error::'$version' doesn't look like a version produced by deploy-stage.yml (expected e.g. 1.2026.07.28-main). Double-check it before promoting."
+            exit 1
+          fi
+          echo "Promoting version: $version (service: ${{ inputs.service }})"
+
+      - name: Update production manifest(s) with the promoted image tag
+        run: |
+          version="${{ inputs.version }}"
+          if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "mcp" ]]; then
+            sed -i "s~${IMAGE_MCP}.*~${IMAGE_MCP}:${version}~g" k8s/main/deployment-mcp.yaml
+          fi
+          if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "oidc" ]]; then
+            sed -i "s~${IMAGE_OIDC}.*~${IMAGE_OIDC}:${version}~g" k8s/main/deployment-oidc.yaml
+          fi
+
+      - name: Commit updated production manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- k8s/main/deployment-mcp.yaml k8s/main/deployment-oidc.yaml; then
+            git add k8s/main/deployment-mcp.yaml k8s/main/deployment-oidc.yaml
+            git commit -m "cicd promote ${{ inputs.version }} (${{ inputs.service }}) to production [skip ci]"
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin master && git push && break
+              echo "Push attempt $i failed, retrying..."
+              sleep $((i * 3))
+            done
+          else
+            echo "No manifest changes to commit"
+          fi
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBE_CONFIG" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Apply Kubernetes manifests (production)
+        run: |
+          if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "mcp" ]]; then
+            kubectl apply -f k8s/main/deployment-mcp.yaml -n "$NAMESPACE"
+          fi
+          if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "oidc" ]]; then
+            kubectl apply -f k8s/main/deployment-oidc.yaml -n "$NAMESPACE"
+          fi
+
+      - name: Update production config maps
+        run: |
+          if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "mcp" ]]; then
+            kubectl delete configmap biatec-mcp-conf -n "$NAMESPACE" --ignore-not-found
+            kubectl create configmap biatec-mcp-conf --from-file=k8s/main/conf-mcp -n "$NAMESPACE"
+          fi
+          if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "oidc" ]]; then
+            kubectl delete configmap biatec-oidc-conf -n "$NAMESPACE" --ignore-not-found
+            kubectl create configmap biatec-oidc-conf --from-file=k8s/main/conf-oidc -n "$NAMESPACE"
+          fi
+
+      - name: Roll out production deployments
+        run: |
+          if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "mcp" ]]; then
+            kubectl rollout restart deployment/biatec-mcp-app-deployment -n "$NAMESPACE"
+            kubectl rollout status deployment/biatec-mcp-app-deployment -n "$NAMESPACE"
+          fi
+          if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "oidc" ]]; then
+            kubectl rollout restart deployment/biatec-oidc-app-deployment -n "$NAMESPACE"
+            kubectl rollout status deployment/biatec-oidc-app-deployment -n "$NAMESPACE"
+          fi
+
+      - name: Remove kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
