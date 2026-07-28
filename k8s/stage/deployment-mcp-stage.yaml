@@ -33,12 +33,11 @@ spec:
             - containerPort: 5443
               protocol: TCP
           envFrom:
-            # Same secret as production - reused deliberately (see docs/STAGE_ENVIRONMENT.md). The
-            # StorageFolderName set in conf-mcp-stage/appsettings.json (mounted below), not this
-            # secret, is what actually keeps stage's self-custody files separate from production's,
-            # even when a tester signs in with the same real Google/Microsoft account in both places.
+            # Dedicated stage secret, deliberately separate from production's
+            # google-account-main-app-secret - see docs/STAGE_ENVIRONMENT.md and
+            # k8s/stage/generate-stage-secret.sh (one-time manual setup, not something CI creates).
             - secretRef:
-                name: google-account-main-app-secret
+                name: biatec-stage-app-secret
           env:
             - name: ASPNETCORE_Kestrel__Certificates__Default__Path
               value: /https/cert.pfx

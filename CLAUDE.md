@@ -176,13 +176,16 @@ ones. Config is split per-service: `k8s/main/conf-mcp/` / `biatec-mcp-conf` and 
 (not a separate namespace — the existing namespace-scoped CI `Role` grants verbs on resource
 *types*, so stage needed no new RBAC). `deploy-stage.yml` deploys here on every push to `master`;
 `k8s/main/*` (production) only changes via the manually-triggered `promote-production.yml`. Stage
-reuses the same `google-account-main-app-secret` as production, EXCEPT `App:StorageFolderName` is
-`"BiatecStage"` there (vs `"Biatec"` in production) — set directly in the stage ConfigMaps, this is
-what actually keeps self-custody files isolated even when a tester signs in with a real
-Google/Microsoft account in both environments. See
+uses its own dedicated Kubernetes Secret, `biatec-stage-app-secret` — never production's
+`google-account-main-app-secret` — generated once via
+[k8s/stage/generate-stage-secret.sh](k8s/stage/generate-stage-secret.sh), which always mints a
+fresh AES key and JWT signing key dedicated to stage (never copied from production). Self-custody
+files are further isolated on top of that by `App:StorageFolderName` being `"BiatecStage"` there
+(vs `"Biatec"` in production), set directly in the stage ConfigMaps. See
 [docs/STAGE_ENVIRONMENT.md](docs/STAGE_ENVIRONMENT.md) for the full picture, including what is
-*not* isolated between stage and production (shared Redis DB, shared JWT signing key today) and the
-one-time DNS/OAuth-redirect-URI setup stage needs.
+*not* isolated between stage and production by default (Redis, unless you point
+`generate-stage-secret.sh` at a separate instance/DB index) and the one-time DNS/OAuth-redirect-URI
+setup stage needs.
 
 ## Architecture notes
 

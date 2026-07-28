@@ -52,18 +52,21 @@ carve out a legacy alias host. Stage has no legacy host to preserve, so it doesn
 
 ## What is (and isn't) isolated from production
 
-Stage reuses the same `google-account-main-app-secret` Kubernetes Secret as production via
-`envFrom` (same Google/Entra OAuth `ClientId`/`ClientSecret`, same AES key, same Redis connection
-string). That is a deliberate simplicity trade-off, not an oversight — here's exactly what it means:
+Stage uses its own dedicated Kubernetes Secret, `biatec-stage-app-secret`, via `envFrom` — never
+`google-account-main-app-secret` (production's). Generate it once with
+[`k8s/stage/generate-stage-secret.sh`](../k8s/stage/generate-stage-secret.sh), which **always**
+mints a fresh AES key/IV and a fresh RSA JWT signing key dedicated to stage — never copied from
+production — and asks you for the Google/Microsoft OAuth `ClientId`/`ClientSecret` and Redis
+connection string (fine to reuse production's OAuth app or Redis instance, or supply distinct
+ones; the script doesn't assume either way). Here's exactly what that buys you:
 
-- **Self-custody files ARE isolated.** `App:StorageFolderName` is set to `"BiatecStage"` in both
-  `k8s/stage/conf-mcp-stage/appsettings.json` and `k8s/stage/conf-oidc-stage/appsettings.json`
-  (production uses `"Biatec"`). Since this is a config value read from the mounted ConfigMap, not
-  the shared secret, stage and production always read/write a **different** Drive folder /
-  OneDrive app-subfolder file — even if the exact same human signs in with the exact same real
-  Google/Microsoft account in both environments. A tester's stage account is a distinct Algorand
-  account from whatever (if anything) exists for that email in production; testing in stage can
-  never touch a production self-custody account.
+- **Self-custody files ARE isolated**, two ways over. `App:StorageFolderName` is `"BiatecStage"`
+  in both `k8s/stage/conf-mcp-stage/appsettings.json` and `k8s/stage/conf-oidc-stage/appsettings.json`
+  (production uses `"Biatec"`), so stage and production always read/write a **different** Drive
+  folder / OneDrive app-subfolder file, even if the exact same human signs in with the exact same
+  real Google/Microsoft account in both environments. On top of that, stage's AES key (from
+  `biatec-stage-app-secret`) is now a *different* key from production's, so even the encrypted
+  blobs stage happens to write are opaque to production's key and vice versa.
 - **The OIDC issuer/discovery IS isolated**, automatically, with no config at all — see
   `CICD_GITHUB_ACTIONS.md` and `BiatecOIDC/OIDC_INTEGRATION_GUIDE.md` for `JwtIssuerService.GetIssuer`.
   `stage.oidc.biatec.io`'s `iss`/discovery `issuer` will always be `https://stage.oidc.biatec.io`,
@@ -72,44 +75,42 @@ string). That is a deliberate simplicity trade-off, not an oversight — here's 
   list in `k8s/stage/conf-oidc-stage/appsettings.json`, seeded with one example (`capitalism-stage`)
   — add real entries there for whichever "different projects" need to test against stage; this
   never touches or risks production's `JwtIssuer:Clients` in `k8s/main/conf-oidc/appsettings.json`.
-- **The JWT signing key is NOT isolated by default.** `JwtIssuer:SigningPrivateKeyPem` is blank in
-  stage's ConfigMap, same as production's — meaning both currently fall back to an ephemeral
-  per-pod RSA key if neither the ConfigMap nor a `JwtIssuer__SigningPrivateKeyPem` env var (from the
-  shared secret) supplies one. If production's secret *does* set that env var, stage inherits the
-  **same signing key** via the same `envFrom`. This is acceptable for now (a stage-issued token
-  bearing production's key doesn't grant access to anything, since it's still validated against
-  `stage.oidc.biatec.io`'s own `iss`/audience by any correctly-implemented relying party) but isn't
-  ideal defense-in-depth. To give stage a genuinely distinct signing key later: generate a fresh
-  RSA keypair (`openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096`), create a small new
-  Secret holding it, and add an explicit `env: JwtIssuer__SigningPrivateKeyPem` entry (`secretKeyRef`)
-  to `k8s/stage/deployment-oidc-stage.yaml` — the same pattern already used there for
-  `csharp-cert-password`. Not done by default because it's an extra manual step this repo can't
-  perform for you (a Secret's contents aren't something CI or a checked-in file can safely hold).
-- **Redis is NOT isolated.** Stage and production share the same Redis instance and logical
-  database (index 0), via the same connection string. Device-pairing session state and OIDC
-  authorization codes are keyed by high-entropy random IDs, so practical collision risk is
-  negligible; the one real (minor, low-severity) consequence is that `IDistributedCache` entries
-  keyed only by email (e.g. `PortfolioValuationService`'s `portfolio_value:{email}` cache, TTL 1
-  hour) could theoretically be read across environments for the same email during that TTL window.
-  Nothing security-sensitive is cached this way today. If this ever needs tightening, the fix is
-  either a dedicated Redis instance for stage or appending `,defaultDatabase=1` to a
-  stage-specific `Redis:ConnectionString` override (same secret-override pattern as the signing key
-  above) — not done now because it needs a real connection-string value this repo doesn't have.
+- **The JWT signing key IS isolated.** `generate-stage-secret.sh` always generates a fresh RSA
+  keypair for `JwtIssuer__SigningPrivateKeyPem` in `biatec-stage-app-secret` — stage never signs
+  tokens with production's key (if production even has one configured; its ConfigMap leaves
+  `SigningPrivateKeyPem` blank too, same ephemeral-key caveat as before, but that's now entirely
+  production's own concern, unrelated to stage).
+- **Redis is NOT isolated by default**, only because the script needs a real connection string
+  from you and doesn't assume you want a separate Redis instance. Device-pairing session state and
+  OIDC authorization codes are keyed by high-entropy random IDs, so practical collision risk is
+  negligible even if you point stage at the same Redis as production; the one real (minor,
+  low-severity) residual consequence if you do is that `IDistributedCache` entries keyed only by
+  email (e.g. `PortfolioValuationService`'s `portfolio_value:{email}` cache, TTL 1 hour) could
+  theoretically be read across environments for the same email during that TTL window. Nothing
+  security-sensitive is cached this way today. To isolate it fully, give
+  `generate-stage-secret.sh`'s `REDIS_CONNECTION_STRING` prompt either a separate Redis instance or
+  the same instance with `,defaultDatabase=1` appended.
 
 ## One-time manual setup (outside this repo)
 
 1. **DNS**: create `stage.google.biatec.io` and `stage.oidc.biatec.io` records pointing at the same
    ingress load balancer as the production hosts.
-2. **Google Cloud Console** → OAuth client → add authorized redirect URIs:
+2. **`biatec-stage-app-secret`**: run
+   [`k8s/stage/generate-stage-secret.sh`](../k8s/stage/generate-stage-secret.sh) once (with a
+   kubeconfig that can write Secrets in the `biatec` namespace active) to create it. Re-run it to
+   rotate/update any value later.
+3. **Google Cloud Console** → OAuth client → add authorized redirect URIs:
    - `https://stage.google.biatec.io/signin-google` (BiatecMCP stage)
    - `https://stage.oidc.biatec.io/oidc/signin-google` (BiatecOIDC stage)
-3. **Entra admin center** → app registration → add redirect URIs (see
+4. **Entra admin center** → app registration → add redirect URIs (see
    `BiatecOIDC/ENTRA_SETUP_GUIDE.md`):
    - `https://stage.google.biatec.io/signin-microsoft` (BiatecMCP stage)
    - `https://stage.oidc.biatec.io/oidc/signin-microsoft` (BiatecOIDC stage)
-4. Nothing else is required — no new Kubernetes Secret, no new `KUBE_CONFIG`, no RBAC change (see
-   above). `k8s/main/namespace.yaml` doesn't need re-applying either, since stage lives in the
-   already-existing `biatec` namespace.
+5. No `KUBE_CONFIG`/RBAC change is needed for CI (see above) — the existing namespace-scoped Role
+   already covers stage's Deployments/Services/ConfigMaps/Ingresses; it just doesn't (and
+   shouldn't) grant `get`/`list` on Secrets at all, so `generate-stage-secret.sh` must be run with
+   your own admin/write-scoped kubeconfig, never CI's. `k8s/main/namespace.yaml` doesn't need
+   re-applying either, since stage lives in the already-existing `biatec` namespace.
 
 ## Promoting a version to production
 
