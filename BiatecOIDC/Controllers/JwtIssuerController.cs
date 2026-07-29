@@ -6,6 +6,7 @@ using System.Text.Json;
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Helper;
 using BiatecOIDC.Model;
+using BiatecOIDC.Swagger;
 using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
@@ -322,6 +323,7 @@ namespace BiatecOIDC.Controllers
         /// (omitted if the user never granted Drive access). 401 if the token is missing or invalid.
         /// </returns>
         [AllowAnonymous]
+        [RequiresBearerToken]
         [HttpGet("userinfo")]
         public IActionResult UserInfo()
         {
@@ -378,6 +380,7 @@ namespace BiatecOIDC.Controllers
         /// <param name="token">The token to verify (optional if supplied via the Authorization header instead).</param>
         /// <returns>An object with at least <c>active: bool</c>, plus token metadata when active.</returns>
         [AllowAnonymous]
+        [RequiresBearerToken]
         [HttpPost("verify")]
         public async Task<IActionResult> Verify([FromForm] string? token)
         {

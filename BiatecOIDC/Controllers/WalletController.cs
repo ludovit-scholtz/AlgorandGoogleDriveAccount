@@ -2,6 +2,7 @@ using System.Security.Claims;
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Helper;
 using BiatecOIDC.Model;
+using BiatecOIDC.Swagger;
 using BiatecSelfCustodyCore.Model;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -48,6 +49,7 @@ namespace BiatecOIDC.Controllers
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
         /// <response code="403">The token lacks the <c>sign</c> claim, or a transaction exceeds the caller's spending limit.</response>
         [AllowAnonymous]
+        [RequiresBearerToken]
         [HttpPost("sign")]
         public async Task<IActionResult> SignTransactionGroup([FromBody] SignTransactionGroupRequest request)
         {
@@ -107,6 +109,7 @@ namespace BiatecOIDC.Controllers
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
         /// <response code="403">The token lacks the <c>manage-limits</c> claim.</response>
         [AllowAnonymous]
+        [RequiresBearerToken]
         [HttpGet("limits")]
         public async Task<IActionResult> GetSpendingLimit()
         {
@@ -127,6 +130,7 @@ namespace BiatecOIDC.Controllers
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
         /// <response code="403">The token lacks the <c>manage-limits</c> claim.</response>
         [AllowAnonymous]
+        [RequiresBearerToken]
         [HttpPut("limits")]
         public async Task<IActionResult> UpdateSpendingLimit([FromBody] UpdateSpendingLimitRequest request)
         {

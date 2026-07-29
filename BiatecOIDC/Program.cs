@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using BiatecOIDC.Model;
+using BiatecOIDC.Swagger;
 using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
@@ -23,6 +24,21 @@ namespace BiatecOIDC
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen(c =>
             {
+                // The wallet API (/wallet/sign, /wallet/limits) and a few JwtIssuerController endpoints
+                // (/userinfo, /verify) authenticate the caller via a manually-parsed Authorization: Bearer
+                // header rather than [Authorize] (see BearerAuthOperationFilter / RequiresBearerTokenAttribute
+                // for why), so Swashbuckle's own [Authorize]-based detection never fires for them. This
+                // definition + filter is what makes Swagger UI's "Authorize" button appear and actually
+                // attach the header on "Try it out" calls for those operations.
+                c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+                {
+                    Type = SecuritySchemeType.Http,
+                    Scheme = "bearer",
+                    BearerFormat = "JWT",
+                    Description = "Paste the access_token from /token here (Swagger UI adds the 'Bearer ' prefix for you). Required for /wallet/sign, /wallet/limits, /userinfo, and /verify."
+                });
+                c.OperationFilter<BearerAuthOperationFilter>();
+
                 var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
                 var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
                 if (File.Exists(xmlPath))
