@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace BiatecOIDC.Model
 {
     /// <summary>OIDC/JWT identity provider settings, bound from the <c>JwtIssuer</c> configuration section.</summary>
@@ -120,25 +122,37 @@ namespace BiatecOIDC.Model
         public string? CodeVerifier { get; set; }
     }
 
-    /// <summary>Successful <c>/token</c> response body.</summary>
+    /// <summary>
+    /// Successful <c>/token</c> response body. Property names are pinned with
+    /// <see cref="JsonPropertyNameAttribute"/> to the exact snake_case wire names RFC 6749/OIDC Core
+    /// require (<c>access_token</c>, etc.) - relying on ASP.NET Core's default camelCase JSON naming
+    /// policy would instead emit <c>accessToken</c>, which OAuth/OIDC clients (including Postman's
+    /// built-in token extraction) don't recognize.
+    /// </summary>
     public class OidcTokenResponse
     {
         /// <summary>Bearer access token.</summary>
+        [JsonPropertyName("access_token")]
         public string AccessToken { get; set; } = string.Empty;
 
         /// <summary>OIDC ID token (JWT) carrying identity claims.</summary>
+        [JsonPropertyName("id_token")]
         public string IdToken { get; set; } = string.Empty;
 
         /// <summary>Always <c>Bearer</c>.</summary>
+        [JsonPropertyName("token_type")]
         public string TokenType { get; set; } = "Bearer";
 
         /// <summary>Access token lifetime, in seconds.</summary>
+        [JsonPropertyName("expires_in")]
         public int ExpiresIn { get; set; }
 
         /// <summary>Refresh token, if the client and grant are eligible for one.</summary>
+        [JsonPropertyName("refresh_token")]
         public string? RefreshToken { get; set; }
 
         /// <summary>Space-separated scopes actually granted.</summary>
+        [JsonPropertyName("scope")]
         public string Scope { get; set; } = "openid profile email";
     }
 }
