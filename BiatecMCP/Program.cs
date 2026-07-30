@@ -5,7 +5,6 @@ using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
 using BiatecSelfCustodyCore.Repository;
-using Google.Apis.Auth.AspNetCore3;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
@@ -175,10 +174,10 @@ namespace BiatecMCP
                 .AddAuthentication(options =>
                 {
                     options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-                    options.DefaultChallengeScheme = GoogleOpenIdConnectDefaults.AuthenticationScheme;
+                    options.DefaultChallengeScheme = GoogleCloudStorageProvider.ProviderName;
                 })
                 .AddCookie()
-                .AddGoogleOpenIdConnect(options =>
+                .AddGoogleOpenIdConnect(GoogleCloudStorageProvider.ProviderName, options =>
                 {
                     options.ClientId = googleCloudConfig.ClientId;
                     options.ClientSecret = googleCloudConfig.ClientSecret;
