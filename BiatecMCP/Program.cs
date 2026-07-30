@@ -62,9 +62,13 @@ namespace BiatecMCP
             builder.Services.Configure<AlgodConfiguration>(builder.Configuration.GetSection("Algod"));
             builder.Services.Configure<McpTransferLimitsConfiguration>(builder.Configuration.GetSection("McpTransferLimits"));
 
+            var googleCloudConfig = new GoogleCloudServiceConfiguration();
+            builder.Configuration.GetSection("CloudServices:Google").Bind(googleCloudConfig);
+            builder.Services.Configure<GoogleCloudServiceConfiguration>(builder.Configuration.GetSection("CloudServices:Google"));
+
             var entraConfig = new MicrosoftEntraConfiguration();
-            builder.Configuration.GetSection("MicrosoftEntra").Bind(entraConfig);
-            builder.Services.Configure<MicrosoftEntraConfiguration>(builder.Configuration.GetSection("MicrosoftEntra"));
+            builder.Configuration.GetSection("CloudServices:Entra").Bind(entraConfig);
+            builder.Services.Configure<MicrosoftEntraConfiguration>(builder.Configuration.GetSection("CloudServices:Entra"));
 
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
@@ -176,8 +180,8 @@ namespace BiatecMCP
                 .AddCookie()
                 .AddGoogleOpenIdConnect(options =>
                 {
-                    options.ClientId = config.ClientId;
-                    options.ClientSecret = config.ClientSecret;
+                    options.ClientId = googleCloudConfig.ClientId;
+                    options.ClientSecret = googleCloudConfig.ClientSecret;
 
                     // Basic scopes - only request what's needed initially
                     options.Scope.Clear(); // Clear default scopes

@@ -1,9 +1,11 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Moq.Protected;
 
@@ -24,10 +26,13 @@ namespace BiatecMCPTests
             var httpClient = new HttpClient(_mockHandler.Object);
             var httpContextAccessor = new Mock<IHttpContextAccessor>();
             httpContextAccessor.Setup(a => a.HttpContext).Returns((HttpContext?)null);
+            var mockEntraConfig = new Mock<IOptionsMonitor<MicrosoftEntraConfiguration>>();
+            mockEntraConfig.Setup(c => c.CurrentValue).Returns(new MicrosoftEntraConfiguration { ClientId = "client-id", ClientSecret = "client-secret" });
 
             _provider = new MicrosoftCloudStorageProvider(
                 httpClient,
                 httpContextAccessor.Object,
+                mockEntraConfig.Object,
                 new Mock<ILogger<MicrosoftCloudStorageProvider>>().Object);
         }
 

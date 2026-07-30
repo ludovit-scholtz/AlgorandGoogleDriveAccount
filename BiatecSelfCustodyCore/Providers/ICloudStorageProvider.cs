@@ -20,6 +20,15 @@ namespace BiatecSelfCustodyCore.Providers
         string DisplayName { get; }
 
         /// <summary>
+        /// Whether this provider's own app registration (client id/secret, etc.) is actually filled
+        /// in for the running environment - a provider can be registered in DI (so its scheme exists
+        /// and it always shows up in <see cref="ICloudStorageProviderCatalog.All"/>) while still
+        /// having no usable credentials (e.g. Microsoft Entra not set up for local dev). Picker UIs
+        /// should filter on this so they never render a button for a sign-in that can't work.
+        /// </summary>
+        bool IsConfigured { get; }
+
+        /// <summary>
         /// The OAuth/OIDC scope that grants storage-write access for this provider (e.g. Google's
         /// <c>drive.file</c>, Microsoft Graph's <c>Files.ReadWrite.AppFolder</c>). Used both in the
         /// initial sign-in scope list (<c>Program.cs</c>) and when re-requesting it via incremental

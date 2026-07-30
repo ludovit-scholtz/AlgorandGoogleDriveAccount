@@ -59,13 +59,13 @@ JWT_SIGNING_KEY=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096)
 echo "==> Creating/updating Secret '$SECRET_NAME' in namespace '$NAMESPACE'"
 kubectl create secret generic "$SECRET_NAME" \
   --namespace="$NAMESPACE" \
-  --from-literal=App__ClientId="$GOOGLE_CLIENT_ID" \
-  --from-literal=App__ClientSecret="$GOOGLE_CLIENT_SECRET" \
+  --from-literal=CloudServices__Google__ClientId="$GOOGLE_CLIENT_ID" \
+  --from-literal=CloudServices__Google__ClientSecret="$GOOGLE_CLIENT_SECRET" \
   --from-literal=AesOptions__Key="$AES_KEY" \
   --from-literal=AesOptions__IV="$AES_IV" \
-  --from-literal=MicrosoftEntra__TenantId="$ENTRA_TENANT_ID" \
-  --from-literal=MicrosoftEntra__ClientId="$ENTRA_CLIENT_ID" \
-  --from-literal=MicrosoftEntra__ClientSecret="$ENTRA_CLIENT_SECRET" \
+  --from-literal=CloudServices__Entra__TenantId="$ENTRA_TENANT_ID" \
+  --from-literal=CloudServices__Entra__ClientId="$ENTRA_CLIENT_ID" \
+  --from-literal=CloudServices__Entra__ClientSecret="$ENTRA_CLIENT_SECRET" \
   --from-literal=Redis__ConnectionString="$REDIS_CONNECTION_STRING" \
   --from-literal=JwtIssuer__SigningPrivateKeyPem="$JWT_SIGNING_KEY" \
   --dry-run=client -o yaml | kubectl apply -f -

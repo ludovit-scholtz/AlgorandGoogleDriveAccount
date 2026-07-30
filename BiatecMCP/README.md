@@ -50,9 +50,13 @@ A secure Model Context Protocol (MCP) server that enables AI assistants to inter
 1. Clone the repository:git clone <repository-url>
    cd BiatecMCP2. Configure settings in `appsettings.json`:{
   "App": {
-    "Host": "https://your-domain.com",
-    "ClientId": "your-google-client-id",
-    "ClientSecret": "your-google-client-secret"
+    "Host": "https://your-domain.com"
+  },
+  "CloudServices": {
+    "Google": {
+      "ClientId": "your-google-client-id",
+      "ClientSecret": "your-google-client-secret"
+    }
   },
   "Redis": {
        "ConnectionString": "localhost:6379"
@@ -308,8 +312,8 @@ docker run -p 80:80 biatec-mcp-server
 
 - `ASPNETCORE_ENVIRONMENT`: Development/Production
 - `ConnectionStrings__Redis`: Redis connection string
-- `App__ClientId`: Google OAuth client ID
-- `App__ClientSecret`: Google OAuth client secret
+- `CloudServices__Google__ClientId`: Google OAuth client ID
+- `CloudServices__Google__ClientSecret`: Google OAuth client secret
 
 ## ?? API Documentation
 

@@ -207,6 +207,7 @@ namespace BiatecOIDCTests
             public string Name => "Google";
             public string DisplayName => "Google";
             public string RequiredScope => "fake-scope";
+            public bool IsConfigured => true;
             public Task<byte[]?> TryDownloadAsync(string fileName, string accessToken) => Task.FromResult<byte[]?>(null);
             public Task UploadAsync(string fileName, byte[] content, string accessToken) => Task.CompletedTask;
             public Task<bool> HasWriteAccessAsync(string accessToken) => Task.FromResult(true);

@@ -158,31 +158,250 @@ namespace BiatecOIDC.Controllers
 
         /// <summary>
         /// Provider picker shown when <c>/authorize</c> is called with no <c>idp</c> fast-track parameter
-        /// and the caller isn't already signed in. Not part of the public OIDC contract.
+        /// and the caller isn't already signed in. Not part of the public OIDC contract. Styled to match
+        /// <c>wwwroot/index.html</c>'s theme; only lists providers whose <see cref="ICloudStorageProvider.IsConfigured"/>
+        /// is true, so an app registration that's missing its client id/secret in this environment never
+        /// renders a sign-in button that can't work.
         /// </summary>
         /// <param name="requestId">Opaque id of the pending authorize request stored by <c>/authorize</c>.</param>
         [AllowAnonymous]
         [HttpGet("select-provider")]
         public IActionResult SelectProvider([FromQuery] string requestId)
         {
-            var sb = new StringBuilder();
-            sb.Append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Sign in to Biatec</title></head>");
-            sb.Append("<body style=\"font-family:sans-serif;max-width:420px;margin:4rem auto;text-align:center;\">");
-            sb.Append("<h1>Sign in to Biatec</h1>");
-            sb.Append("<p>Choose how you'd like to sign in. Your self-custody account is stored in the matching cloud storage.</p>");
+            var configuredProviders = _providerCatalog.All.Where(p => p.IsConfigured).ToList();
 
-            // One button per registered ICloudStorageProvider - adding a new provider needs no
-            // change here, it just shows up.
-            foreach (var provider in _providerCatalog.All)
+            var buttonsHtml = new StringBuilder();
+            foreach (var provider in configuredProviders)
             {
                 var url = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = provider.Name }, Request.Scheme);
-                sb.Append($"<p><a href=\"{WebUtility.HtmlEncode(url)}\" style=\"display:block;margin:1rem 0;padding:0.75rem;background:#333;color:#fff;text-decoration:none;border-radius:6px;\">Continue with {WebUtility.HtmlEncode(provider.DisplayName)}</a></p>");
+                buttonsHtml.Append($"""
+                    <a class="provider-button" href="{WebUtility.HtmlEncode(url)}">
+                        <span class="provider-icon">{GetProviderIconSvg(provider.Name)}</span>
+                        <span class="provider-label">Continue with {WebUtility.HtmlEncode(provider.DisplayName)}</span>
+                        <span class="provider-arrow">&rarr;</span>
+                    </a>
+                    """);
             }
 
-            sb.Append("</body></html>");
+            var bodyHtml = configuredProviders.Count > 0
+                ? $"""<div class="provider-list">{buttonsHtml}</div>"""
+                : """
+                    <div class="callout">
+                        <span class="callout-icon">&#9888;&#65039;</span>
+                        <p><strong>No identity provider is configured.</strong> Please contact Biatec support.</p>
+                    </div>
+                    """;
 
-            return Content(sb.ToString(), "text/html; charset=utf-8", Encoding.UTF8);
+            var html = $"""
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Sign in to Biatec</title>
+                    <link rel="icon" href="/logo-biatec.png">
+                    <link rel="preconnect" href="https://fonts.googleapis.com">
+                    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+                    <style>{SelectProviderStyles}</style>
+                </head>
+                <body>
+                    <div class="aurora"></div>
+                    <div class="grid-overlay"></div>
+                    <div class="picker-shell">
+                        <div class="picker-card">
+                            <img class="picker-logo" src="/logo-biatec.png" alt="Biatec logo">
+                            <div class="eyebrow"><span class="dot"></span> Self-custody sign-in</div>
+                            <h1>Sign in to <span class="glow-text">Biatec</span></h1>
+                            <p class="subtitle">Choose the cloud account that holds your self-custody Algorand key. Your key never leaves it.</p>
+                            {bodyHtml}
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """;
+
+            return Content(html, "text/html; charset=utf-8", Encoding.UTF8);
         }
+
+        /// <summary>
+        /// Inline brand glyph for a known provider's picker button (<see cref="GoogleCloudStorageProvider.ProviderName"/>,
+        /// <see cref="MicrosoftCloudStorageProvider.ProviderName"/>), falling back to a generic cloud glyph
+        /// for any provider added later that doesn't have a dedicated icon yet.
+        /// </summary>
+        private static string GetProviderIconSvg(string providerName)
+        {
+            if (string.Equals(providerName, GoogleCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase))
+            {
+                return """
+                    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                        <path fill="#4285F4" d="M23.52 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.44c-.28 1.48-1.13 2.73-2.4 3.58v3h3.86c2.26-2.09 3.62-5.17 3.62-8.82z"/>
+                        <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.28v3.09C3.26 21.3 7.31 24 12 24z"/>
+                        <path fill="#FBBC05" d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.28C.47 8.24 0 10.06 0 12s.47 3.76 1.28 5.38l3.99-3.09z"/>
+                        <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.28 6.62l3.99 3.09C6.22 6.86 8.87 4.75 12 4.75z"/>
+                    </svg>
+                    """;
+            }
+
+            if (string.Equals(providerName, MicrosoftCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase))
+            {
+                return """
+                    <svg viewBox="0 0 23 23" width="24" height="24" aria-hidden="true">
+                        <rect x="1" y="1" width="10" height="10" fill="#F25022"/>
+                        <rect x="12" y="1" width="10" height="10" fill="#7FBA00"/>
+                        <rect x="1" y="12" width="10" height="10" fill="#00A4EF"/>
+                        <rect x="12" y="12" width="10" height="10" fill="#FFB900"/>
+                    </svg>
+                    """;
+            }
+
+            // Generic placeholder for provider #3+ until it gets its own brand glyph.
+            return """
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path d="M17.5 19H6.5a4.5 4.5 0 0 1-.99-8.89 5.5 5.5 0 0 1 10.68-1.87A4.5 4.5 0 0 1 17.5 19z"/>
+                </svg>
+                """;
+        }
+
+        private const string SelectProviderStyles = """
+            :root {
+                --bg-0: #05060d;
+                --bg-1: #0a0d1a;
+                --bg-2: #10142a;
+                --panel: rgba(18, 22, 42, 0.6);
+                --panel-border: rgba(140, 160, 255, 0.14);
+                --panel-border-hover: rgba(140, 200, 255, 0.35);
+                --text-0: #eef1fb;
+                --text-1: #aab1cf;
+                --text-2: #6d759a;
+                --accent-cyan: #4de3ff;
+                --accent-violet: #9b7bff;
+                --accent-green: #35e6a4;
+                --accent-amber: #ffb84d;
+                --font-display: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+                --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+            }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+                font-family: var(--font-display);
+                color: var(--text-0);
+                background: var(--bg-0);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                overflow-x: hidden;
+                line-height: 1.6;
+            }
+            .aurora {
+                position: fixed;
+                inset: 0;
+                z-index: -2;
+                background:
+                    radial-gradient(60vw 60vw at 12% 8%, rgba(77, 227, 255, 0.16), transparent 60%),
+                    radial-gradient(55vw 55vw at 88% 18%, rgba(155, 123, 255, 0.18), transparent 60%),
+                    radial-gradient(70vw 70vw at 50% 100%, rgba(53, 230, 164, 0.10), transparent 60%),
+                    linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 45%, var(--bg-2) 100%);
+            }
+            .grid-overlay {
+                position: fixed;
+                inset: 0;
+                z-index: -1;
+                background-image:
+                    linear-gradient(rgba(140, 160, 255, 0.055) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(140, 160, 255, 0.055) 1px, transparent 1px);
+                background-size: 44px 44px;
+                mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 30%, transparent 90%);
+            }
+            .glow-text {
+                background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet) 55%, var(--accent-amber));
+                -webkit-background-clip: text;
+                background-clip: text;
+                color: transparent;
+            }
+            .picker-shell { width: 100%; padding: 2rem; }
+            .picker-card {
+                max-width: 440px;
+                margin: 0 auto;
+                background: var(--panel);
+                border: 1px solid var(--panel-border);
+                border-radius: 22px;
+                padding: 2.5rem 2.25rem;
+                text-align: center;
+                backdrop-filter: blur(10px);
+                box-shadow: 0 30px 80px rgba(5, 6, 13, 0.55);
+            }
+            .picker-logo { height: 40px; width: auto; margin-bottom: 1.5rem; }
+            .eyebrow {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5rem;
+                padding: 0.35rem 0.9rem;
+                border-radius: 999px;
+                border: 1px solid var(--panel-border);
+                font-family: var(--font-mono);
+                font-size: 0.72rem;
+                color: var(--accent-cyan);
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                margin-bottom: 1.25rem;
+            }
+            .eyebrow .dot {
+                width: 6px;
+                height: 6px;
+                border-radius: 50%;
+                background: var(--accent-green);
+                box-shadow: 0 0 10px var(--accent-green);
+            }
+            h1 { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 0.75rem; }
+            .subtitle { font-size: 0.92rem; color: var(--text-1); margin-bottom: 2rem; }
+            .provider-list { display: flex; flex-direction: column; gap: 0.9rem; }
+            .provider-button {
+                display: flex;
+                align-items: center;
+                gap: 0.9rem;
+                padding: 0.9rem 1.1rem;
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid var(--panel-border);
+                border-radius: 14px;
+                text-decoration: none;
+                color: var(--text-0);
+                font-weight: 600;
+                font-size: 0.95rem;
+                transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+            }
+            .provider-button:hover {
+                transform: translateY(-2px);
+                border-color: var(--panel-border-hover);
+                background: rgba(255, 255, 255, 0.06);
+                box-shadow: 0 14px 34px rgba(8, 10, 24, 0.5);
+            }
+            .provider-icon {
+                flex-shrink: 0;
+                width: 36px;
+                height: 36px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 10px;
+                background: rgba(255, 255, 255, 0.06);
+            }
+            .provider-label { flex: 1; text-align: left; }
+            .provider-arrow { color: var(--text-2); font-family: var(--font-mono); }
+            .provider-button:hover .provider-arrow { color: var(--accent-cyan); }
+            .callout {
+                display: flex;
+                gap: 0.75rem;
+                align-items: flex-start;
+                background: linear-gradient(180deg, rgba(255, 184, 77, 0.1), transparent);
+                border: 1px solid rgba(255, 184, 77, 0.3);
+                border-radius: 14px;
+                padding: 1rem 1.1rem;
+                text-align: left;
+            }
+            .callout p { color: var(--text-1); font-size: 0.88rem; }
+            .callout strong { color: var(--text-0); }
+            """;
 
         /// <summary>
         /// Challenges the chosen provider's sign-in. Reached either directly (the <c>idp</c> fast track on

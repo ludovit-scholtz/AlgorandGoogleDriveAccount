@@ -56,9 +56,13 @@ namespace BiatecOIDC
             builder.Services.Configure<CorsConfiguration>(builder.Configuration.GetSection("Cors"));
             builder.Services.Configure<JwtIssuerConfiguration>(builder.Configuration.GetSection("JwtIssuer"));
 
+            var googleCloudConfig = new GoogleCloudServiceConfiguration();
+            builder.Configuration.GetSection("CloudServices:Google").Bind(googleCloudConfig);
+            builder.Services.Configure<GoogleCloudServiceConfiguration>(builder.Configuration.GetSection("CloudServices:Google"));
+
             var entraConfig = new MicrosoftEntraConfiguration();
-            builder.Configuration.GetSection("MicrosoftEntra").Bind(entraConfig);
-            builder.Services.Configure<MicrosoftEntraConfiguration>(builder.Configuration.GetSection("MicrosoftEntra"));
+            builder.Configuration.GetSection("CloudServices:Entra").Bind(entraConfig);
+            builder.Services.Configure<MicrosoftEntraConfiguration>(builder.Configuration.GetSection("CloudServices:Entra"));
 
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
@@ -145,8 +149,8 @@ namespace BiatecOIDC
                 .AddCookie()
                 .AddGoogleOpenIdConnect(options =>
                 {
-                    options.ClientId = config.ClientId;
-                    options.ClientSecret = config.ClientSecret;
+                    options.ClientId = googleCloudConfig.ClientId;
+                    options.ClientSecret = googleCloudConfig.ClientSecret;
 
                     // Distinct from BiatecMCP's default /signin-google - both apps share the
                     // google.biatec.io host, and this callback must land on THIS pod (routed via the

@@ -23,17 +23,20 @@ namespace BiatecSelfCustodyCore.Providers
 
         private readonly IGoogleAuthProvider _googleAuth;
         private readonly IOptionsMonitor<Model.Configuration> _config;
+        private readonly IOptionsMonitor<Model.GoogleCloudServiceConfiguration> _googleServiceConfig;
         private readonly HttpClient _httpClient;
         private readonly ILogger<GoogleCloudStorageProvider> _logger;
 
         public GoogleCloudStorageProvider(
             IGoogleAuthProvider googleAuth,
             IOptionsMonitor<Model.Configuration> config,
+            IOptionsMonitor<Model.GoogleCloudServiceConfiguration> googleServiceConfig,
             HttpClient httpClient,
             ILogger<GoogleCloudStorageProvider> logger)
         {
             _googleAuth = googleAuth;
             _config = config;
+            _googleServiceConfig = googleServiceConfig;
             _httpClient = httpClient;
             _logger = logger;
         }
@@ -41,6 +44,10 @@ namespace BiatecSelfCustodyCore.Providers
         public string Name => ProviderName;
         public string DisplayName => "Google";
         public string RequiredScope => DriveFileScope;
+
+        public bool IsConfigured =>
+            !string.IsNullOrWhiteSpace(_googleServiceConfig.CurrentValue.ClientId) &&
+            !string.IsNullOrWhiteSpace(_googleServiceConfig.CurrentValue.ClientSecret);
 
         public async Task<string?> GetAmbientAccessTokenAsync()
         {

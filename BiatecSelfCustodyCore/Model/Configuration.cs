@@ -1,6 +1,8 @@
 namespace BiatecSelfCustodyCore.Model
 {
-    /// <summary>Google OAuth client settings and Drive storage naming, bound from the <c>App</c> configuration section.</summary>
+    /// <summary>App-wide host and Drive storage naming, bound from the <c>App</c> configuration section.
+    /// Google OAuth credentials live separately in <see cref="GoogleCloudServiceConfiguration"/>
+    /// (<c>CloudServices:Google</c>).</summary>
     public class Configuration
     {
         /// <summary>Public base URL of this service, used when building absolute redirect/callback URLs.</summary>
@@ -14,11 +16,5 @@ namespace BiatecSelfCustodyCore.Model
 
         /// <summary>Application name reported to the Google Drive API.</summary>
         public string ApplicationName { get; set; } = "Biatec";
-
-        /// <summary>Google OAuth 2.0 client ID.</summary>
-        public string? ClientId { get; set; }
-
-        /// <summary>Google OAuth 2.0 client secret.</summary>
-        public string? ClientSecret { get; set; }
     }
 }

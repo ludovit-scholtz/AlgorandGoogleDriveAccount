@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BiatecSelfCustodyCore.Providers
 {
@@ -23,21 +24,28 @@ namespace BiatecSelfCustodyCore.Providers
 
         private readonly HttpClient _httpClient;
         private readonly IHttpContextAccessor _httpContextAccessor;
+        private readonly IOptionsMonitor<Model.MicrosoftEntraConfiguration> _entraConfig;
         private readonly ILogger<MicrosoftCloudStorageProvider> _logger;
 
         public MicrosoftCloudStorageProvider(
             HttpClient httpClient,
             IHttpContextAccessor httpContextAccessor,
+            IOptionsMonitor<Model.MicrosoftEntraConfiguration> entraConfig,
             ILogger<MicrosoftCloudStorageProvider> logger)
         {
             _httpClient = httpClient;
             _httpContextAccessor = httpContextAccessor;
+            _entraConfig = entraConfig;
             _logger = logger;
         }
 
         public string Name => ProviderName;
         public string DisplayName => "Microsoft";
         public string RequiredScope => "https://graph.microsoft.com/Files.ReadWrite.AppFolder";
+
+        public bool IsConfigured =>
+            !string.IsNullOrWhiteSpace(_entraConfig.CurrentValue.ClientId) &&
+            !string.IsNullOrWhiteSpace(_entraConfig.CurrentValue.ClientSecret);
 
         public async Task<string?> GetAmbientAccessTokenAsync()
         {

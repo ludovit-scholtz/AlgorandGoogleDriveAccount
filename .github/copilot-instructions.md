@@ -56,8 +56,10 @@ manages.
   - `BusinessLogic/OpenIdConnectIncrementalAuth.cs` — shared `OnRedirectToIdentityProvider` logic (both apps, both
     schemes) for incremental-scope + forced-consent re-challenges
   - `Helper/AesEncryptionHelper.cs` — email-bound AES-256 encryption of the stored account
-  - `Model/Configuration.cs`, `AesOptions.cs`, `MicrosoftEntraConfiguration.cs`, `AuthSchemeNames.cs` (just the
-    `biatec_idp` claim type constant — each provider owns its own name via `ICloudStorageProvider.Name`)
+  - `Model/Configuration.cs` (app-wide host/Drive-storage-naming, bound from `App`), `GoogleCloudServiceConfiguration.cs`
+    (Google OAuth client id/secret, bound from `CloudServices:Google`), `AesOptions.cs`, `MicrosoftEntraConfiguration.cs`
+    (Entra app registration, bound from `CloudServices:Entra`), `AuthSchemeNames.cs` (just the `biatec_idp` claim type
+    constant — each provider owns its own name via `ICloudStorageProvider.Name`)
 - `BiatecMCP/` — the MCP server + self-custody web/API project (net10.0, `Microsoft.NET.Sdk.Web`)
   - `Controllers/` — `DevicePairingController` (provider-aware: `pair-device?idp=`, `GET providers` for the picker
     UI, `RequestStorageAccess`, `StorageAccessCallback`), `DriveController`
@@ -114,8 +116,8 @@ dotnet run --project BiatecOIDC/BiatecOIDC.csproj
 ```
 
 Both services require Redis (`Redis:ConnectionString` in their respective `appsettings.json`), Google OAuth 2.0
-credentials (`App:ClientId`/`App:ClientSecret`), and Microsoft Entra ID credentials
-(`MicrosoftEntra:TenantId`/`ClientId`/`ClientSecret` — see `BiatecOIDC/ENTRA_SETUP_GUIDE.md`) to run.
+credentials (`CloudServices:Google:ClientId`/`ClientSecret`), and Microsoft Entra ID credentials
+(`CloudServices:Entra:TenantId`/`ClientId`/`ClientSecret` — see `BiatecOIDC/ENTRA_SETUP_GUIDE.md`) to run.
 
 CI is two separate GitHub Actions workflows, not one — nothing pushed to `master` reaches production
 automatically. `.github/workflows/deploy-stage.yml` builds/pushes both Docker images and deploys them

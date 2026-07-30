@@ -1,6 +1,6 @@
 namespace BiatecSelfCustodyCore.Model
 {
-    /// <summary>Microsoft Entra ID app registration settings, bound from the <c>MicrosoftEntra</c> configuration section.</summary>
+    /// <summary>Microsoft Entra ID app registration settings, bound from the <c>CloudServices:Entra</c> configuration section.</summary>
     public class MicrosoftEntraConfiguration
     {
         /// <summary>Entra tenant ID (or "common"/"organizations"/"consumers" for multi-tenant apps).</summary>

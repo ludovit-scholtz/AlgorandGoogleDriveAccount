@@ -13,6 +13,7 @@ namespace BiatecMCP.BusinessLogic
         private readonly IDistributedCache _cache;
         private readonly ILogger<CrossAccountProtectionService> _logger;
         private readonly IOptionsMonitor<Configuration> _config;
+        private readonly IOptionsMonitor<GoogleCloudServiceConfiguration> _googleConfig;
         private readonly IOptionsMonitor<CrossAccountProtectionConfiguration> _capConfig;
         private readonly IHttpContextAccessor _httpContextAccessor;
 
@@ -21,6 +22,7 @@ namespace BiatecMCP.BusinessLogic
             IDistributedCache cache,
             ILogger<CrossAccountProtectionService> logger,
             IOptionsMonitor<Configuration> config,
+            IOptionsMonitor<GoogleCloudServiceConfiguration> googleConfig,
             IOptionsMonitor<CrossAccountProtectionConfiguration> capConfig,
             IHttpContextAccessor httpContextAccessor)
         {
@@ -28,6 +30,7 @@ namespace BiatecMCP.BusinessLogic
             _cache = cache;
             _logger = logger;
             _config = config;
+            _googleConfig = googleConfig;
             _capConfig = capConfig;
             _httpContextAccessor = httpContextAccessor;
         }
@@ -145,7 +148,7 @@ namespace BiatecMCP.BusinessLogic
                     // Validate audience (client ID)
                     if (tokenInfo.TryGetProperty("aud", out var audience))
                     {
-                        var clientId = _config.CurrentValue.ClientId;
+                        var clientId = _googleConfig.CurrentValue.ClientId;
                         if (audience.GetString() != clientId)
                         {
                             warnings.Add("Token audience mismatch - potential security risk");
@@ -342,7 +345,7 @@ namespace BiatecMCP.BusinessLogic
             try
             {
                 var scopeString = string.Join(" ", scopes);
-                var clientId = _config.CurrentValue.ClientId;
+                var clientId = _googleConfig.CurrentValue.ClientId;
                 var host = _config.CurrentValue.Host;
 
                 var reauthUrl = $"https://accounts.google.com/o/oauth2/v2/auth?" +

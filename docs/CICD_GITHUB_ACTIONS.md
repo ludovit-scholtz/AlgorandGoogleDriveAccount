@@ -46,9 +46,10 @@ promotion walkthrough.
 
 Both images now also support signing in with Microsoft Entra ID (OneDrive-backed self-custody storage,
 alongside the existing Google/Drive option) — see `BiatecOIDC/ENTRA_SETUP_GUIDE.md` for the app
-registration. The `MicrosoftEntra__TenantId`/`MicrosoftEntra__ClientId`/`MicrosoftEntra__ClientSecret`
-keys need to be added to the existing `google-account-main-app-secret` Kubernetes secret (same one
-already holding the Google `App__ClientId`/`ClientSecret`) — this is a one-time manual
+registration. The `CloudServices__Entra__TenantId`/`CloudServices__Entra__ClientId`/
+`CloudServices__Entra__ClientSecret` keys need to be added to the existing
+`google-account-main-app-secret` Kubernetes secret (same one already holding the Google
+`CloudServices__Google__ClientId`/`ClientSecret`) — this is a one-time manual
 `kubectl create secret ... --from-literal=...` / edit, not something CI manages.
 
 ## Required GitHub repository secrets

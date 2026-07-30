@@ -31,10 +31,13 @@ namespace BiatecMCPTests
             var mockGoogleAuth = new Mock<IGoogleAuthProvider>();
             var mockConfig = new Mock<IOptionsMonitor<Configuration>>();
             mockConfig.Setup(c => c.CurrentValue).Returns(new Configuration());
+            var mockGoogleServiceConfig = new Mock<IOptionsMonitor<GoogleCloudServiceConfiguration>>();
+            mockGoogleServiceConfig.Setup(c => c.CurrentValue).Returns(new GoogleCloudServiceConfiguration { ClientId = "client-id", ClientSecret = "client-secret" });
 
             _provider = new GoogleCloudStorageProvider(
                 mockGoogleAuth.Object,
                 mockConfig.Object,
+                mockGoogleServiceConfig.Object,
                 httpClient,
                 new Mock<ILogger<GoogleCloudStorageProvider>>().Object);
         }
