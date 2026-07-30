@@ -110,6 +110,13 @@ metadata:
     # ingress-nginx's admission webhook rejects a regex there even with this annotation set
     # ("path /(.*) cannot be used with pathType Prefix").
     nginx.ingress.kubernetes.io/use-regex: "true"
+    # The OIDC handlers' auth cookie carries the signed-in user's Google/Microsoft tokens
+    # (SaveTokens), which with the drive.file/AppFolder scope grants can exceed nginx's default
+    # response header buffer - without this, the callback (POST /oidc/signin-google or
+    # /oidc/signin-microsoft) 502s with "upstream sent too big header while reading response
+    # header from upstream" right after a successful sign-in. Same value already used by
+    # biatec-mcp-ingress/biatec-mcp-stage-ingress for the same underlying reason.
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
 spec:
   ingressClassName: "nginx"
   tls:
