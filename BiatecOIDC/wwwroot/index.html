@@ -676,14 +676,14 @@
                 <li><a href="#scopes">Scopes &amp; Claims</a></li>
                 <li><a href="#wallet-api">Wallet API</a></li>
                 <li><a href="#clients">Client Registration</a></li>
-                <li><a href="/.well-known/openid-configuration" class="nav-cta">Discovery Document</a></li>
+                <li><a href="/swagger" class="nav-cta">OpenAPI</a></li>
             </ul>
         </div>
     </nav>
 
     <div class="container">
         <section class="hero">
-            <div class="eyebrow"><span class="dot"></span> OpenID Connect · Live on oidc.biatec.io</div>
+            <div class="eyebrow"><span class="dot"></span> OpenID Connect · Live on <span class="host-name">oidc.biatec.io</span></div>
             <h1>Identity and a self-custody wallet,<br><span class="glow-text">behind one OIDC token.</span></h1>
             <p class="subtitle">Biatec OIDC lets your app delegate sign-in to Google or Microsoft and receive a standard OpenID Connect token carrying an Algorand identity — then, with the right scope, use that same token to sign transaction groups against a spending limit the wallet owner controls. Keys stay in the owner's own Google Drive or OneDrive, never on our servers.</p>
             <div class="hero-actions">
@@ -702,7 +702,7 @@
             <div class="section-head">
                 <div class="kicker">Protocol reference</div>
                 <h2>Standard OIDC, plus a wallet API</h2>
-                <p>Everything below is anchored at <code style="font-family:var(--font-mono);color:var(--accent-cyan);">https://oidc.biatec.io</code>. Discovery advertises the exact same set.</p>
+                <p>Everything below is anchored at <code style="font-family:var(--font-mono);color:var(--accent-cyan);" class="host-origin">https://oidc.biatec.io</code>. Discovery advertises the exact same set.</p>
             </div>
             <div class="features">
                 <div class="feature-card">
@@ -810,7 +810,7 @@
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                             Copy
                         </button>
-                        <pre>curl -X POST https://oidc.biatec.io/wallet/sign \
+                        <pre>curl -X POST <span class="host-origin">https://oidc.biatec.io</span>/wallet/sign \
   -H "Authorization: Bearer &lt;access_token&gt;" \
   -H "Content-Type: application/json" \
   -d '{
@@ -847,7 +847,7 @@
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                             Copy
                         </button>
-                        <pre>curl https://oidc.biatec.io/wallet/limits \
+                        <pre>curl <span class="host-origin">https://oidc.biatec.io</span>/wallet/limits \
   -H "Authorization: Bearer &lt;access_token&gt;"</pre>
                     </div>
                     <div class="code-block">
@@ -873,7 +873,7 @@
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                             Copy
                         </button>
-                        <pre>curl -X PUT https://oidc.biatec.io/wallet/limits \
+                        <pre>curl -X PUT <span class="host-origin">https://oidc.biatec.io</span>/wallet/limits \
   -H "Authorization: Bearer &lt;access_token&gt;" \
   -H "Content-Type: application/json" \
   -d '{ "maxAmountPerTransaction": 5000000 }'</pre>
@@ -910,7 +910,7 @@
 
         <footer class="footer">
             <div class="footer-links">
-                <a href="/.well-known/openid-configuration">Discovery Document</a>
+                <a href="/swagger">OpenAPI</a>
                 <a href="https://google.biatec.io/privacy.html">Privacy Policy</a>
                 <a href="https://google.biatec.io/terms.html">Terms of Service</a>
             </div>
@@ -919,6 +919,12 @@
     </div>
 
     <script>
+        // Resolve host/origin at runtime so this page shows the correct endpoints
+        // whether it's served from oidc.biatec.io, stage.oidc.biatec.io, or the
+        // google.biatec.io legacy alias, instead of a hardcoded production host.
+        document.querySelectorAll('.host-origin').forEach(el => { el.textContent = window.location.origin; });
+        document.querySelectorAll('.host-name').forEach(el => { el.textContent = window.location.host; });
+
         function showTab(tab) {
             document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
