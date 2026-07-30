@@ -295,6 +295,17 @@ namespace BiatecOIDC.BusinessLogic
             return Task.CompletedTask;
         }
 
+        public async Task<OidcAuthorizeRequest?> PeekPendingAuthorizeRequestAsync(string requestId)
+        {
+            var value = await _redis.GetDatabase().StringGetAsync(PendingPrefix + requestId);
+            if (value.IsNullOrEmpty)
+            {
+                return null;
+            }
+
+            return JsonSerializer.Deserialize<OidcAuthorizeRequest>((string)value!, _jsonOptions);
+        }
+
         /// <summary>
         /// Atomically reads and deletes a one-time-use Redis value (authorization code / refresh token /
         /// pending-authorize-request) so two concurrent requests can never both observe it as present.

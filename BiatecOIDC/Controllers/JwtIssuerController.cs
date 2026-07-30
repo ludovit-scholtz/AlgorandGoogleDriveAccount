@@ -129,7 +129,6 @@ namespace BiatecOIDC.Controllers
             }
 
             var normalizedRequest = validation.NormalizedRequest;
-            var client = validation.Client;
 
             if (User.Identity?.IsAuthenticated != true)
             {
@@ -153,7 +152,7 @@ namespace BiatecOIDC.Controllers
                 return RedirectToAction(nameof(SelectProvider), new { requestId });
             }
 
-            return await FinalizeAuthorizeAsync(normalizedRequest, client);
+            return await RedirectToConsentAsync(normalizedRequest);
         }
 
         /// <summary>
@@ -263,6 +262,16 @@ namespace BiatecOIDC.Controllers
                 """;
         }
 
+        /// <summary>Green checkmark glyph for a granted permission row on the consent screen.</summary>
+        private const string CheckIconSvg = """
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            """;
+
+        /// <summary>Red cross glyph for a denied/not-requested permission row on the consent screen.</summary>
+        private const string CrossIconSvg = """
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            """;
+
         private const string SelectProviderStyles = """
             :root {
                 --bg-0: #05060d;
@@ -278,6 +287,7 @@ namespace BiatecOIDC.Controllers
                 --accent-violet: #9b7bff;
                 --accent-green: #35e6a4;
                 --accent-amber: #ffb84d;
+                --accent-red: #ff5470;
                 --font-display: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
                 --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
             }
@@ -401,6 +411,54 @@ namespace BiatecOIDC.Controllers
             }
             .callout p { color: var(--text-1); font-size: 0.88rem; }
             .callout strong { color: var(--text-0); }
+
+            /* ---------- Consent screen (/authorize/consent) ---------- */
+            .permission-list { display: flex; flex-direction: column; gap: 0.85rem; margin-bottom: 1.5rem; text-align: left; }
+            .permission-row {
+                display: flex;
+                align-items: flex-start;
+                gap: 0.85rem;
+                padding: 0.85rem 1rem;
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid var(--panel-border);
+                border-radius: 12px;
+            }
+            .permission-icon {
+                flex-shrink: 0;
+                width: 26px;
+                height: 26px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 50%;
+            }
+            .permission-icon.granted { background: rgba(53, 230, 164, 0.16); color: var(--accent-green); }
+            .permission-icon.denied { background: rgba(255, 84, 112, 0.14); color: var(--accent-red); }
+            .permission-icon svg { width: 15px; height: 15px; }
+            .permission-text { display: flex; flex-direction: column; gap: 0.15rem; }
+            .permission-text strong { color: var(--text-0); font-size: 0.92rem; }
+            .permission-text span { color: var(--text-1); font-size: 0.82rem; }
+            .consent-warning { border-color: rgba(255, 184, 77, 0.3); }
+            .consent-safe { border-color: rgba(53, 230, 164, 0.3); background: linear-gradient(180deg, rgba(53, 230, 164, 0.08), transparent); }
+            .consent-continue-btn {
+                display: block;
+                margin-top: 1.25rem;
+                padding: 0.9rem 1.1rem;
+                border-radius: 14px;
+                text-align: center;
+                text-decoration: none;
+                font-weight: 600;
+                font-size: 0.95rem;
+                background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
+                color: #05060d;
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+            }
+            .consent-continue-btn:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(8, 10, 24, 0.5); }
+            .consent-continue-btn.secondary {
+                background: rgba(255, 255, 255, 0.04);
+                color: var(--text-0);
+                border: 1px solid var(--panel-border);
+            }
             """;
 
         /// <summary>
@@ -486,7 +544,190 @@ namespace BiatecOIDC.Controllers
                 }
             }
 
+            return await RedirectToConsentAsync(validation.NormalizedRequest);
+        }
+
+        /// <summary>
+        /// Stores <paramref name="request"/> as a pending authorize request and redirects to the consent
+        /// screen (<see cref="AuthorizeConsent"/>) instead of finalizing immediately - every path that's
+        /// about to issue a code/token (fresh sign-in via <see cref="AuthorizeCallback"/>, or an
+        /// already-signed-in caller hitting <see cref="Authorize"/> directly) goes through this so the
+        /// user always sees what the client is requesting before anything is issued.
+        /// </summary>
+        private async Task<IActionResult> RedirectToConsentAsync(OidcAuthorizeRequest request)
+        {
+            // The user is authenticated at this point (sign-in succeeded, or they already had a
+            // session), so the rate limit's purpose - blocking repeated pre-auth attempts - no longer
+            // applies; clear it now rather than waiting for the consent step, which the user may abandon.
+            await ClearAuthorizeAttemptsAsync(request);
+
+            var requestId = await _jwtIssuerService.StorePendingAuthorizeRequestAsync(request);
+            return RedirectToAction(nameof(AuthorizeConsent), new { requestId });
+        }
+
+        /// <summary>
+        /// Consent screen shown after sign-in and before a code/token is issued. Not part of the public
+        /// OIDC contract. Always shows that identity will be verified; additionally shows a granted/denied
+        /// row for the <c>sign</c> and <c>manage-limits</c> wallet scopes based on whether the client
+        /// requested them. If either was requested, the user must explicitly click through (no
+        /// auto-continue) since those grant real account privileges; otherwise the screen auto-continues
+        /// after 5 seconds (with a manual "Continue now" escape hatch) since there's nothing to confirm.
+        /// </summary>
+        /// <param name="requestId">Opaque id of the pending authorize request stored by <c>/authorize</c>.</param>
+        [Authorize]
+        [HttpGet("authorize/consent")]
+        public async Task<IActionResult> AuthorizeConsent([FromQuery] string requestId)
+        {
+            if (string.IsNullOrWhiteSpace(requestId))
+            {
+                return BadRequest(new ProblemDetails { Detail = "Missing requestId." });
+            }
+
+            // Peek, not consume - the pending request must still be there for AuthorizeConsentContinue
+            // to finalize, whether the user clicks through immediately or the auto-continue timer fires.
+            var pending = await _jwtIssuerService.PeekPendingAuthorizeRequestAsync(requestId);
+            if (pending == null)
+            {
+                return BadRequest(new ProblemDetails { Detail = "Authorization request not found or expired." });
+            }
+
+            var scopes = (pending.Scope ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var wantsSign = scopes.Contains("sign", StringComparer.Ordinal);
+            var wantsLimits = scopes.Contains("manage-limits", StringComparer.Ordinal);
+            var continueUrl = Url.Action(nameof(AuthorizeConsentContinue), "JwtIssuer", new { requestId }, Request.Scheme)!;
+
+            return Content(BuildConsentHtml(pending.ClientId, wantsSign, wantsLimits, continueUrl), "text/html; charset=utf-8", Encoding.UTF8);
+        }
+
+        /// <summary>
+        /// Finalizes the pending authorize request after the user has seen (and, if it requested
+        /// sensitive scopes, confirmed) the consent screen. Reached either by the auto-continue timer or
+        /// the "Continue" button on <see cref="AuthorizeConsent"/>.
+        /// </summary>
+        /// <param name="requestId">Opaque id of the pending authorize request.</param>
+        [Authorize]
+        [HttpGet("authorize/consent/continue")]
+        public async Task<IActionResult> AuthorizeConsentContinue([FromQuery] string requestId)
+        {
+            if (string.IsNullOrWhiteSpace(requestId))
+            {
+                return BadRequest(new ProblemDetails { Detail = "Missing requestId." });
+            }
+
+            var pending = await _jwtIssuerService.GetPendingAuthorizeRequestAsync(requestId);
+            if (pending == null)
+            {
+                return BadRequest(new ProblemDetails { Detail = "Authorization request not found or expired." });
+            }
+
+            var validation = await _jwtIssuerService.ValidateAuthorizeRequestAsync(pending);
+            if (!validation.IsValid || validation.NormalizedRequest == null || validation.Client == null)
+            {
+                return BuildAuthorizeErrorResponse(
+                    pending.RedirectUri ?? pending.ReturnUrl,
+                    pending.State,
+                    validation.Error ?? "invalid_request",
+                    validation.ErrorDescription ?? "Invalid request.",
+                    pending.ResponseMode);
+            }
+
             return await FinalizeAuthorizeAsync(validation.NormalizedRequest, validation.Client);
+        }
+
+        /// <summary>
+        /// Builds the consent screen's HTML, styled to match <c>SelectProviderStyles</c>. Shows a
+        /// permission checklist (identity always granted; sign/manage-limits granted or denied based on
+        /// what was requested) and either a required confirm button (sensitive scopes requested) or an
+        /// informational auto-continuing screen (identity-only access).
+        /// </summary>
+        private static string BuildConsentHtml(string? clientId, bool wantsSign, bool wantsLimits, string continueUrl)
+        {
+            var appName = string.IsNullOrWhiteSpace(clientId) ? "This application" : clientId;
+            var needsConfirmation = wantsSign || wantsLimits;
+            var encodedContinueUrl = WebUtility.HtmlEncode(continueUrl);
+
+            var permissionRows = $"""
+                <div class="permission-row">
+                    <span class="permission-icon granted">{CheckIconSvg}</span>
+                    <div class="permission-text"><strong>Verify your identity</strong><span>Confirms who you are - always part of signing in.</span></div>
+                </div>
+                <div class="permission-row">
+                    <span class="permission-icon {(wantsSign ? "granted" : "denied")}">{(wantsSign ? CheckIconSvg : CrossIconSvg)}</span>
+                    <div class="permission-text"><strong>Sign transactions on your behalf</strong><span>{(wantsSign ? "Requested - lets this app sign payments/asset transfers up to your spending limit." : "Not requested - this app cannot sign or move any funds.")}</span></div>
+                </div>
+                <div class="permission-row">
+                    <span class="permission-icon {(wantsLimits ? "granted" : "denied")}">{(wantsLimits ? CheckIconSvg : CrossIconSvg)}</span>
+                    <div class="permission-text"><strong>Change your spending limit</strong><span>{(wantsLimits ? "Requested - lets this app read and update your per-transaction spending limit." : "Not requested - this app cannot change your spending limit.")}</span></div>
+                </div>
+                """;
+
+            string bodyHtml;
+            if (needsConfirmation)
+            {
+                bodyHtml = $"""
+                    <div class="callout consent-warning">
+                        <span class="callout-icon">&#9888;&#65039;</span>
+                        <p><strong>{WebUtility.HtmlEncode(appName)}</strong> is requesting account-level permissions. Review the access above and confirm to continue.</p>
+                    </div>
+                    <a class="consent-continue-btn" href="{encodedContinueUrl}">Confirm &amp; Continue</a>
+                    """;
+            }
+            else
+            {
+                // Built with plain concatenation, not raw-string interpolation - the countdown script's
+                // JS braces would otherwise collide with C#'s single-brace interpolation-hole syntax.
+                var autoContinueScript = "<script>" +
+                    "var seconds = 5;" +
+                    "var countdownEl = document.getElementById('countdown');" +
+                    "var timer = setInterval(function () {" +
+                    "  seconds -= 1;" +
+                    "  if (countdownEl) { countdownEl.textContent = String(Math.max(seconds, 0)); }" +
+                    "  if (seconds <= 0) {" +
+                    "    clearInterval(timer);" +
+                    "    window.location.href = " + JsonSerializer.Serialize(continueUrl) + ";" +
+                    "  }" +
+                    "}, 1000);" +
+                    "</script>";
+
+                bodyHtml = $"""
+                    <div class="callout consent-safe">
+                        <span class="callout-icon">&#9989;</span>
+                        <p>This access only verifies your identity - no transfers will be made and your spending limit will not change.</p>
+                    </div>
+                    <a class="consent-continue-btn secondary" id="continueNowBtn" href="{encodedContinueUrl}">Continue now (<span id="countdown">5</span>s)</a>
+                    {autoContinueScript}
+                    """;
+            }
+
+            return $"""
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Confirm access - Biatec</title>
+                    <link rel="icon" href="/logo-biatec.png">
+                    <link rel="preconnect" href="https://fonts.googleapis.com">
+                    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+                    <style>{SelectProviderStyles}</style>
+                </head>
+                <body>
+                    <div class="aurora"></div>
+                    <div class="grid-overlay"></div>
+                    <div class="picker-shell">
+                        <div class="picker-card">
+                            <img class="picker-logo" src="/logo-biatec.png" alt="Biatec logo">
+                            <div class="eyebrow"><span class="dot"></span> Authorization request</div>
+                            <h1>Confirm access for <span class="glow-text">{WebUtility.HtmlEncode(appName)}</span></h1>
+                            <p class="subtitle">Here's what this app can do with your Biatec account.</p>
+                            <div class="permission-list">{permissionRows}</div>
+                            {bodyHtml}
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """;
         }
 
         /// <summary>

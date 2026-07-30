@@ -14,6 +14,14 @@ namespace BiatecOIDC.BusinessLogic
         Task<OidcAuthorizeRequest?> GetPendingAuthorizeRequestAsync(string requestId);
         Task RemovePendingAuthorizeRequestAsync(string requestId);
 
+        /// <summary>
+        /// Non-destructive read of a pending authorize request - unlike <see cref="GetPendingAuthorizeRequestAsync"/>,
+        /// does not consume it. Used to render the consent screen (<c>/authorize/consent</c>) without
+        /// invalidating the request the user still needs to confirm or that an unattended auto-continue
+        /// still needs to finalize.
+        /// </summary>
+        Task<OidcAuthorizeRequest?> PeekPendingAuthorizeRequestAsync(string requestId);
+
         Task<(bool Success, string? Error, string? ErrorDescription, Dictionary<string, string>? Response)> CreateAuthorizeResponseAsync(OidcAuthorizeRequest request, JwtIssuerClientConfiguration client, ClaimsPrincipal user);
         Task<(bool Success, int StatusCode, string? Error, string? ErrorDescription, OidcTokenResponse? Response)> ExchangeTokenAsync(OidcTokenRequest request, string? basicAuthHeader);
 

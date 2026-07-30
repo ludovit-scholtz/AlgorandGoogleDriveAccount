@@ -70,7 +70,8 @@ namespace BiatecOIDCTests
 
             var authenticatedController = CreateController(jwtIssuerService.Object, cache, authenticated: true);
             var successResult = await authenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
-            Assert.That(successResult, Is.TypeOf<RedirectResult>());
+            Assert.That(successResult, Is.TypeOf<RedirectToActionResult>());
+            Assert.That(((RedirectToActionResult)successResult).ActionName, Is.EqualTo(nameof(JwtIssuerController.AuthorizeConsent)));
 
             var nextAttemptController = CreateController(jwtIssuerService.Object, cache, authenticated: false);
             var nextAttemptResult = await nextAttemptController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
@@ -114,6 +115,119 @@ namespace BiatecOIDCTests
             Assert.That(badRequest.Value, Is.TypeOf<ProblemDetails>());
             var problem = (ProblemDetails)badRequest.Value!;
             Assert.That(problem.Detail, Does.Contain("not allowlisted"));
+        }
+
+        [Test]
+        public async Task AuthorizeConsent_MissingRequestId_ReturnsBadRequest()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
+
+            var result = await controller.AuthorizeConsent(string.Empty);
+
+            Assert.That(result, Is.TypeOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task AuthorizeConsent_UnknownRequestId_ReturnsBadRequest()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService.Setup(service => service.PeekPendingAuthorizeRequestAsync("missing")).ReturnsAsync((OidcAuthorizeRequest?)null);
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
+
+            var result = await controller.AuthorizeConsent("missing");
+
+            Assert.That(result, Is.TypeOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task AuthorizeConsent_ScopeRequestsSignAndLimits_ShowsGrantedRowsAndRequiresConfirmation()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid profile email sign manage-limits" });
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
+
+            var result = await controller.AuthorizeConsent("request-id");
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result).Content!;
+            // Sign + identity + limits all granted - three granted rows, zero denied.
+            Assert.That(CountOccurrences(html, "permission-icon granted"), Is.EqualTo(3));
+            Assert.That(html, Does.Not.Contain("permission-icon denied"));
+            Assert.That(html, Does.Contain("Confirm &amp; Continue"));
+            // Sensitive scopes requested - must not auto-continue without the user clicking through.
+            Assert.That(html, Does.Not.Contain("setInterval"));
+        }
+
+        [Test]
+        public async Task AuthorizeConsent_ScopeWithoutSignOrLimits_ShowsDeniedRowsAndAutoContinues()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid profile email" });
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
+
+            var result = await controller.AuthorizeConsent("request-id");
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result).Content!;
+            // Only identity is granted; sign + limits are both denied since neither was requested.
+            Assert.That(CountOccurrences(html, "permission-icon granted"), Is.EqualTo(1));
+            Assert.That(CountOccurrences(html, "permission-icon denied"), Is.EqualTo(2));
+            Assert.That(html, Does.Not.Contain("Confirm &amp; Continue"));
+            // No sensitive scopes requested - safe to auto-continue after the countdown.
+            Assert.That(html, Does.Contain("setInterval"));
+        }
+
+        [Test]
+        public async Task AuthorizeConsentContinue_ValidRequest_FinalizesAuthorization()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.GetPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, RedirectUri = RedirectUri, ResponseMode = "query", State = "state-1", Scope = "openid profile email" });
+            jwtIssuerService
+                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync((true, null, null, new Dictionary<string, string>
+                {
+                    ["code"] = "issued-code",
+                    ["state"] = "state-1"
+                }));
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
+
+            var result = await controller.AuthorizeConsentContinue("request-id");
+
+            Assert.That(result, Is.TypeOf<RedirectResult>());
+            var redirect = (RedirectResult)result;
+            Assert.That(redirect.Url, Does.Contain("code=issued-code"));
+        }
+
+        [Test]
+        public async Task AuthorizeConsentContinue_UnknownRequestId_ReturnsBadRequest()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService.Setup(service => service.GetPendingAuthorizeRequestAsync("missing")).ReturnsAsync((OidcAuthorizeRequest?)null);
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
+
+            var result = await controller.AuthorizeConsentContinue("missing");
+
+            Assert.That(result, Is.TypeOf<BadRequestObjectResult>());
+        }
+
+        private static int CountOccurrences(string haystack, string needle)
+        {
+            var count = 0;
+            var index = 0;
+            while ((index = haystack.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                index += needle.Length;
+            }
+
+            return count;
         }
 
         private static Mock<IJwtIssuerService> CreateJwtIssuerServiceMock()
