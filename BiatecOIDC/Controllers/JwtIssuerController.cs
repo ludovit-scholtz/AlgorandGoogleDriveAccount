@@ -567,11 +567,14 @@ namespace BiatecOIDC.Controllers
 
         /// <summary>
         /// Consent screen shown after sign-in and before a code/token is issued. Not part of the public
-        /// OIDC contract. Always shows that identity will be verified; additionally shows a granted/denied
-        /// row for the <c>sign</c> and <c>manage-limits</c> wallet scopes based on whether the client
-        /// requested them. If either was requested, the user must explicitly click through (no
-        /// auto-continue) since those grant real account privileges; otherwise the screen auto-continues
-        /// after 5 seconds (with a manual "Continue now" escape hatch) since there's nothing to confirm.
+        /// OIDC contract. Always shows that identity will be verified; shows a granted/denied row for the
+        /// <c>sign</c> and <c>manage-limits</c> wallet scopes based on whether the client requested them;
+        /// and shows a granted/denied row for storage write access to the user's own Google Drive/OneDrive
+        /// app-only folder, which is what actually holds the encrypted self-custody account file (separate
+        /// from anything the OIDC client itself requested). If any of those three is missing/denied, the
+        /// user must explicitly click through (no auto-continue) since either real account privileges or
+        /// the storage this app depends on are at stake; otherwise the screen auto-continues after 5
+        /// seconds (with a manual "Continue now" escape hatch) since there's nothing to confirm.
         /// </summary>
         /// <param name="requestId">Opaque id of the pending authorize request stored by <c>/authorize</c>.</param>
         [Authorize]
@@ -594,9 +597,22 @@ namespace BiatecOIDC.Controllers
             var scopes = (pending.Scope ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var wantsSign = scopes.Contains("sign", StringComparer.Ordinal);
             var wantsLimits = scopes.Contains("manage-limits", StringComparer.Ordinal);
-            var continueUrl = Url.Action(nameof(AuthorizeConsentContinue), "JwtIssuer", new { requestId }, Request.Scheme)!;
 
-            return Content(BuildConsentHtml(pending.ClientId, wantsSign, wantsLimits, continueUrl), "text/html; charset=utf-8", Encoding.UTF8);
+            // Same provider/token/write-access check AuthorizeCallback already does before its own
+            // automatic one-shot incremental-consent retry - re-checked here so the result is visible on
+            // the consent screen too, and so the user can retry manually beyond that single automatic
+            // attempt instead of the flow just silently proceeding without storage access.
+            var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
+            var accessToken = await HttpContext.GetTokenAsync(provider.Name, "access_token");
+            var hasStorageAccess = !string.IsNullOrEmpty(accessToken) && await provider.HasWriteAccessAsync(accessToken);
+
+            var continueUrl = Url.Action(nameof(AuthorizeConsentContinue), "JwtIssuer", new { requestId }, Request.Scheme)!;
+            var reAuthUrl = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = provider.Name, retried = true }, Request.Scheme)!;
+
+            return Content(
+                BuildConsentHtml(pending.ClientId, wantsSign, wantsLimits, hasStorageAccess, provider.DisplayName, continueUrl, reAuthUrl),
+                "text/html; charset=utf-8",
+                Encoding.UTF8);
         }
 
         /// <summary>
@@ -636,20 +652,35 @@ namespace BiatecOIDC.Controllers
 
         /// <summary>
         /// Builds the consent screen's HTML, styled to match <c>SelectProviderStyles</c>. Shows a
-        /// permission checklist (identity always granted; sign/manage-limits granted or denied based on
-        /// what was requested) and either a required confirm button (sensitive scopes requested) or an
-        /// informational auto-continuing screen (identity-only access).
+        /// permission checklist (identity always granted; storage access and sign/manage-limits granted
+        /// or denied based on the actual token/what was requested) and either a required confirm button
+        /// (sensitive scopes requested, or storage access is missing) or an informational auto-continuing
+        /// screen (identity-only access with storage already working).
         /// </summary>
-        private static string BuildConsentHtml(string? clientId, bool wantsSign, bool wantsLimits, string continueUrl)
+        private static string BuildConsentHtml(
+            string? clientId,
+            bool wantsSign,
+            bool wantsLimits,
+            bool hasStorageAccess,
+            string providerDisplayName,
+            string continueUrl,
+            string reAuthUrl)
         {
             var appName = string.IsNullOrWhiteSpace(clientId) ? "This application" : clientId;
-            var needsConfirmation = wantsSign || wantsLimits;
+            var encodedProviderName = WebUtility.HtmlEncode(providerDisplayName);
+            var wantsPrivileges = wantsSign || wantsLimits;
+            var needsConfirmation = wantsPrivileges || !hasStorageAccess;
             var encodedContinueUrl = WebUtility.HtmlEncode(continueUrl);
+            var encodedReAuthUrl = WebUtility.HtmlEncode(reAuthUrl);
 
             var permissionRows = $"""
                 <div class="permission-row">
                     <span class="permission-icon granted">{CheckIconSvg}</span>
                     <div class="permission-text"><strong>Verify your identity</strong><span>Confirms who you are - always part of signing in.</span></div>
+                </div>
+                <div class="permission-row">
+                    <span class="permission-icon {(hasStorageAccess ? "granted" : "denied")}">{(hasStorageAccess ? CheckIconSvg : CrossIconSvg)}</span>
+                    <div class="permission-text"><strong>Store your account in {encodedProviderName}</strong><span>{(hasStorageAccess ? $"Granted - your encrypted Algorand key lives only in a private, app-only folder in your {encodedProviderName}." : "Not granted - your encrypted Algorand key cannot be created, read, or used without this.")}</span></div>
                 </div>
                 <div class="permission-row">
                     <span class="permission-icon {(wantsSign ? "granted" : "denied")}">{(wantsSign ? CheckIconSvg : CrossIconSvg)}</span>
@@ -661,15 +692,38 @@ namespace BiatecOIDC.Controllers
                 </div>
                 """;
 
+            // Shown whenever storage access is missing, regardless of what scopes the client requested -
+            // explains why it's needed (an app-only folder, never the rest of the user's files) and offers
+            // a manual retry beyond AuthorizeCallback's single automatic incremental-consent attempt.
+            var storageSection = hasStorageAccess
+                ? string.Empty
+                : $"""
+                    <div class="callout consent-warning">
+                        <span class="callout-icon">&#128193;</span>
+                        <p><strong>{encodedProviderName} storage access is missing.</strong> Biatec stores your encrypted Algorand key in a private, app-only folder in your {encodedProviderName} - this app can only ever see files it created itself, never the rest of your {encodedProviderName}. Without this access, your account can't be created, read, or used to sign anything.</p>
+                    </div>
+                    <a class="consent-continue-btn" href="{encodedReAuthUrl}">Grant {encodedProviderName} access</a>
+                    """;
+
             string bodyHtml;
             if (needsConfirmation)
             {
+                var privilegeSection = wantsPrivileges
+                    ? $"""
+                        <div class="callout consent-warning">
+                            <span class="callout-icon">&#9888;&#65039;</span>
+                            <p><strong>{WebUtility.HtmlEncode(appName)}</strong> is requesting account-level permissions. Review the access above and confirm to continue.</p>
+                        </div>
+                        """
+                    : string.Empty;
+
+                var continueLabel = hasStorageAccess ? "Confirm &amp; Continue" : "Continue without storage access";
+                var continueClass = hasStorageAccess ? "consent-continue-btn" : "consent-continue-btn secondary";
+
                 bodyHtml = $"""
-                    <div class="callout consent-warning">
-                        <span class="callout-icon">&#9888;&#65039;</span>
-                        <p><strong>{WebUtility.HtmlEncode(appName)}</strong> is requesting account-level permissions. Review the access above and confirm to continue.</p>
-                    </div>
-                    <a class="consent-continue-btn" href="{encodedContinueUrl}">Confirm &amp; Continue</a>
+                    {storageSection}
+                    {privilegeSection}
+                    <a class="{continueClass}" href="{encodedContinueUrl}">{continueLabel}</a>
                     """;
             }
             else

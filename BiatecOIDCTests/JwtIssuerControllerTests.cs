@@ -3,6 +3,7 @@ using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Controllers;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.Providers;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Routing;
@@ -147,14 +148,15 @@ namespace BiatecOIDCTests
             jwtIssuerService
                 .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
                 .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid profile email sign manage-limits" });
-            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
+            // Storage access already granted, so this isolates the sign/manage-limits confirmation behavior.
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true, providerAccessToken: "google-access-token");
 
             var result = await controller.AuthorizeConsent("request-id");
 
             Assert.That(result, Is.TypeOf<ContentResult>());
             var html = ((ContentResult)result).Content!;
-            // Sign + identity + limits all granted - three granted rows, zero denied.
-            Assert.That(CountOccurrences(html, "permission-icon granted"), Is.EqualTo(3));
+            // Identity + storage + sign + limits all granted - four granted rows, zero denied.
+            Assert.That(CountOccurrences(html, "permission-icon granted"), Is.EqualTo(4));
             Assert.That(html, Does.Not.Contain("permission-icon denied"));
             Assert.That(html, Does.Contain("Confirm &amp; Continue"));
             // Sensitive scopes requested - must not auto-continue without the user clicking through.
@@ -168,18 +170,42 @@ namespace BiatecOIDCTests
             jwtIssuerService
                 .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
                 .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid profile email" });
+            // Storage access already granted - the only thing left to decide is sign/manage-limits, which
+            // weren't requested, so this should be the safe auto-continuing screen.
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true, providerAccessToken: "google-access-token");
+
+            var result = await controller.AuthorizeConsent("request-id");
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result).Content!;
+            // Identity + storage are granted; sign + limits are both denied since neither was requested.
+            Assert.That(CountOccurrences(html, "permission-icon granted"), Is.EqualTo(2));
+            Assert.That(CountOccurrences(html, "permission-icon denied"), Is.EqualTo(2));
+            Assert.That(html, Does.Not.Contain("Confirm &amp; Continue"));
+            // No sensitive scopes requested and storage already works - safe to auto-continue.
+            Assert.That(html, Does.Contain("setInterval"));
+        }
+
+        [Test]
+        public async Task AuthorizeConsent_StorageAccessMissing_ShowsReAuthLinkAndRequiresConfirmation()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid profile email" });
+            // No provider token at all (default), so HasWriteAccessAsync is never even reached - storage
+            // access is treated as missing, same as AuthorizeCallback's own check.
             var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
 
             var result = await controller.AuthorizeConsent("request-id");
 
             Assert.That(result, Is.TypeOf<ContentResult>());
             var html = ((ContentResult)result).Content!;
-            // Only identity is granted; sign + limits are both denied since neither was requested.
-            Assert.That(CountOccurrences(html, "permission-icon granted"), Is.EqualTo(1));
-            Assert.That(CountOccurrences(html, "permission-icon denied"), Is.EqualTo(2));
-            Assert.That(html, Does.Not.Contain("Confirm &amp; Continue"));
-            // No sensitive scopes requested - safe to auto-continue after the countdown.
-            Assert.That(html, Does.Contain("setInterval"));
+            Assert.That(html, Does.Contain("storage access is missing"));
+            Assert.That(html, Does.Contain("Grant Google access"));
+            Assert.That(html, Does.Contain("Continue without storage access"));
+            // Missing storage access must not auto-continue either, even with no other scopes requested.
+            Assert.That(html, Does.Not.Contain("setInterval"));
         }
 
         [Test]
@@ -286,7 +312,7 @@ namespace BiatecOIDCTests
                 .Build();
         }
 
-        private static JwtIssuerController CreateController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, bool authenticated, IConfiguration? configuration = null)
+        private static JwtIssuerController CreateController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, bool authenticated, IConfiguration? configuration = null, string? providerAccessToken = null)
         {
             var providerCatalog = new CloudStorageProviderCatalog(new ICloudStorageProvider[] { new FakeCloudStorageProvider() });
             var controller = new JwtIssuerController(jwtIssuerService, cache, providerCatalog);
@@ -294,12 +320,32 @@ namespace BiatecOIDCTests
             httpContext.Request.Scheme = "https";
             httpContext.Request.Host = new HostString("google.biatec.io");
             httpContext.Request.Headers.UserAgent = "nunit-test-agent";
-            httpContext.RequestServices = new ServiceCollection()
-                .AddSingleton<IConfiguration>(configuration ?? new ConfigurationBuilder().AddInMemoryCollection().Build())
-                .BuildServiceProvider();
-            httpContext.User = authenticated
+
+            // AuthorizeConsent calls HttpContext.GetTokenAsync(provider.Name, "access_token"), which needs
+            // a real IAuthenticationService - stub one that either has no result (no provider token, the
+            // default) or returns providerAccessToken via AuthenticationProperties.StoreTokens, mirroring
+            // what SaveTokens=true actually persists on a real signed-in cookie.
+            var principal = authenticated
                 ? new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim(ClaimTypes.Email, "user@example.com") }, "test"))
                 : new ClaimsPrincipal(new ClaimsIdentity());
+            var authService = new Mock<IAuthenticationService>();
+            if (providerAccessToken != null)
+            {
+                var properties = new AuthenticationProperties();
+                properties.StoreTokens(new[] { new AuthenticationToken { Name = "access_token", Value = providerAccessToken } });
+                var ticket = new AuthenticationTicket(principal, properties, "Google");
+                authService.Setup(s => s.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>())).ReturnsAsync(AuthenticateResult.Success(ticket));
+            }
+            else
+            {
+                authService.Setup(s => s.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>())).ReturnsAsync(AuthenticateResult.NoResult());
+            }
+
+            httpContext.RequestServices = new ServiceCollection()
+                .AddSingleton<IConfiguration>(configuration ?? new ConfigurationBuilder().AddInMemoryCollection().Build())
+                .AddSingleton(authService.Object)
+                .BuildServiceProvider();
+            httpContext.User = principal;
 
             controller.ControllerContext = new ControllerContext
             {
