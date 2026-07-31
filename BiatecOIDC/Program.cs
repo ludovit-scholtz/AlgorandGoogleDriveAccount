@@ -69,7 +69,10 @@ namespace BiatecOIDC
             // registration below and the AddOpenIdConnect scheme further down - without this, Microsoft
             // would show up as a sign-in option on /select-provider (and pair.html) with no working app
             // registration behind it, and CloudStorageProviderCatalog.All has no other way to know.
-            var entraConfigured = !string.IsNullOrWhiteSpace(entraConfig.ClientId) && !string.IsNullOrWhiteSpace(entraConfig.ClientSecret);
+            // Also rejects the checked-in appsettings.json placeholder values ("your-entra-client-id"/
+            // "your-entra-client-secret") - those are non-empty strings, so an IsNullOrWhiteSpace check
+            // alone treats an unedited template as "configured".
+            var entraConfigured = IsConfiguredValue(entraConfig.ClientId) && IsConfiguredValue(entraConfig.ClientSecret);
 
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
@@ -358,6 +361,16 @@ namespace BiatecOIDC
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// True when <paramref name="value"/> looks like a real configured secret/id rather than an unedited
+        /// checked-in appsettings.json placeholder (the repo's convention for those is a <c>"your-..."</c>
+        /// literal, e.g. <c>"your-entra-client-id"</c>) or empty/whitespace.
+        /// </summary>
+        private static bool IsConfiguredValue(string? value)
+        {
+            return !string.IsNullOrWhiteSpace(value) && !value.StartsWith("your-", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
