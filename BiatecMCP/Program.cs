@@ -69,6 +69,14 @@ namespace BiatecMCP
             builder.Configuration.GetSection("CloudServices:Entra").Bind(entraConfig);
             builder.Services.Configure<MicrosoftEntraConfiguration>(builder.Configuration.GetSection("CloudServices:Entra"));
 
+            // TenantId defaults to "common" even when Entra was never set up, so ClientId/ClientSecret
+            // (both empty by default, see MicrosoftEntraConfiguration) are the actual signal that an Entra
+            // app registration has been configured. Gates both the Microsoft ICloudStorageProvider
+            // registration below and the AddOpenIdConnect scheme further down - without this, Microsoft
+            // would show up as a sign-in option on pair.html (and /select-provider) with no working app
+            // registration behind it, and CloudStorageProviderCatalog.All has no other way to know.
+            var entraConfigured = !string.IsNullOrWhiteSpace(entraConfig.ClientId) && !string.IsNullOrWhiteSpace(entraConfig.ClientSecret);
+
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
             builder.Configuration.GetSection("Cors").Bind(corsConfig);
@@ -139,8 +147,11 @@ namespace BiatecMCP
             // AddOpenIdConnect(...) scheme block further down (copy the Microsoft block as a template).
             builder.Services.AddHttpClient<GoogleCloudStorageProvider>();
             builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<GoogleCloudStorageProvider>());
-            builder.Services.AddHttpClient<MicrosoftCloudStorageProvider>();
-            builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<MicrosoftCloudStorageProvider>());
+            if (entraConfigured)
+            {
+                builder.Services.AddHttpClient<MicrosoftCloudStorageProvider>();
+                builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<MicrosoftCloudStorageProvider>());
+            }
             builder.Services.AddScoped<ICloudStorageProviderCatalog, CloudStorageProviderCatalog>();
             builder.Services.AddScoped<ICloudAccountRepository, CloudAccountRepository>();
 
@@ -170,7 +181,7 @@ namespace BiatecMCP
             // purely because that package ships a small wrapper around the same handler), point it at
             // the new provider's OIDC endpoint/scopes, and stamp its ProviderName via
             // CloudStorageProviderClaims.Stamp in OnTokenValidated.
-            builder.Services
+            var authenticationBuilder = builder.Services
                 .AddAuthentication(options =>
                 {
                     options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
@@ -248,8 +259,15 @@ namespace BiatecMCP
                     };
                     // Configure protocol validator to be more lenient with nonce validation for device flows
                     options.ProtocolValidator.RequireNonce = false;
-                })
-                .AddOpenIdConnect(MicrosoftCloudStorageProvider.ProviderName, options =>
+                });
+
+            // Only register the Microsoft auth scheme when an Entra app registration is actually
+            // configured (see entraConfigured above) - otherwise it would appear as a challengeable
+            // scheme/provider with an Authority built from placeholder/empty ClientId/ClientSecret that
+            // can only ever fail sign-in.
+            if (entraConfigured)
+            {
+                authenticationBuilder.AddOpenIdConnect(MicrosoftCloudStorageProvider.ProviderName, options =>
                 {
                     options.Authority = $"https://login.microsoftonline.com/{entraConfig.TenantId}/v2.0";
                     options.ClientId = entraConfig.ClientId;
@@ -304,6 +322,7 @@ namespace BiatecMCP
                     };
                     options.ProtocolValidator.RequireNonce = false;
                 });
+            }
 
             builder.Services.AddControllersWithViews();
 
