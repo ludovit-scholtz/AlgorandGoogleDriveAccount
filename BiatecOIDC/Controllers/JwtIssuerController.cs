@@ -471,6 +471,22 @@ namespace BiatecOIDC.Controllers
                 color: var(--text-0);
                 border: 1px solid var(--panel-border);
             }
+            .consent-auto-continue-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.85rem; }
+            .consent-auto-continue-row .consent-continue-btn { flex: 1; margin-top: 0; }
+            .consent-pause-btn {
+                flex-shrink: 0;
+                padding: 0.7rem 0.9rem;
+                border-radius: 14px;
+                background: rgba(255, 255, 255, 0.04);
+                color: var(--text-1);
+                border: 1px solid var(--panel-border);
+                font-family: var(--font-display);
+                font-weight: 600;
+                font-size: 0.82rem;
+                cursor: pointer;
+                transition: transform 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+            }
+            .consent-pause-btn:hover { border-color: var(--panel-border-hover); color: var(--text-0); }
 
             /* Wide screens: let the consent card spread horizontally (permission text on one line, less
                vertical stacking) instead of staying pinned to the picker's narrow 440px width. */
@@ -752,17 +768,37 @@ namespace BiatecOIDC.Controllers
             {
                 // Built with plain concatenation, not raw-string interpolation - the countdown script's
                 // JS braces would otherwise collide with C#'s single-brace interpolation-hole syntax.
+                // Clicking anywhere on the page (including the dedicated pause button) pauses the
+                // countdown - it never auto-continues out from under a user who's still reading. Clicking
+                // the continue link itself still navigates normally (anchor default action, not swallowed
+                // by the click listener) so "Continue" always follows continueUrl regardless of pause state.
                 var autoContinueScript = "<script>" +
                     "var seconds = 5;" +
+                    "var paused = false;" +
+                    "var timer = null;" +
                     "var countdownEl = document.getElementById('countdown');" +
-                    "var timer = setInterval(function () {" +
+                    "var pauseBtn = document.getElementById('pauseBtn');" +
+                    "function tick() {" +
                     "  seconds -= 1;" +
                     "  if (countdownEl) { countdownEl.textContent = String(Math.max(seconds, 0)); }" +
                     "  if (seconds <= 0) {" +
                     "    clearInterval(timer);" +
+                    "    timer = null;" +
                     "    window.location.href = " + JsonSerializer.Serialize(continueUrl) + ";" +
                     "  }" +
-                    "}, 1000);" +
+                    "}" +
+                    "function startTimer() { if (!timer) { timer = setInterval(tick, 1000); } }" +
+                    "function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }" +
+                    "function setPaused(next) {" +
+                    "  paused = next;" +
+                    "  if (paused) { stopTimer(); } else { startTimer(); }" +
+                    "  if (pauseBtn) { pauseBtn.textContent = paused ? 'Resume' : 'Pause'; }" +
+                    "}" +
+                    "startTimer();" +
+                    "document.addEventListener('click', function (e) {" +
+                    "  if (pauseBtn && e.target === pauseBtn) { setPaused(!paused); return; }" +
+                    "  setPaused(true);" +
+                    "});" +
                     "</script>";
 
                 bodyHtml = $"""
@@ -770,7 +806,10 @@ namespace BiatecOIDC.Controllers
                         <span class="callout-icon">&#9989;</span>
                         <p>This access only verifies your identity - no transfers will be made and your spending limit will not change.</p>
                     </div>
-                    <a class="consent-continue-btn secondary" id="continueNowBtn" href="{encodedContinueUrl}">Continue now (<span id="countdown">5</span>s)</a>
+                    <div class="consent-auto-continue-row">
+                        <a class="consent-continue-btn secondary" id="continueNowBtn" href="{encodedContinueUrl}">Continue now (<span id="countdown">5</span>s)</a>
+                        <button type="button" class="consent-pause-btn" id="pauseBtn">Pause</button>
+                    </div>
                     {autoContinueScript}
                     """;
             }
