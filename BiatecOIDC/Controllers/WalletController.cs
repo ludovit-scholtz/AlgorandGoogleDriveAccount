@@ -11,11 +11,13 @@ namespace BiatecOIDC.Controllers
 {
     /// <summary>
     /// Self-custody wallet API: signs Algorand transaction groups and manages the caller's spending
-    /// limit. Every endpoint here requires a Biatec OIDC access token (<c>Authorization: Bearer</c>)
-    /// carrying the relevant scope-derived claim - <c>sign</c> for <see cref="SignTransactionGroup"/>,
-    /// <c>manage-limits</c> for the spending-limit endpoints - exactly as granted at <c>/authorize</c>
-    /// (see <c>JwtIssuerService.CreateAccessToken</c>). A token missing the claim is rejected with 403,
-    /// never silently treated as authorized.
+    /// limit. Every endpoint here requires a Biatec OIDC access token (<c>Authorization: Bearer</c>).
+    /// State-changing endpoints additionally require the relevant scope-derived claim - <c>sign</c> for
+    /// <see cref="SignTransactionGroup"/>, <c>manage-limits</c> for <see cref="UpdateSpendingLimit"/> -
+    /// exactly as granted at <c>/authorize</c> (see <c>JwtIssuerService.CreateAccessToken</c>); a token
+    /// missing the claim is rejected with 403, never silently treated as authorized.
+    /// <see cref="GetSpendingLimit"/> is read-only and only requires a validly-authenticated caller (the
+    /// standard <c>openid</c> scope) to verify the caller's identity - no <c>manage-limits</c> claim needed.
     /// </summary>
     [ApiController]
     [Route("wallet")]
@@ -107,13 +109,12 @@ namespace BiatecOIDC.Controllers
         /// <summary>Returns the caller's current per-transaction spending limit.</summary>
         /// <response code="200">The current limit (<c>0</c> means unbounded).</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
-        /// <response code="403">The token lacks the <c>manage-limits</c> claim.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("limits")]
         public async Task<IActionResult> GetSpendingLimit()
         {
-            var authError = TryAuthenticate(WalletScopes.ManageLimits, out var principal);
+            var authError = TryAuthenticate(requiredClaim: null, out var principal);
             if (authError != null)
             {
                 return authError;
@@ -147,13 +148,16 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
-        /// Extracts and validates the bearer access token, and confirms it carries
-        /// <paramref name="requiredClaim"/> (stamped from the matching OIDC scope - see
-        /// <c>JwtIssuerService.CreateAccessToken</c>) and an <c>email</c> claim identifying the wallet
-        /// owner. Returns <c>null</c> and sets <paramref name="principal"/> on success; otherwise returns
-        /// the error response to return directly, and <paramref name="principal"/> is <c>null</c>.
+        /// Extracts and validates the bearer access token and confirms it carries an <c>email</c> claim
+        /// identifying the wallet owner. When <paramref name="requiredClaim"/> is non-null, also confirms
+        /// the token carries that claim (stamped from the matching OIDC scope - see
+        /// <c>JwtIssuerService.CreateAccessToken</c>); when <c>null</c>, any validly-authenticated caller
+        /// (the standard <c>openid</c> scope) is sufficient - used for read-only identity-verification
+        /// endpoints that don't need a scope beyond proving who the caller is. Returns <c>null</c> and
+        /// sets <paramref name="principal"/> on success; otherwise returns the error response to return
+        /// directly, and <paramref name="principal"/> is <c>null</c>.
         /// </summary>
-        private IActionResult? TryAuthenticate(string requiredClaim, out ClaimsPrincipal? principal)
+        private IActionResult? TryAuthenticate(string? requiredClaim, out ClaimsPrincipal? principal)
         {
             principal = null;
 
@@ -175,7 +179,7 @@ namespace BiatecOIDC.Controllers
                 return Unauthorized(new ProblemDetails { Title = "invalid_token", Detail = "Token has no email claim." });
             }
 
-            if (!string.Equals(validation.Principal.FindFirstValue(requiredClaim), "true", StringComparison.Ordinal))
+            if (requiredClaim != null && !string.Equals(validation.Principal.FindFirstValue(requiredClaim), "true", StringComparison.Ordinal))
             {
                 return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
                 {

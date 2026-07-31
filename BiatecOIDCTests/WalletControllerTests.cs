@@ -183,16 +183,20 @@ namespace BiatecOIDCTests
         // ───────────────────────── Spending limit endpoints ─────────────────────────
 
         [Test]
-        public async Task GetSpendingLimit_MissingManageLimitsClaim_ReturnsForbidden()
+        public async Task GetSpendingLimit_NoManageLimitsClaim_StillReturnsCurrentLimit()
         {
+            // GET is read-only identity verification only - any authenticated (openid) caller may read
+            // their own limit, no manage-limits claim required.
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token"); // no manage-limits claim
+            _mockSpendingLimitService.Setup(s => s.GetMaxAmountPerTransactionAsync(TestEmail)).ReturnsAsync(42UL);
 
             var result = await _controller.GetSpendingLimit();
 
-            var objectResult = result as ObjectResult;
-            Assert.That(objectResult, Is.Not.Null);
-            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as SpendingLimitResponse;
+            Assert.That(response!.MaxAmountPerTransaction, Is.EqualTo(42UL));
         }
 
         [Test]

@@ -413,20 +413,29 @@ namespace BiatecOIDC.Controllers
             .callout strong { color: var(--text-0); }
 
             /* ---------- Consent screen (/authorize/consent) ---------- */
-            .permission-list { display: flex; flex-direction: column; gap: 0.85rem; margin-bottom: 1.5rem; text-align: left; }
+            /* Sized to fit a full-HD (1920x1080) viewport without scrolling: tighter paddings/gaps and a
+               smaller claims/permissions text than the provider-picker screen's. On wide screens the card
+               widens instead of the content stacking taller, via the min-width rule below. */
+            .consent-shell { padding: 1rem 2rem; }
+            .consent-card { padding: 1.5rem 2rem; }
+            .consent-card .picker-logo { height: 32px; margin-bottom: 1rem; }
+            .consent-card .eyebrow { margin-bottom: 0.9rem; }
+            .consent-card h1 { font-size: 1.35rem; margin-bottom: 0.4rem; }
+            .consent-card .subtitle { font-size: 0.85rem; margin-bottom: 1.1rem; }
+            .permission-list { display: flex; flex-direction: column; gap: 0.55rem; margin-bottom: 1rem; text-align: left; }
             .permission-row {
                 display: flex;
                 align-items: flex-start;
-                gap: 0.85rem;
-                padding: 0.85rem 1rem;
+                gap: 0.75rem;
+                padding: 0.6rem 0.85rem;
                 background: rgba(255, 255, 255, 0.03);
                 border: 1px solid var(--panel-border);
                 border-radius: 12px;
             }
             .permission-icon {
                 flex-shrink: 0;
-                width: 26px;
-                height: 26px;
+                width: 22px;
+                height: 22px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
@@ -434,12 +443,14 @@ namespace BiatecOIDC.Controllers
             }
             .permission-icon.granted { background: rgba(53, 230, 164, 0.16); color: var(--accent-green); }
             .permission-icon.denied { background: rgba(255, 84, 112, 0.14); color: var(--accent-red); }
-            .permission-icon svg { width: 15px; height: 15px; }
-            .permission-text { display: flex; flex-direction: column; gap: 0.15rem; }
-            .permission-text strong { color: var(--text-0); font-size: 0.92rem; }
-            .permission-text span { color: var(--text-1); font-size: 0.82rem; }
+            .permission-icon svg { width: 13px; height: 13px; }
+            .permission-text { display: flex; flex-direction: column; gap: 0.1rem; }
+            .permission-text strong { color: var(--text-0); font-size: 0.82rem; }
+            .permission-text span { color: var(--text-1); font-size: 0.72rem; }
             .consent-warning { border-color: rgba(255, 184, 77, 0.3); }
             .consent-safe { border-color: rgba(53, 230, 164, 0.3); background: linear-gradient(180deg, rgba(53, 230, 164, 0.08), transparent); }
+            .consent-card .callout { padding: 0.7rem 0.85rem; }
+            .consent-card .callout p { font-size: 0.78rem; }
             .consent-continue-btn {
                 display: block;
                 margin-top: 1.25rem;
@@ -453,11 +464,22 @@ namespace BiatecOIDC.Controllers
                 color: #05060d;
                 transition: transform 0.2s ease, box-shadow 0.2s ease;
             }
+            .consent-card .consent-continue-btn { margin-top: 0.85rem; padding: 0.7rem 1rem; font-size: 0.88rem; }
             .consent-continue-btn:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(8, 10, 24, 0.5); }
             .consent-continue-btn.secondary {
                 background: rgba(255, 255, 255, 0.04);
                 color: var(--text-0);
                 border: 1px solid var(--panel-border);
+            }
+
+            /* Wide screens: let the consent card spread horizontally (permission text on one line, less
+               vertical stacking) instead of staying pinned to the picker's narrow 440px width. */
+            @media (min-width: 720px) {
+                .consent-card { max-width: 620px; }
+                .permission-row { align-items: center; }
+            }
+            @media (min-width: 1100px) {
+                .consent-card { max-width: 720px; }
             }
             """;
 
@@ -769,8 +791,8 @@ namespace BiatecOIDC.Controllers
                 <body>
                     <div class="aurora"></div>
                     <div class="grid-overlay"></div>
-                    <div class="picker-shell">
-                        <div class="picker-card">
+                    <div class="picker-shell consent-shell">
+                        <div class="picker-card consent-card">
                             <img class="picker-logo" src="/logo-biatec.png" alt="Biatec logo">
                             <div class="eyebrow"><span class="dot"></span> Authorization request</div>
                             <h1>Confirm access for <span class="glow-text">{WebUtility.HtmlEncode(appName)}</span></h1>
