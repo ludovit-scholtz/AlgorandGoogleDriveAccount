@@ -465,7 +465,9 @@ namespace BiatecMCP
         /// </summary>
         private static bool IsConfiguredValue(string? value)
         {
-            return !string.IsNullOrWhiteSpace(value) && !value.StartsWith("your-", StringComparison.OrdinalIgnoreCase);
+            return !string.IsNullOrWhiteSpace(value) 
+            && !value.StartsWith("your-", StringComparison.OrdinalIgnoreCase)
+            && value != "ClientId";
         }
     }
 }
