@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using BiatecSelfCustodyCore.Model;
 
 namespace BiatecSelfCustodyCore.Helper
 {
@@ -151,19 +150,20 @@ namespace BiatecSelfCustodyCore.Helper
         }
 
         /// <summary>
-        /// Generates a unique identifier based on the provided AES key and initialization vector (IV).
+        /// Generates a unique identifier for one generation of AES key material - a short hash used as the
+        /// <c>%AESID%</c> placeholder in encrypted file names, so each key generation's files live under a
+        /// distinct name (see <c>EncryptedKeyRingFileStore</c>: this is what lets rotation locate which
+        /// generation encrypted an existing file without needing to try decrypting it under several keys).
         /// </summary>
         /// <remarks>The method computes a SHA-256 hash of the concatenated key and IV, and returns the
         /// first 6 bytes of the hash as a lowercase hexadecimal string.</remarks>
-        /// <param name="aesOptions">An <see cref="AesOptions"/> object containing the Base64-encoded AES key and IV.</param>
-        /// <returns>A hexadecimal string representing the unique identifier, derived from the key and IV. The string is 6 bytes
-        /// in length.</returns>
-        /// <exception cref="ArgumentNullException">Thrown if the <paramref name="aesOptions"/> contains a null key or IV.</exception>
+        /// <param name="key">32-byte AES-256 key.</param>
+        /// <param name="iv">16-byte AES initialization vector.</param>
+        /// <returns>A 6-byte hexadecimal string derived from the key and IV.</returns>
+        /// <exception cref="ArgumentNullException">Thrown if <paramref name="key"/> or <paramref name="iv"/> is null.</exception>
         /// <exception cref="ArgumentException">Thrown if the key length is not 32 bytes or the IV length is not 16 bytes.</exception>
-        public static string MakeAesId(AesOptions aesOptions)
+        public static string MakeAesId(byte[] key, byte[] iv)
         {
-            var key = Convert.FromBase64String(aesOptions.Key);
-            var iv = Convert.FromBase64String(aesOptions.IV);
             if (key == null || iv == null)
             {
                 throw new ArgumentNullException("Key and IV cannot be null");

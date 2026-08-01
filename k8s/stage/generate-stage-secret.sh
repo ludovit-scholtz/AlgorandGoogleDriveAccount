@@ -55,23 +55,48 @@ prompt_if_unset REDIS_CONNECTION_STRING "Redis connection string (fine to reuse 
 echo "==> Generating a fresh AES-256 key/IV dedicated to stage (never reused from production)"
 AES_KEY=$(openssl rand -base64 32)
 AES_IV=$(openssl rand -base64 16)
+AES_KEY_ID="$(date +%Y-%m)-1"
 
 echo "==> Generating a fresh AES-256 key/IV dedicated to stage's provider-access-token caching (BiatecOIDC only, never reused from AesOptions or production)"
 PROVIDER_TOKEN_PROTECTION_KEY=$(openssl rand -base64 32)
 PROVIDER_TOKEN_PROTECTION_IV=$(openssl rand -base64 16)
+PROVIDER_TOKEN_PROTECTION_KEY_ID="$(date +%Y-%m)-1"
 
 echo "==> Generating a fresh 4096-bit RSA signing key dedicated to stage OIDC tokens (never reused from production)"
 JWT_SIGNING_KEY=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096)
 
+# AesOptions/ProviderTokenProtection are rotatable key rings (BiatecSelfCustodyCore.Model.AesOptions /
+# BiatecOIDC.Model.ProviderTokenProtectionConfiguration): ActiveKeyId names which entry in Keys[] new
+# encryption uses; every entry stays decryptable so already-encrypted data (and already-issued Biatec
+# tokens caching a provider token) keeps working until it's naturally re-encrypted/re-issued under the
+# active key. This script always creates/replaces the secret with exactly ONE generation - fine for
+# first-time setup, but a real *rotation* must ADD a new generation rather than replacing the only one,
+# otherwise nothing decryptable under the old key (existing self-custody files, cached provider tokens in
+# already-issued tokens) can be read anymore. To rotate:
+#   1. Generate a new key/IV pair and a new, never-reused KeyId (e.g. next month's "YYYY-MM-1").
+#   2. Re-run `kubectl create secret ... --dry-run=client -o yaml | kubectl apply -f -` yourself with
+#      BOTH the new generation (as Keys__0__*) AND every existing generation appended after it
+#      (Keys__1__*, Keys__2__*, ...), with ActiveKeyId set to the new generation's KeyId. `kubectl get
+#      secret <name> -o json` lets you read back the currently-deployed literals to preserve them.
+#   3. `kubectl rollout restart deployment/...` for both deployments (env vars are snapshotted at
+#      process start - IOptionsMonitor does not hot-reload a Secret change, so this restart is what
+#      actually picks up the rotation; being a rolling restart across replicas, it's zero-downtime).
+#   4. Watch logs for "Migrating ... from AES key generation ... to the active generation ..." - once
+#      you stop seeing a given old KeyId mentioned (all active users' data has been touched at least
+#      once since the rotation), it's safe to drop that generation from Keys[] in a later update.
 echo "==> Creating/updating Secret '$SECRET_NAME' in namespace '$NAMESPACE'"
 kubectl create secret generic "$SECRET_NAME" \
   --namespace="$NAMESPACE" \
   --from-literal=CloudServices__Google__ClientId="$GOOGLE_CLIENT_ID" \
   --from-literal=CloudServices__Google__ClientSecret="$GOOGLE_CLIENT_SECRET" \
-  --from-literal=AesOptions__Key="$AES_KEY" \
-  --from-literal=AesOptions__IV="$AES_IV" \
-  --from-literal=ProviderTokenProtection__Key="$PROVIDER_TOKEN_PROTECTION_KEY" \
-  --from-literal=ProviderTokenProtection__IV="$PROVIDER_TOKEN_PROTECTION_IV" \
+  --from-literal=AesOptions__ActiveKeyId="$AES_KEY_ID" \
+  --from-literal=AesOptions__Keys__0__KeyId="$AES_KEY_ID" \
+  --from-literal=AesOptions__Keys__0__Key="$AES_KEY" \
+  --from-literal=AesOptions__Keys__0__IV="$AES_IV" \
+  --from-literal=ProviderTokenProtection__ActiveKeyId="$PROVIDER_TOKEN_PROTECTION_KEY_ID" \
+  --from-literal=ProviderTokenProtection__Keys__0__KeyId="$PROVIDER_TOKEN_PROTECTION_KEY_ID" \
+  --from-literal=ProviderTokenProtection__Keys__0__Key="$PROVIDER_TOKEN_PROTECTION_KEY" \
+  --from-literal=ProviderTokenProtection__Keys__0__IV="$PROVIDER_TOKEN_PROTECTION_IV" \
   --from-literal=CloudServices__Entra__TenantId="$ENTRA_TENANT_ID" \
   --from-literal=CloudServices__Entra__ClientId="$ENTRA_CLIENT_ID" \
   --from-literal=CloudServices__Entra__ClientSecret="$ENTRA_CLIENT_SECRET" \

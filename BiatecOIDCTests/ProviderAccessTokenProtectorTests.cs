@@ -1,5 +1,6 @@
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Model;
+using BiatecSelfCustodyCore.Model;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -11,6 +12,7 @@ namespace BiatecOIDCTests
     public class ProviderAccessTokenProtectorTests
     {
         private const string TestEmail = "user@example.com";
+        private const string ActiveKeyId = "gen-1";
 
         private Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>> _mockConfig = null!;
         private ProviderTokenProtectionConfiguration _config = null!;
@@ -19,16 +21,25 @@ namespace BiatecOIDCTests
         [SetUp]
         public void SetUp()
         {
-            _config = new ProviderTokenProtectionConfiguration
-            {
-                Key = Convert.ToBase64String(new byte[32]),
-                IV = Convert.ToBase64String(new byte[16])
-            };
+            _config = BuildConfig(ActiveKeyId, MakeEntry(ActiveKeyId, 1));
             _mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
             _mockConfig.Setup(c => c.CurrentValue).Returns(() => _config);
 
             _protector = CreateProtector(_mockConfig.Object, Environments.Development);
         }
+
+        private static AesKeyRingEntry MakeEntry(string keyId, byte fill) => new()
+        {
+            KeyId = keyId,
+            Key = Convert.ToBase64String(Enumerable.Repeat(fill, 32).ToArray()),
+            IV = Convert.ToBase64String(Enumerable.Repeat(fill, 16).ToArray())
+        };
+
+        private static ProviderTokenProtectionConfiguration BuildConfig(string activeKeyId, params AesKeyRingEntry[] keys) => new()
+        {
+            ActiveKeyId = activeKeyId,
+            Keys = keys.ToList()
+        };
 
         private static ProviderAccessTokenProtector CreateProtector(IOptionsMonitor<ProviderTokenProtectionConfiguration> config, string environmentName)
         {
@@ -96,10 +107,9 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void Protect_KeyNotConfigured_ReturnsNullInsteadOfThrowing()
+        public void Protect_ActiveKeyNotConfigured_ReturnsNullInsteadOfThrowing()
         {
-            _config.Key = string.Empty;
-            _config.IV = string.Empty;
+            _config.ActiveKeyId = string.Empty;
 
             var result = _protector.Protect("some-token", TestEmail);
 
@@ -107,11 +117,10 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void Unprotect_KeyNotConfigured_ReturnsNullInsteadOfThrowing()
+        public void Unprotect_ActiveKeyRemovedEntirely_ReturnsNullInsteadOfThrowing()
         {
             var protectedToken = _protector.Protect("some-token", TestEmail);
-            _config.Key = string.Empty;
-            _config.IV = string.Empty;
+            _config.Keys.Clear();
 
             var result = _protector.Unprotect(protectedToken, TestEmail);
 
@@ -121,7 +130,7 @@ namespace BiatecOIDCTests
         [Test]
         public void Protect_InvalidBase64Key_ReturnsNullInsteadOfThrowing()
         {
-            _config.Key = "not-valid-base64!!!";
+            _config.Keys[0].Key = "not-valid-base64!!!";
 
             var result = _protector.Protect("some-token", TestEmail);
 
@@ -131,7 +140,7 @@ namespace BiatecOIDCTests
         [Test]
         public void Protect_WrongKeyLength_ReturnsNullInsteadOfThrowing()
         {
-            _config.Key = Convert.ToBase64String(new byte[16]); // should be 32 bytes
+            _config.Keys[0].Key = Convert.ToBase64String(new byte[16]); // should be 32 bytes
 
             var result = _protector.Protect("some-token", TestEmail);
 
@@ -143,10 +152,51 @@ namespace BiatecOIDCTests
         {
             var protectedWithKey1 = _protector.Protect("same-token", TestEmail);
 
-            _config.Key = Convert.ToBase64String(Enumerable.Repeat((byte)7, 32).ToArray());
+            _config.Keys[0].Key = Convert.ToBase64String(Enumerable.Repeat((byte)7, 32).ToArray());
             var protectedWithKey2 = _protector.Protect("same-token", TestEmail);
 
             Assert.That(protectedWithKey1, Is.Not.EqualTo(protectedWithKey2));
+        }
+
+        // ───────────────────────── Key rotation ─────────────────────────
+
+        [Test]
+        public void Unprotect_TokenEncryptedUnderRetiredKey_StillDecryptsViaHistoricalKey()
+        {
+            var protectedToken = _protector.Protect("token-from-before-rotation", TestEmail);
+
+            // Rotate: new active generation, old one demoted to historical (still present).
+            _config = BuildConfig("gen-2", MakeEntry("gen-2", 2), MakeEntry(ActiveKeyId, 1));
+
+            var result = _protector.Unprotect(protectedToken, TestEmail);
+
+            Assert.That(result, Is.EqualTo("token-from-before-rotation"));
+        }
+
+        [Test]
+        public void Protect_AfterRotation_UsesTheNewActiveKey()
+        {
+            var protectedBeforeRotation = _protector.Protect("same-token", TestEmail);
+
+            _config = BuildConfig("gen-2", MakeEntry("gen-2", 2), MakeEntry(ActiveKeyId, 1));
+            var protectedAfterRotation = _protector.Protect("same-token", TestEmail);
+
+            Assert.That(protectedAfterRotation, Is.Not.EqualTo(protectedBeforeRotation));
+            // Round-trips under the new active key alone (no historical fallback needed for freshly-protected data).
+            Assert.That(_protector.Unprotect(protectedAfterRotation, TestEmail), Is.EqualTo("same-token"));
+        }
+
+        [Test]
+        public void Unprotect_TokenEncryptedUnderKeyThatWasFullyRemoved_ReturnsNullInsteadOfThrowing()
+        {
+            var protectedToken = _protector.Protect("token-from-a-retired-key", TestEmail);
+
+            // The generation that encrypted this token is no longer configured at all (fully retired).
+            _config = BuildConfig("gen-2", MakeEntry("gen-2", 2));
+
+            var result = _protector.Unprotect(protectedToken, TestEmail);
+
+            Assert.That(result, Is.Null);
         }
 
         // ───────────────────────── Fail-fast construction (production only) ─────────────────────────
@@ -155,9 +205,9 @@ namespace BiatecOIDCTests
         // Development, not discovered one 401 at a time.
 
         [Test]
-        public void Construction_KeyMissing_InProduction_Throws()
+        public void Construction_ActiveKeyMissing_InProduction_Throws()
         {
-            var config = new ProviderTokenProtectionConfiguration { Key = string.Empty, IV = string.Empty };
+            var config = BuildConfig(string.Empty);
             var mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
             mockConfig.Setup(c => c.CurrentValue).Returns(config);
 
@@ -165,9 +215,9 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void Construction_KeyInvalid_InProduction_Throws()
+        public void Construction_ActiveKeyInvalid_InProduction_Throws()
         {
-            var config = new ProviderTokenProtectionConfiguration { Key = "not-valid-base64!!!", IV = Convert.ToBase64String(new byte[16]) };
+            var config = BuildConfig(ActiveKeyId, new AesKeyRingEntry { KeyId = ActiveKeyId, Key = "not-valid-base64!!!", IV = Convert.ToBase64String(new byte[16]) });
             var mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
             mockConfig.Setup(c => c.CurrentValue).Returns(config);
 
@@ -175,9 +225,9 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void Construction_KeyMissing_InDevelopment_DoesNotThrow()
+        public void Construction_ActiveKeyMissing_InDevelopment_DoesNotThrow()
         {
-            var config = new ProviderTokenProtectionConfiguration { Key = string.Empty, IV = string.Empty };
+            var config = BuildConfig(string.Empty);
             var mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
             mockConfig.Setup(c => c.CurrentValue).Returns(config);
 
@@ -185,13 +235,9 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void Construction_KeyValid_InProduction_DoesNotThrow()
+        public void Construction_ActiveKeyValid_InProduction_DoesNotThrow()
         {
-            var config = new ProviderTokenProtectionConfiguration
-            {
-                Key = Convert.ToBase64String(new byte[32]),
-                IV = Convert.ToBase64String(new byte[16])
-            };
+            var config = BuildConfig(ActiveKeyId, MakeEntry(ActiveKeyId, 1));
             var mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
             mockConfig.Setup(c => c.CurrentValue).Returns(config);
 

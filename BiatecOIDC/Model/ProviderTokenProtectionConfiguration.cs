@@ -1,26 +1,23 @@
+using BiatecSelfCustodyCore.Model;
+
 namespace BiatecOIDC.Model
 {
     /// <summary>
-    /// Bound from the <c>ProviderTokenProtection</c> configuration section. A dedicated AES-256 key/IV pair
-    /// used only to encrypt the caller's Google/Microsoft access token when it's cached inside a Biatec
-    /// access/refresh token (see <c>BusinessLogic.IProviderAccessTokenProtector</c>) - deliberately
-    /// <em>not</em> the same key as <c>AesOptions</c> (which protects the self-custody account file), so
+    /// Bound from the <c>ProviderTokenProtection</c> configuration section. A dedicated, rotatable AES-256 key
+    /// ring used only to encrypt the caller's Google/Microsoft access/refresh token when cached inside a
+    /// Biatec access/refresh token (see <c>BusinessLogic.IProviderAccessTokenProtector</c>) - deliberately
+    /// <em>not</em> the same key ring as <c>AesOptions</c> (which protects the self-custody account file), so
     /// the two secrets can be rotated independently and a leak of one doesn't automatically compromise
-    /// the other. Same shape as <c>AesOptions</c> for consistency; see
+    /// the other. Same shape as <c>AesOptions</c> (<see cref="IAesKeyRingConfiguration"/>) for consistency; see
     /// <c>BiatecOIDC/OIDC_INTEGRATION_GUIDE.md</c>'s "Provider access token caching" section for the full
-    /// threat-model writeup and key-generation instructions.
+    /// threat-model writeup and key-generation/rotation instructions.
     /// </summary>
-    public class ProviderTokenProtectionConfiguration
+    public class ProviderTokenProtectionConfiguration : IAesKeyRingConfiguration
     {
-        /// <summary>Base64-encoded 32-byte AES-256 key.</summary>
-        public string Key { get; set; } = string.Empty;
+        /// <inheritdoc />
+        public string ActiveKeyId { get; set; } = string.Empty;
 
-        /// <summary>
-        /// Base64-encoded 16-byte IV. Kept only for parameter symmetry with
-        /// <c>BiatecSelfCustodyCore.Helper.AesEncryptionHelper</c>'s signature - the current authenticated
-        /// AES-GCM format this protector uses derives its own random per-encryption nonce and doesn't
-        /// actually consume this value.
-        /// </summary>
-        public string IV { get; set; } = string.Empty;
+        /// <inheritdoc />
+        public List<AesKeyRingEntry> Keys { get; set; } = new();
     }
 }

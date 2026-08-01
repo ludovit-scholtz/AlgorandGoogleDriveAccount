@@ -1,6 +1,7 @@
 using BiatecOIDC.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -17,6 +18,20 @@ namespace BiatecOIDCTests
         private Mock<ICloudStorageProviderCatalog> _mockCatalog = null!;
         private Mock<IExchangeRateService> _mockExchangeRateService = null!;
         private SpendingLimitService _service = null!;
+        private AesOptions _aesOptionsValue = null!;
+
+        private static AesKeyRingEntry MakeKeyEntry(string keyId, byte fill) => new()
+        {
+            KeyId = keyId,
+            Key = Convert.ToBase64String(Enumerable.Repeat(fill, 32).ToArray()),
+            IV = Convert.ToBase64String(Enumerable.Repeat(fill, 16).ToArray())
+        };
+
+        private static AesOptions BuildAesOptions(string activeKeyId, params AesKeyRingEntry[] keys) => new()
+        {
+            ActiveKeyId = activeKeyId,
+            Keys = keys.ToList()
+        };
 
         [SetUp]
         public void SetUp()
@@ -35,13 +50,13 @@ namespace BiatecOIDCTests
                 .ReturnsAsync((decimal amount, string _, CancellationToken _) => amount);
 
             var aesOptions = new Mock<IOptionsMonitor<AesOptions>>();
-            aesOptions.Setup(a => a.CurrentValue).Returns(new AesOptions
-            {
-                Key = Convert.ToBase64String(new byte[32]),
-                IV = Convert.ToBase64String(new byte[16])
-            });
+            _aesOptionsValue = BuildAesOptions("gen-1", MakeKeyEntry("gen-1", 1));
+            aesOptions.Setup(a => a.CurrentValue).Returns(() => _aesOptionsValue);
 
-            _service = new SpendingLimitService(_mockCatalog.Object, _mockExchangeRateService.Object, aesOptions.Object, new Mock<ILogger<SpendingLimitService>>().Object);
+            var mockEnvironment = new Mock<IHostEnvironment>();
+            mockEnvironment.Setup(e => e.EnvironmentName).Returns(Environments.Development);
+
+            _service = new SpendingLimitService(_mockCatalog.Object, _mockExchangeRateService.Object, aesOptions.Object, mockEnvironment.Object, new Mock<ILogger<SpendingLimitService>>().Object);
         }
 
         [Test]
@@ -67,6 +82,35 @@ namespace BiatecOIDCTests
             Assert.That(result.DailyLimit, Is.EqualTo(100));
             Assert.That(result.WeeklyLimit, Is.EqualTo(500));
             Assert.That(result.MonthlyLimit, Is.EqualTo(2000));
+        }
+
+        [Test]
+        public async Task GetLimitsAsync_SettingsFileUnderHistoricalKey_MigratesToActiveKeyAndDeletesOldFile()
+        {
+            // Simulate a key rotation: the limits file was encrypted+named under a now-historical
+            // generation before this test's active key ("gen-1") became active.
+            var historicalEntry = MakeKeyEntry("gen-0", 9);
+            _aesOptionsValue = BuildAesOptions("gen-1", MakeKeyEntry("gen-1", 1), historicalEntry);
+
+            var settings = new SpendingLimitSettings { CurrencyCode = "EUR", DailyLimit = 50, WeeklyLimit = 0, MonthlyLimit = 0 };
+            var plaintext = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(settings, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            var historicalKeyBytes = BiatecSelfCustodyCore.Helper.AesKeyRingResolver.KeyBytes(historicalEntry);
+            var historicalIvBytes = BiatecSelfCustodyCore.Helper.AesKeyRingResolver.IvBytes(historicalEntry);
+            var encrypted = BiatecSelfCustodyCore.Helper.AesEncryptionHelper.Encrypt(plaintext, historicalKeyBytes, historicalIvBytes, TestEmail);
+            var historicalFileName = "SpendingLimits." + BiatecSelfCustodyCore.Helper.AesEncryptionHelper.MakeAesId(historicalKeyBytes, historicalIvBytes) + ".dat";
+            _fakeProvider.Files[historicalFileName] = encrypted;
+
+            var result = await _service.GetLimitsAsync(TestEmail, TestProvider, "token");
+
+            Assert.That(result.CurrencyCode, Is.EqualTo("EUR"));
+            Assert.That(result.DailyLimit, Is.EqualTo(50));
+            Assert.That(_fakeProvider.Files.ContainsKey(historicalFileName), Is.False, "stale file under the retired key should have been deleted");
+
+            var activeKey = _aesOptionsValue.Keys.First(k => k.KeyId == "gen-1");
+            var activeFileName = "SpendingLimits." + BiatecSelfCustodyCore.Helper.AesEncryptionHelper.MakeAesId(
+                BiatecSelfCustodyCore.Helper.AesKeyRingResolver.KeyBytes(activeKey),
+                BiatecSelfCustodyCore.Helper.AesKeyRingResolver.IvBytes(activeKey)) + ".dat";
+            Assert.That(_fakeProvider.Files.ContainsKey(activeFileName), Is.True, "settings should now live under the active key's file");
         }
 
         [Test]

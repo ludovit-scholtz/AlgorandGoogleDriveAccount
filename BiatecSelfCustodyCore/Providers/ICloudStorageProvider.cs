@@ -44,6 +44,15 @@ namespace BiatecSelfCustodyCore.Providers
         Task UploadAsync(string fileName, byte[] content, string accessToken);
 
         /// <summary>
+        /// Best-effort delete of <paramref name="fileName"/> - never throws, including when the file doesn't
+        /// exist. Used only to clean up a stale file just after its contents were migrated to a new AES key
+        /// generation (see <c>EncryptedKeyRingFileStore</c>) - a failed delete just leaves a harmless
+        /// orphaned (still access-token-gated, still encrypted) file behind, so it's never worth failing the
+        /// caller's request over.
+        /// </summary>
+        Task DeleteAsync(string fileName, string accessToken);
+
+        /// <summary>
         /// Whether <paramref name="accessToken"/> actually grants this provider's storage-write
         /// permission (e.g. Google's <c>drive.file</c> scope, Microsoft Graph's
         /// <c>Files.ReadWrite.AppFolder</c>) - checked before finalizing a sign-in/pairing so a

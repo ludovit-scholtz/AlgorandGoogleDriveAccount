@@ -132,11 +132,19 @@ spending-limit-checked, per the current scope of this feature.
 ## Provider access token caching
 
 `ProviderAccessTokenProtector`/`IProviderAccessTokenProtector` (`BiatecOIDC/BusinessLogic/`) AES-256-GCM encrypts
-the caller's Google/Microsoft access token under a **dedicated** key (`ProviderTokenProtectionConfiguration`,
-bound from `ProviderTokenProtection:Key`/`IV` - never `AesOptions`, so the two secrets rotate independently) and
-embeds it as the `provider_token` claim on issued access tokens, so wallet API callers don't have to separately
-manage/resend their own provider token. Reuses `AesEncryptionHelper`'s exact authenticated format, bound to the
-caller's email (so a ciphertext for one user can never decrypt under another's).
+the caller's Google/Microsoft access token under a **dedicated, independently rotatable key ring**
+(`ProviderTokenProtectionConfiguration : IAesKeyRingConfiguration` - an `ActiveKeyId` plus a `Keys[]` list of
+`{KeyId, Key, IV}` generations, bound from `ProviderTokenProtection` - never `AesOptions`, so the two rings
+rotate independently) and embeds it as the `provider_token` claim on issued access tokens, so wallet API callers
+don't have to separately manage/resend their own provider token. Reuses `AesEncryptionHelper`'s exact
+authenticated format, bound to the caller's email (so a ciphertext for one user can never decrypt under
+another's). `Protect` always uses the active key (`AesKeyRingResolver.GetActiveKey`); `Unprotect` tries the
+active key then every historical key in turn (`AesKeyRingResolver.GetHistoricalKeys`) - safe blind trial-decrypt
+because this protector only ever writes the authenticated format, so a wrong key deterministically fails the
+GCM auth-tag check. Rotating just means adding a new `Keys[]` entry and flipping `ActiveKeyId` - every
+newly-issued/refreshed token picks up the new active key automatically (see `JwtIssuerService.CreateAccessToken`/
+`RenewProviderTokenAsync`), and already-cached tokens keep decrypting as long as the key that encrypted them is
+still in `Keys[]`. See `OIDC_INTEGRATION_GUIDE.md`'s "Key rotation" section for the full runbook.
 
 - **Captured** in `JwtIssuerController.FinalizeAuthorizeAsync` via `provider.GetAmbientAccessTokenAsync()`
   (deliberately not the plain `HttpContext.GetTokenAsync` used elsewhere in that controller - Google's
@@ -174,12 +182,12 @@ caller's email (so a ciphertext for one user can never decrypt under another's).
   given request, they return `null` rather than throwing - the caller then sees a normal 401
   `storage_access_denied`, same as any other "not signed in" case.
 - **Construction fails loud in production**: `ProviderAccessTokenProtector`'s constructor throws
-  `InvalidOperationException` outside `Development` if `ProviderTokenProtection:Key`/`IV` is missing or invalid
-  (same fail-fast precedent as `JwtIssuerService.LoadOrCreateSigningKey`) - since there's no caller-supplied
-  fallback anymore, a misconfigured key means the wallet API cannot function *at all*, and that should be
-  surfaced immediately rather than as a wall of unexplained 401s.
+  `InvalidOperationException` outside `Development` if `ProviderTokenProtection:ActiveKeyId` doesn't resolve to
+  a valid key in `Keys[]` (same fail-fast precedent as `JwtIssuerService.LoadOrCreateSigningKey`) - since
+  there's no caller-supplied fallback anymore, a misconfigured active key means the wallet API cannot function
+  *at all*, and that should be surfaced immediately rather than as a wall of unexplained 401s.
 - **Threat model** (full writeup in `OIDC_INTEGRATION_GUIDE.md`'s "Provider access token caching" section): the
-  dedicated key compartmentalizes this from `AesOptions` (the self-custody file's key) and
+  dedicated key ring compartmentalizes this from `AesOptions` (the self-custody file's key ring) and
   `JwtIssuer:SigningPrivateKeyPem`, so a leak of just this one doesn't also compromise the mnemonic file or let an
   attacker forge tokens. Embedding in the client-held token (vs. a server-side lookup table keyed by user) means
   there's no single "dump every active user's provider token" query surface if a datastore is compromised.

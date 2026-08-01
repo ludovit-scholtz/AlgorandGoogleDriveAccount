@@ -223,15 +223,44 @@ setup stage needs.
 ## Architecture notes
 
 - **Self-custody model**: Algorand private keys are encrypted per-email via `AesEncryptionHelper`
-  (`BiatecSelfCustodyCore`) and stored as a file (`AVMAccount.dat` by default) in the user's own Google Drive
-  folder or OneDrive app folder, depending which provider they signed in with. Biatec servers only decrypt
-  in-memory during an explicitly authorized signing operation — never persist plaintext keys.
+  (`BiatecSelfCustodyCore`) and stored as a file (`AVMAccount.%AESID%.dat` by default — see "AES key-ring
+  rotation" below for the `%AESID%` placeholder) in the user's own Google Drive folder or OneDrive app folder,
+  depending which provider they signed in with. Biatec servers only decrypt in-memory during an explicitly
+  authorized signing operation — never persist plaintext keys.
+- **AES key-ring rotation**: `AesOptions` (self-custody file, shared by both apps) and `ProviderTokenProtection`
+  (`BiatecOIDC`'s cached provider access/refresh tokens) are each a rotatable key ring
+  (`BiatecSelfCustodyCore.Model.IAesKeyRingConfiguration`: an `ActiveKeyId` plus a `Keys[]` list of
+  `{KeyId, Key, IV}` generations) rather than a single `{Key, IV}` pair — resolved via
+  `AesKeyRingResolver.GetActiveKey`/`GetHistoricalKeys` (`BiatecSelfCustodyCore/Helper/`), which fail fast
+  outside `Development` if `ActiveKeyId` doesn't resolve to valid key material, same precedent as
+  `JwtIssuerService.LoadOrCreateSigningKey`. Rotating is additive: generate a new key/IV, add it as a new
+  `Keys[]` entry with a new `KeyId`, flip `ActiveKeyId` to it, and keep old entries around for as long as old
+  data might still need them — nothing is ever silently orphaned. For the self-custody account file and
+  `SpendingLimitService`'s limits/ledger files, `%AESID%` in the configured filename is a hash of whichever
+  key generation encrypted that specific file (`AesEncryptionHelper.MakeAesId`), so each generation's data
+  lives under its own distinct name; `EncryptedKeyRingFileStore.LoadAsync` (`BiatecSelfCustodyCore/Helper/`)
+  tries the active generation's filename first, then each historical generation's filename in turn, and the
+  moment a historical-generation file is found, immediately re-encrypts it under the active key, re-uploads it
+  under the active filename, and best-effort deletes the stale file (`ICloudStorageProvider.DeleteAsync`) — so
+  data migrates onto the new key the next time it's touched, not via a batch job, and a rotation never risks
+  silently creating a *new* account when the old file just isn't found under the new key's name (the bug this
+  design fixes). `ProviderAccessTokenProtector` has no filename to key off (its ciphertext lives inside a JWT
+  claim) so it instead tries the active key then every historical key in turn on decrypt — safe because it
+  only ever writes the authenticated AES-GCM format, where a wrong key deterministically fails the auth-tag
+  check; there's nothing to write back for it, since the next issued/refreshed Biatec token naturally gets a
+  fresh claim encrypted under whatever is active by then (see `JwtIssuerService.RenewProviderTokenAsync`).
+  Rotating requires a `kubectl rollout restart` of the affected deployment(s) since these keys arrive as plain
+  environment variables (`envFrom: secretRef`), which `IOptionsMonitor<T>` cannot hot-reload — a rolling
+  restart across replicas is already zero-downtime, so this doesn't need in-process hot-reload plumbing. See
+  `k8s/stage/generate-stage-secret.sh`'s rotation runbook comment and
+  `BiatecOIDC/OIDC_INTEGRATION_GUIDE.md`'s "Key rotation" section.
 - **Pluggable cloud storage providers**: `ICloudStorageProvider` (`BiatecSelfCustodyCore/Providers/`) is the
   single extension point for a new storage backend — implement it, register it in DI, done; `ICloudAccountRepository`,
   `ICloudStorageProviderCatalog`, and both picker UIs (`BiatecMCP`'s `GET /api/device/providers`, `BiatecOIDC`'s
   `/select-provider`) all resolve providers dynamically and need zero code changes for provider #3+. To add one:
-  implement `ICloudStorageProvider`, register it in **both** `BiatecMCP/Program.cs` and `BiatecOIDC/Program.cs`
-  the same way as the existing Google/Microsoft blocks (`AddHttpClient<T>()` +
+  implement `ICloudStorageProvider` (including `DeleteAsync` — best-effort, never throws, used only to clean up
+  a file just migrated to a new AES key generation), register it in **both** `BiatecMCP/Program.cs` and
+  `BiatecOIDC/Program.cs` the same way as the existing Google/Microsoft blocks (`AddHttpClient<T>()` +
   `AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<T>())`), then add a matching authentication
   scheme block (copy the Microsoft `AddOpenIdConnect(...)` block as a template) whose `OnTokenValidated` calls
   `CloudStorageProviderClaims.Stamp(context.Principal, YourProvider.ProviderName)`.

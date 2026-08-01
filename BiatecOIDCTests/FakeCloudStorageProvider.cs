@@ -31,6 +31,9 @@ namespace BiatecOIDCTests
         public string RequiredScope => "fake-scope";
         public bool IsConfigured => true;
 
+        /// <summary>Direct access to the in-memory file store, for tests asserting rotation/migration behavior.</summary>
+        public Dictionary<string, byte[]> Files => _files;
+
         public Task<byte[]?> TryDownloadAsync(string fileName, string accessToken)
         {
             return Task.FromResult(_files.TryGetValue(fileName, out var content) ? content : null);
@@ -39,6 +42,12 @@ namespace BiatecOIDCTests
         public Task UploadAsync(string fileName, byte[] content, string accessToken)
         {
             _files[fileName] = content;
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(string fileName, string accessToken)
+        {
+            _files.Remove(fileName);
             return Task.CompletedTask;
         }
 

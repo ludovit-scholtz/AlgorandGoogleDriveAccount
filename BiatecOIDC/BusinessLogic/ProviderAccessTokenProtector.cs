@@ -1,6 +1,7 @@
 using System.Text;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.Helper;
+using BiatecSelfCustodyCore.Model;
 using Microsoft.Extensions.Options;
 
 namespace BiatecOIDC.BusinessLogic
@@ -9,11 +10,11 @@ namespace BiatecOIDC.BusinessLogic
     /// <remarks>
     /// Reuses <see cref="AesEncryptionHelper"/>'s authenticated AES-256-GCM format (random per-encryption
     /// salt/nonce, HKDF-derived per-encryption key, tamper-evident) - the exact same proven, tested code
-    /// path the self-custody account file is encrypted with - but keyed by
-    /// <see cref="ProviderTokenProtectionConfiguration"/>, a dedicated secret never shared with
-    /// <c>AesOptions</c>. Binding the derivation to the caller's email (same parameter
-    /// <see cref="AesEncryptionHelper.Encrypt"/> uses for the account file) means a ciphertext produced for
-    /// one user can never be decrypted under a different user's email, even under the same key.
+    /// path the self-custody account file is encrypted with - but keyed by its own rotatable key ring
+    /// (<see cref="ProviderTokenProtectionConfiguration"/>, never shared with <c>AesOptions</c>). Binding the
+    /// derivation to the caller's email (same parameter <see cref="AesEncryptionHelper.Encrypt"/> uses for
+    /// the account file) means a ciphertext produced for one user can never be decrypted under a different
+    /// user's email, even under the same key.
     /// </remarks>
     public sealed class ProviderAccessTokenProtector : IProviderAccessTokenProtector
     {
@@ -25,8 +26,8 @@ namespace BiatecOIDC.BusinessLogic
         /// renew <see cref="ClaimType"/> once the cached provider access token expires, both when the
         /// caller renews its own Biatec refresh token (<c>JwtIssuerService.ExchangeTokenAsync</c>'s
         /// <c>refresh_token</c> grant) and, opportunistically, mid-lifetime of a still-valid Biatec access
-        /// token (<c>WalletController</c>). Protected/unprotected with the same key and per-email binding
-        /// as <see cref="ClaimType"/> - it's the same trust boundary, just a longer-lived credential.
+        /// token (<c>WalletController</c>). Protected/unprotected with the same key ring and per-email
+        /// binding as <see cref="ClaimType"/> - it's the same trust boundary, just a longer-lived credential.
         /// </summary>
         public const string RefreshClaimType = "provider_refresh_token";
 
@@ -39,19 +40,15 @@ namespace BiatecOIDC.BusinessLogic
             _logger = logger;
 
             // No wallet endpoint accepts a caller-supplied provider access token anymore - the
-            // provider_token claim (decrypted with this key) is the *only* way any of them can be
-            // resolved. Unlike the earlier "optional override" design, a missing/invalid key here no
-            // longer degrades gracefully to "caller must pass their own token" - it means the wallet API
-            // cannot function *at all*. Fail loudly outside Development, matching
-            // JwtIssuerService.LoadOrCreateSigningKey's precedent for equally load-bearing secrets, rather
-            // than leaving every wallet call silently returning 401 with no indication why.
-            if (!environment.IsDevelopment() && !TryGetKeyMaterial(out _, out _))
+            // provider_token claim (decrypted with this key ring) is the *only* way any of them can be
+            // resolved. A missing/invalid active key here no longer degrades gracefully to "caller must
+            // pass their own token" - it means the wallet API cannot function *at all*. Fail loudly outside
+            // Development, matching JwtIssuerService.LoadOrCreateSigningKey's precedent for equally
+            // load-bearing secrets, rather than leaving every wallet call silently returning 401 with no
+            // indication why.
+            if (!environment.IsDevelopment())
             {
-                throw new InvalidOperationException(
-                    "ProviderTokenProtection:Key/IV is missing or invalid. Refusing to start with the wallet " +
-                    "API unable to resolve any caller's provider access token. Configure a base64-encoded " +
-                    "32-byte Key and 16-byte IV (see OIDC_INTEGRATION_GUIDE.md's \"Provider access token " +
-                    "caching\" section).");
+                AesKeyRingResolver.GetActiveKey(config.CurrentValue, "ProviderTokenProtection");
             }
         }
 
@@ -62,15 +59,21 @@ namespace BiatecOIDC.BusinessLogic
                 return null;
             }
 
-            if (!TryGetKeyMaterial(out var key, out var iv))
+            AesKeyRingEntry activeKey;
+            try
             {
+                activeKey = AesKeyRingResolver.GetActiveKey(_config.CurrentValue, "ProviderTokenProtection");
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogError(ex, "Unable to resolve the active ProviderTokenProtection key; the wallet API will be unable to cache a provider token for this session.");
                 return null;
             }
 
             try
             {
                 var plaintext = Encoding.UTF8.GetBytes(providerAccessToken);
-                var encrypted = AesEncryptionHelper.Encrypt(plaintext, key, iv, email);
+                var encrypted = AesEncryptionHelper.Encrypt(plaintext, AesKeyRingResolver.KeyBytes(activeKey), AesKeyRingResolver.IvBytes(activeKey), email);
                 return Convert.ToBase64String(encrypted);
             }
             catch (Exception ex)
@@ -87,56 +90,65 @@ namespace BiatecOIDC.BusinessLogic
                 return null;
             }
 
-            if (!TryGetKeyMaterial(out var key, out var iv))
+            byte[] cipherData;
+            try
+            {
+                cipherData = Convert.FromBase64String(protectedToken);
+            }
+            catch (FormatException)
             {
                 return null;
             }
 
-            try
+            // Tries the active key first, then every historical generation, in order. This is a safe blind
+            // trial-decrypt (unlike a filename-addressable blob, a JWT claim has no way to indicate which
+            // generation encrypted it) because this protector only ever writes the authenticated AES-GCM
+            // format - a wrong key deterministically fails the auth-tag check, so there's no risk of
+            // silently "succeeding" against the wrong key with garbage plaintext.
+            foreach (var candidate in GetOrderedCandidateKeys())
             {
-                var cipherData = Convert.FromBase64String(protectedToken);
-                var plaintext = AesEncryptionHelper.Decrypt(cipherData, key, iv, email);
-                return Encoding.UTF8.GetString(plaintext);
+                try
+                {
+                    var plaintext = AesEncryptionHelper.Decrypt(cipherData, AesKeyRingResolver.KeyBytes(candidate), AesKeyRingResolver.IvBytes(candidate), email);
+                    return Encoding.UTF8.GetString(plaintext);
+                }
+                catch (Exception)
+                {
+                    // Expected for every key generation except whichever one actually encrypted this
+                    // ciphertext - move on to the next candidate.
+                }
             }
-            catch (Exception ex)
-            {
-                // Expected in benign cases too (key rotated since the token was cached, clock/email
-                // mismatch) - never surfaced as an error to the caller, just treated as "not cached".
-                _logger.LogWarning(ex, "Unable to decrypt cached provider access token; treating as not cached.");
-                return null;
-            }
+
+            // Expected in benign cases too (every configured key generation that could have encrypted this
+            // has since been retired, clock/email mismatch) - never surfaced as an error to the caller, just
+            // treated as "not cached".
+            _logger.LogWarning("Unable to decrypt cached provider access token under any configured AES key generation; treating as not cached.");
+            return null;
         }
 
-        private bool TryGetKeyMaterial(out byte[] key, out byte[] iv)
+        /// <summary>Active key first (the common case once rotation has propagated), then every historical generation in declared order.</summary>
+        private IEnumerable<AesKeyRingEntry> GetOrderedCandidateKeys()
         {
-            key = Array.Empty<byte>();
-            iv = Array.Empty<byte>();
-
-            var current = _config.CurrentValue;
-            if (string.IsNullOrWhiteSpace(current.Key) || string.IsNullOrWhiteSpace(current.IV))
-            {
-                _logger.LogWarning("ProviderTokenProtection:Key/IV is not configured - the wallet API cannot resolve any provider access token.");
-                return false;
-            }
-
+            AesKeyRingEntry? activeKey = null;
             try
             {
-                key = Convert.FromBase64String(current.Key);
-                iv = Convert.FromBase64String(current.IV);
+                activeKey = AesKeyRingResolver.GetActiveKey(_config.CurrentValue, "ProviderTokenProtection");
             }
-            catch (FormatException ex)
+            catch (InvalidOperationException)
             {
-                _logger.LogError(ex, "ProviderTokenProtection:Key/IV is not valid base64 - the wallet API cannot resolve any provider access token.");
-                return false;
+                // Fall through to historical keys - one of them might still successfully decrypt even if
+                // the active key is currently misconfigured.
             }
 
-            if (key.Length != 32 || iv.Length != 16)
+            if (activeKey != null)
             {
-                _logger.LogError("ProviderTokenProtection:Key must decode to 32 bytes and IV to 16 bytes - the wallet API cannot resolve any provider access token.");
-                return false;
+                yield return activeKey;
             }
 
-            return true;
+            foreach (var historical in AesKeyRingResolver.GetHistoricalKeys(_config.CurrentValue, _logger))
+            {
+                yield return historical;
+            }
         }
     }
 }

@@ -1,15 +1,17 @@
 namespace BiatecSelfCustodyCore.Model
 {
     /// <summary>
-    /// AES-256 key/IV material used by <c>AesEncryptionHelper</c> to encrypt/decrypt the
-    /// Algorand private key stored in a user's Google Drive, bound from the <c>AesOptions</c> configuration section.
+    /// AES-256 key ring used by <c>AesEncryptionHelper</c>/<c>EncryptedKeyRingFileStore</c> to encrypt/decrypt
+    /// the Algorand private key stored in a user's Google Drive/OneDrive, bound from the <c>AesOptions</c>
+    /// configuration section. A rotatable key ring rather than a single key/IV pair - see
+    /// <see cref="IAesKeyRingConfiguration"/> for the rotation model.
     /// </summary>
-    public class AesOptions
+    public class AesOptions : IAesKeyRingConfiguration
     {
-        /// <summary>Base64-encoded AES key.</summary>
-        public string Key { get; set; } = string.Empty;
+        /// <inheritdoc />
+        public string ActiveKeyId { get; set; } = string.Empty;
 
-        /// <summary>Base64-encoded AES initialization vector.</summary>
-        public string IV { get; set; } = string.Empty;
+        /// <inheritdoc />
+        public List<AesKeyRingEntry> Keys { get; set; } = new();
     }
 }

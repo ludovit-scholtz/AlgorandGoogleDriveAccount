@@ -4,6 +4,7 @@ using Algorand.Algod.Model;
 using BiatecSelfCustodyCore.Helper;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -26,12 +27,22 @@ namespace BiatecSelfCustodyCore.Repository
             ICloudStorageProviderCatalog catalog,
             IOptionsMonitor<Configuration> config,
             IOptionsMonitor<AesOptions> aes,
+            IHostEnvironment environment,
             ILogger<CloudAccountRepository> logger)
         {
             _catalog = catalog;
             _config = config;
             _aes = aes;
             _logger = logger;
+
+            // Fail fast if AesOptions:ActiveKeyId doesn't resolve to a valid key - same precedent as
+            // JwtIssuerService.LoadOrCreateSigningKey/ProviderAccessTokenProtector's constructor for other
+            // load-bearing secrets in this repo. A misconfigured active key means every self-custody
+            // account load/create would fail anyway, so surface it immediately rather than per-request.
+            if (!environment.IsDevelopment())
+            {
+                AesKeyRingResolver.GetActiveKey(aes.CurrentValue, "AesOptions");
+            }
         }
 
         public async Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null)
@@ -46,36 +57,39 @@ namespace BiatecSelfCustodyCore.Repository
                     throw new UnauthorizedAccessException($"No {storageProvider.Name} access token available. Please sign in again.");
                 }
 
-                var fileName = BuildFileName();
-                var existing = await storageProvider.TryDownloadAsync(fileName, token);
+                var activeKey = AesKeyRingResolver.GetActiveKey(_aes.CurrentValue, "AesOptions");
+                var historicalKeys = AesKeyRingResolver.GetHistoricalKeys(_aes.CurrentValue, _logger);
+                var fileNameTemplate = _config.CurrentValue.StorageFileName;
+
+                byte[]? existing;
+                try
+                {
+                    existing = await EncryptedKeyRingFileStore.LoadAsync(storageProvider, token, fileNameTemplate, activeKey, historicalKeys, email, _logger);
+                }
+                catch (CryptographicException cryptoEx)
+                {
+                    // Log full detail server-side only - the caller-facing message must not leak email,
+                    // file size, or raw cryptographic exception text (an information-disclosure /
+                    // padding-oracle amplifier).
+                    _logger.LogError(cryptoEx, "Decryption failed for email {Email}.", email);
+                    throw new InvalidOperationException("Unable to load the account. Please try re-pairing the device.");
+                }
+                catch (Exception decryptEx)
+                {
+                    _logger.LogError(decryptEx, "Failed to decrypt account data for email {Email}.", email);
+                    throw new InvalidOperationException("Unable to load the account. Please try re-pairing the device.");
+                }
 
                 byte[] mnemonicBytes;
                 if (existing == null)
                 {
                     var newAccount = new Account();
                     mnemonicBytes = Encoding.UTF8.GetBytes(newAccount.ToMnemonic());
-                    var encrypted = AesEncryptionHelper.Encrypt(mnemonicBytes, AesKey(), AesIv(), email);
-                    await storageProvider.UploadAsync(fileName, encrypted, token);
+                    await EncryptedKeyRingFileStore.SaveAsync(storageProvider, token, fileNameTemplate, activeKey, email, mnemonicBytes);
                 }
                 else
                 {
-                    try
-                    {
-                        mnemonicBytes = AesEncryptionHelper.Decrypt(existing, AesKey(), AesIv(), email);
-                    }
-                    catch (CryptographicException cryptoEx)
-                    {
-                        // Log full detail server-side only - the caller-facing message must not leak email,
-                        // file size, or raw cryptographic exception text (an information-disclosure /
-                        // padding-oracle amplifier).
-                        _logger.LogError(cryptoEx, "Decryption failed for email {Email}. File size: {FileSize} bytes.", email, existing.Length);
-                        throw new InvalidOperationException("Unable to load the account. Please try re-pairing the device.");
-                    }
-                    catch (Exception decryptEx)
-                    {
-                        _logger.LogError(decryptEx, "Failed to decrypt account data for email {Email}. File size: {FileSize} bytes.", email, existing.Length);
-                        throw new InvalidOperationException("Unable to load the account. Please try re-pairing the device.");
-                    }
+                    mnemonicBytes = existing;
                 }
 
                 return AlgorandARC76AccountDotNet.ARC76.GetEmailAccount(email, Encoding.UTF8.GetString(mnemonicBytes), slot);
@@ -94,14 +108,5 @@ namespace BiatecSelfCustodyCore.Repository
                 throw new InvalidOperationException($"Error loading account from {storageProvider.Name}.");
             }
         }
-
-        private string BuildFileName()
-        {
-            var aesid = AesEncryptionHelper.MakeAesId(_aes.CurrentValue);
-            return _config.CurrentValue.StorageFileName.Replace("%AESID%", aesid);
-        }
-
-        private byte[] AesKey() => Convert.FromBase64String(_aes.CurrentValue.Key);
-        private byte[] AesIv() => Convert.FromBase64String(_aes.CurrentValue.IV);
     }
 }

@@ -173,8 +173,9 @@ means Biatec has to be able to get at that provider token on every `/wallet/sign
 **The mechanism.** At the moment a Biatec access/refresh token is minted — after the user completes an
 interactive Google/Microsoft sign-in, while the ambient cookie session still has their live provider token — that
 provider token is AES-256-GCM encrypted (`BusinessLogic/ProviderAccessTokenProtector.cs`, same authenticated
-format `AesEncryptionHelper` uses for the self-custody file, but under a **separate, dedicated key** —
-`ProviderTokenProtection:Key`/`IV` in config, never `AesOptions`) and embedded as a private claim
+format `AesEncryptionHelper` uses for the self-custody file, but under a **separate, dedicated, independently
+rotatable key ring** — `ProviderTokenProtection` in config, never `AesOptions`; see "Key rotation" below) and
+embedded as a private claim
 (`provider_token`) on the issued Biatec access token. `WalletController` decrypts that claim, in-memory, for the
 duration of a single request, on every call - there is no way to supply your own Google/Microsoft token instead;
 the Biatec bearer token is the only credential every wallet endpoint accepts. Nothing about this changes what an
@@ -192,8 +193,8 @@ leaves this service's own config/secret store.
 exactly the kind of feature that increases blast radius if Biatec's server is ever compromised — that's the
 trade-off being made, deliberately, to support the "RP only ever holds a Biatec token" model:
 
-- If an attacker compromises **only** `ProviderTokenProtection:Key`/`IV` (e.g. a narrow secret-store leak) without
-  also compromising `AesOptions` (the self-custody file's key) or `JwtIssuer:SigningPrivateKeyPem`, they can
+- If an attacker compromises **only** `ProviderTokenProtection` (e.g. a narrow secret-store leak) without
+  also compromising `AesOptions` (the self-custody file's key ring) or `JwtIssuer:SigningPrivateKeyPem`, they can
   decrypt any `provider_token` claim they can get their hands on, but still can't decrypt the self-custody account
   file itself or forge new Biatec tokens. This is why the keys are separate.
 - If an attacker gets **full** server compromise (all of the above, plus Redis, plus the ability to intercept live
@@ -229,13 +230,13 @@ trade-off being made, deliberately, to support the "RP only ever holds a Biatec 
     rejects it (revoked/expired), both paths fall back to the previous behavior unchanged: the caller needs a
     fresh interactive sign-in through `/authorize` to re-cache one. There is still no parameter on any wallet
     endpoint to work around this.
-- The key is configured the same way as `AesOptions`/`JwtIssuer:SigningPrivateKeyPem` — via a Kubernetes Secret in
-  production (see `k8s/stage/generate-stage-secret.sh` for how stage mints its own, separate copy), never
-  committed as a real production secret. If `ProviderTokenProtection:Key`/`IV` is missing or invalid, no
-  `provider_token` claim ever gets embedded (nothing throws at issuance time) - but every wallet endpoint would
-  then have no way at all to resolve a provider token, so every call fails `401 storage_access_denied` until the
-  key is configured. This key is required infrastructure for the wallet API to work at all, unlike before this
-  feature existed.
+- The key ring is configured the same way as `AesOptions`/`JwtIssuer:SigningPrivateKeyPem` — via a Kubernetes
+  Secret in production (see `k8s/stage/generate-stage-secret.sh` for how stage mints its own, separate copy),
+  never committed as a real production secret. If `ProviderTokenProtection:ActiveKeyId` doesn't resolve to a
+  valid key, no `provider_token` claim ever gets embedded (nothing throws at issuance time) - but every wallet
+  endpoint would then have no way at all to resolve a provider token, so every call fails
+  `401 storage_access_denied` until the key is configured. This key ring is required infrastructure for the
+  wallet API to work at all, unlike before this feature existed.
 
 ## Configuration
 
@@ -317,15 +318,21 @@ Notes:
 - Post-logout redirect URIs are allowlisted via `PostLogoutRedirectUris` with the same wildcard rules.
   - If `PostLogoutRedirectUris` is empty for a client, `RedirectUris` are used as fallback allowlist for logout redirects.
 
-Also configure `ProviderTokenProtection` — the dedicated key that encrypts the cached Google/Microsoft access
-token embedded in issued access tokens (see "Provider access token caching" above). **Required** for the wallet
-API to work at all (no wallet endpoint accepts a caller-supplied provider token as a fallback) and **deliberately
-a separate section from `AesOptions`**, so the two secrets can be rotated independently:
+Also configure `ProviderTokenProtection` — the dedicated key ring that encrypts the cached Google/Microsoft
+access/refresh tokens embedded in issued access tokens (see "Provider access token caching" above). **Required**
+for the wallet API to work at all (no wallet endpoint accepts a caller-supplied provider token as a fallback) and
+**deliberately a separate key ring from `AesOptions`**, so the two secrets can be rotated independently:
 
 ```json
 "ProviderTokenProtection": {
-  "Key": "<base64, 32 random bytes>",
-  "IV": "<base64, 16 random bytes>"
+  "ActiveKeyId": "2026-08",
+  "Keys": [
+    {
+      "KeyId": "2026-08",
+      "Key": "<base64, 32 random bytes>",
+      "IV": "<base64, 16 random bytes>"
+    }
+  ]
 }
 ```
 
@@ -334,11 +341,60 @@ openssl rand -base64 32   # Key
 openssl rand -base64 16   # IV
 ```
 
-If left unset (or invalid) outside `Development`, the service refuses to start (same fail-fast precedent as
-`JwtIssuer:SigningPrivateKeyPem`) rather than silently leaving every wallet call failing with an unexplained 401.
-Rotating this key invalidates every *currently cached* provider token — affected users just need one fresh
-interactive sign-in through `/authorize` to re-cache one; it does **not** affect the self-custody account file,
-which is encrypted separately under `AesOptions`.
+If `ActiveKeyId` is unset (or doesn't resolve to a valid entry in `Keys`) outside `Development`, the service
+refuses to start (same fail-fast precedent as `JwtIssuer:SigningPrivateKeyPem`) rather than silently leaving
+every wallet call failing with an unexplained 401. See "Key rotation" below for how to rotate this (and
+`AesOptions`) without invalidating anything already cached.
+
+## Key rotation
+
+Both `AesOptions` and `ProviderTokenProtection` are rotatable key rings
+(`BiatecSelfCustodyCore.Model.IAesKeyRingConfiguration`), not a single `{Key, IV}` pair: an `ActiveKeyId` names
+which `Keys[]` entry is used for all *new* encryption, and every other entry is kept only so data encrypted
+under it can still be decrypted (and then migrated onto the active key - see below). This replaces the previous
+design, where changing a key's value silently orphaned all existing data encrypted under the old one - for the
+self-custody account file specifically, that meant a rotated key could silently create a **brand-new random
+account** the next time a user signed in, since the file the old key encrypted could no longer be found under
+the new key's name.
+
+**To rotate:**
+
+1. Generate a new key/IV pair (`openssl rand -base64 32`/`16`) and pick a new, never-reused `KeyId` (a date like
+   `"2027-02"` works well).
+2. Add it as a **new** entry in `Keys[]` (don't remove the old one yet) and set `ActiveKeyId` to the new
+   `KeyId`. Update the Kubernetes Secret with both the new generation and every existing one still present
+   (`kubectl get secret <name> -o json` shows the currently-deployed literals if you need to read them back)
+   using the standard array env-var convention: `AesOptions__Keys__0__KeyId`, `AesOptions__Keys__0__Key`,
+   `AesOptions__Keys__0__IV`, `AesOptions__Keys__1__KeyId`, ... (see
+   `k8s/stage/generate-stage-secret.sh`'s rotation comment for a worked example).
+3. `kubectl rollout restart deployment/...` for every affected deployment. These keys arrive as plain
+   environment variables (`envFrom: secretRef`), which `IOptionsMonitor<T>` cannot hot-reload, so a restart is
+   required to pick up the change - being a rolling restart across replicas, it's already zero-downtime.
+4. From that point on:
+   - **New encryption** (new self-custody accounts, newly-issued Biatec tokens' cached provider tokens, updated
+     spending limits) uses the new active key immediately.
+   - **Existing data under the old key** keeps decrypting correctly, and - for the self-custody account file and
+     `SpendingLimitService`'s limits/ledger files specifically - is automatically **re-encrypted under the new
+     active key the next time it's read** (`EncryptedKeyRingFileStore`, `BiatecSelfCustodyCore/Helper/`): each
+     key generation's file lives under a distinct name derived from a hash of that generation's key
+     (`AesEncryptionHelper.MakeAesId`, the `%AESID%` placeholder in `App:StorageFileName`/the spending-limit
+     file name templates), so a load that doesn't find the file under the active generation's name falls back
+     through historical generations, and the moment it finds one, re-encrypts + re-uploads it under the active
+     name and deletes the stale file. No batch migration job is needed - it happens lazily, "as soon as
+     possible," the next time each user's data is touched.
+   - **Cached provider tokens** (`provider_token`/`provider_refresh_token` claims, `ProviderTokenProtection`)
+     have no file to migrate - they live inside already-issued Biatec tokens the wallet API doesn't control.
+     `ProviderAccessTokenProtector.Unprotect` tries the active key then every historical key in turn (safe,
+     because it only ever writes the authenticated AES-GCM format, so a wrong key deterministically fails the
+     auth-tag check), and every *newly issued or refreshed* Biatec token naturally picks up the new active key
+     via `JwtIssuerService.CreateAccessToken`/`RenewProviderTokenAsync` - so these migrate onto the new key
+     simply by tokens being refreshed in the normal course of use.
+5. `EncryptedKeyRingFileStore` logs an `Information`-level message ("Migrating ... from AES key generation ...
+   to the active generation ...") every time it migrates a file off a historical key - once you stop seeing a
+   given `KeyId` mentioned across a full refresh-token lifetime (`JwtIssuer:RefreshTokenLifetimeDays`) or longer,
+   it's reasonably safe to drop that generation from `Keys[]` entirely. Removing a generation still in active
+   use means any data/token that hasn't yet been touched since the rotation becomes undecryptable, so err on
+   the side of keeping old generations around longer than you think you need to.
 
 ### Generate compatible signing key (recommended)
 

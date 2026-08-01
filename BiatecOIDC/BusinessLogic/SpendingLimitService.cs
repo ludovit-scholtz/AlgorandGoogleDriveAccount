@@ -10,8 +10,8 @@ namespace BiatecOIDC.BusinessLogic
     public sealed class SpendingLimitService : ISpendingLimitService
     {
         // %AESID% is replaced the same way CloudAccountRepository does for the account file itself - a
-        // short hash of the currently configured AES key/IV, so files silently orphan (rather than fail to
-        // decrypt) if the key ever rotates, matching the account file's own behavior.
+        // short hash of the AES key generation that encrypted it (see EncryptedKeyRingFileStore), which is
+        // what lets a rotated key still find and migrate an existing file instead of orphaning it.
         private const string LimitsFileNameTemplate = "SpendingLimits.%AESID%.dat";
         private const string LedgerFileNameTemplate = "SpendingLedger.%AESID%.dat";
 
@@ -31,12 +31,21 @@ namespace BiatecOIDC.BusinessLogic
             ICloudStorageProviderCatalog catalog,
             IExchangeRateService exchangeRateService,
             IOptionsMonitor<AesOptions> aes,
+            IHostEnvironment environment,
             ILogger<SpendingLimitService> logger)
         {
             _catalog = catalog;
             _exchangeRateService = exchangeRateService;
             _aes = aes;
             _logger = logger;
+
+            // Fail fast if AesOptions:ActiveKeyId doesn't resolve to a valid key - same precedent as
+            // CloudAccountRepository/JwtIssuerService/ProviderAccessTokenProtector for other load-bearing
+            // secrets in this repo.
+            if (!environment.IsDevelopment())
+            {
+                AesKeyRingResolver.GetActiveKey(aes.CurrentValue, "AesOptions");
+            }
         }
 
         public async Task<SpendingLimitSettings> GetLimitsAsync(string email, string provider, string? accessToken, CancellationToken cancellationToken = default)
@@ -141,18 +150,14 @@ namespace BiatecOIDC.BusinessLogic
         {
             var storageProvider = _catalog.Resolve(provider);
             var token = await ResolveAccessTokenAsync(storageProvider, accessToken);
-            var fileName = BuildFileName(fileNameTemplate);
 
-            var existing = await storageProvider.TryDownloadAsync(fileName, token);
-            if (existing == null)
-            {
-                return null;
-            }
+            var activeKey = AesKeyRingResolver.GetActiveKey(_aes.CurrentValue, "AesOptions");
+            var historicalKeys = AesKeyRingResolver.GetHistoricalKeys(_aes.CurrentValue, _logger);
 
             try
             {
-                var plaintext = AesEncryptionHelper.Decrypt(existing, AesKey(), AesIv(), email);
-                return JsonSerializer.Deserialize<T>(plaintext, JsonOptions);
+                var plaintext = await EncryptedKeyRingFileStore.LoadAsync(storageProvider, token, fileNameTemplate, activeKey, historicalKeys, email, _logger);
+                return plaintext == null ? null : JsonSerializer.Deserialize<T>(plaintext, JsonOptions);
             }
             catch (Exception ex)
             {
@@ -167,11 +172,10 @@ namespace BiatecOIDC.BusinessLogic
         {
             var storageProvider = _catalog.Resolve(provider);
             var token = await ResolveAccessTokenAsync(storageProvider, accessToken);
-            var fileName = BuildFileName(fileNameTemplate);
+            var activeKey = AesKeyRingResolver.GetActiveKey(_aes.CurrentValue, "AesOptions");
 
             var plaintext = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
-            var encrypted = AesEncryptionHelper.Encrypt(plaintext, AesKey(), AesIv(), email);
-            await storageProvider.UploadAsync(fileName, encrypted, token);
+            await EncryptedKeyRingFileStore.SaveAsync(storageProvider, token, fileNameTemplate, activeKey, email, plaintext);
         }
 
         private static async Task<string> ResolveAccessTokenAsync(ICloudStorageProvider storageProvider, string? accessToken)
@@ -184,15 +188,6 @@ namespace BiatecOIDC.BusinessLogic
 
             return token;
         }
-
-        private string BuildFileName(string template)
-        {
-            var aesid = AesEncryptionHelper.MakeAesId(_aes.CurrentValue);
-            return template.Replace("%AESID%", aesid);
-        }
-
-        private byte[] AesKey() => Convert.FromBase64String(_aes.CurrentValue.Key);
-        private byte[] AesIv() => Convert.FromBase64String(_aes.CurrentValue.IV);
 
         private static void RequireEmail(string email)
         {

@@ -144,6 +144,36 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task DeleteAsync_Success_SendsDeleteToItemPathNotContentPath()
+        {
+            SetupResponse(HttpStatusCode.NoContent);
+
+            await _provider.DeleteAsync("SpendingLimits.oldgen.dat", "token");
+
+            Assert.That(_capturedRequest!.Method, Is.EqualTo(HttpMethod.Delete));
+            Assert.That(_capturedRequest.RequestUri!.ToString(), Does.Contain("/me/drive/special/approot:/SpendingLimits.oldgen.dat"));
+            Assert.That(_capturedRequest.RequestUri!.ToString(), Does.Not.Contain(":/content"));
+        }
+
+        [Test]
+        public void DeleteAsync_FileNotFound_DoesNotThrow()
+        {
+            SetupResponse(HttpStatusCode.NotFound);
+
+            Assert.That(async () => await _provider.DeleteAsync("missing.dat", "token"), Throws.Nothing);
+        }
+
+        [Test]
+        public void DeleteAsync_TransportFailure_DoesNotThrow()
+        {
+            _mockHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .ThrowsAsync(new HttpRequestException("network down"));
+
+            Assert.That(async () => await _provider.DeleteAsync("some.dat", "token"), Throws.Nothing);
+        }
+
+        [Test]
         public async Task RefreshAccessTokenAsync_Success_ReturnsNewAccessTokenAndRotatedRefreshToken()
         {
             // Entra ID always rotates the refresh token on use - the caller must re-cache the new one.

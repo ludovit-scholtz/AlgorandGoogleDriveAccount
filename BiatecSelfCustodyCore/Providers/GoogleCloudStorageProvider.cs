@@ -225,6 +225,31 @@ namespace BiatecSelfCustodyCore.Providers
             }
         }
 
+        public async Task DeleteAsync(string fileName, string accessToken)
+        {
+            try
+            {
+                var service = CreateDriveService(accessToken);
+                var folder = await FindFolderAsync(service);
+                if (folder == null)
+                {
+                    return;
+                }
+
+                var file = await FindFileAsync(service, folder.Id, fileName);
+                if (file == null)
+                {
+                    return;
+                }
+
+                await service.Files.Delete(file.Id).ExecuteAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete {FileName} from Google Drive after key-generation migration; leaving it in place.", fileName);
+            }
+        }
+
         /// <summary>Escapes a value for safe interpolation into a Google Drive API <c>q</c> search string.</summary>
         private static string EscapeDriveQueryValue(string value) => value.Replace("\\", "\\\\").Replace("'", "\\'");
 

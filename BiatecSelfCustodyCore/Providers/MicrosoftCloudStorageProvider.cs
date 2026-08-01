@@ -159,6 +159,25 @@ namespace BiatecSelfCustodyCore.Providers
             response.EnsureSuccessStatusCode();
         }
 
+        public async Task DeleteAsync(string fileName, string accessToken)
+        {
+            try
+            {
+                var encodedFileName = Uri.EscapeDataString(fileName);
+                using var request = new HttpRequestMessage(HttpMethod.Delete, $"{GraphBaseUrl}/me/drive/special/approot:/{encodedFileName}");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                using var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.NotFound)
+                {
+                    _logger.LogWarning("Failed to delete {FileName} from OneDrive after key-generation migration ({StatusCode}); leaving it in place.", fileName, response.StatusCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete {FileName} from OneDrive after key-generation migration; leaving it in place.", fileName);
+            }
+        }
+
         private static HttpRequestMessage CreateRequest(HttpMethod method, string fileName, string accessToken)
         {
             var encodedFileName = Uri.EscapeDataString(fileName);
