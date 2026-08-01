@@ -666,18 +666,35 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task WalletScopeNotAllowlistedForClient_IsDroppedRatherThanRejected()
+        public async Task WalletScopeNotAllowlistedForClient_ReturnsInvalidScope()
         {
-            // "sign"/"manage-limits" are gated by the client's AllowedScopes - requesting one without it
-            // being allowlisted narrows the grant (so login still succeeds) rather than blocking the
-            // whole request; the client can tell exactly what it got from the token response's scope.
+            // Unlike an unrecognized/library-injected scope (dropped silently, see above), a *recognized*
+            // scope the client explicitly asked for but isn't allowlisted for - most commonly
+            // sign/manage-limits before AllowedScopes has been updated - is rejected loudly, since silently
+            // proceeding without it would leave the caller confused about why the resulting token has no
+            // manage-limits claim.
             var request = ValidCodeRequest();
             request.Scope = "openid profile email manage-limits";
 
             var result = await Service.ValidateAuthorizeRequestAsync(request);
 
-            Assert.That(result.IsValid, Is.True);
-            Assert.That(result.NormalizedRequest!.Scope, Is.EqualTo("openid profile email"));
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Error, Is.EqualTo("invalid_scope"));
+            Assert.That(result.ErrorDescription, Does.Contain("manage-limits"));
+        }
+
+        [Test]
+        public async Task MultipleWalletScopesNotAllowlistedForClient_ListsAllOfThemInErrorDescription()
+        {
+            var request = ValidCodeRequest();
+            request.Scope = "openid profile email sign manage-limits";
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Error, Is.EqualTo("invalid_scope"));
+            Assert.That(result.ErrorDescription, Does.Contain("sign"));
+            Assert.That(result.ErrorDescription, Does.Contain("manage-limits"));
         }
 
         [Test]

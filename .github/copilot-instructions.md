@@ -267,11 +267,14 @@ setup stage needs.
   `Microsoft.IdentityModel.Tokens` version in use. Client whitelisting and redirect URI allowlists live under
   `JwtIssuer:Clients` in `appsettings.json`; see `RedirectUriMatcher` for wildcard redirect URI matching rules and
   `OIDC_INTEGRATION_GUIDE.md` for the full integration contract. `ValidateAuthorizeRequestAsync`'s scope handling
-  is a negotiation, not an all-or-nothing contract: `openid` must be requested or the request fails
-  (`invalid_scope`), but every other scope — `profile`/`email` (always granted), `sign`/`manage-limits` (granted
-  only if allowlisted in that client's `AllowedScopes`), or anything unrecognized (a typo, a literal `.default`
-  some MSAL-flavored OIDC clients auto-append) — is silently narrowed out of the grant rather than failing the
-  whole request; the actual grant is always visible in the token response's `scope` field.
+  distinguishes two different "unexpected scope" cases: `openid` must be requested or the request fails
+  (`invalid_scope`); `profile`/`email` are always granted; `sign`/`manage-limits` requested but **not**
+  allowlisted in that client's `AllowedScopes` **hard-fails** the whole request with `invalid_scope` (naming
+  exactly which scope(s)), since silently dropping a scope a developer explicitly asked for is more confusing
+  than a clear error — but a scope this server has never heard of at all (a typo, or a literal `.default` some
+  MSAL-flavored OIDC clients auto-append regardless of configuration) is silently dropped instead, since there's
+  nothing to fix and failing login over library-injected noise would be worse. The actual grant is always visible
+  in the token response's `scope` field.
 - **Wallet API (`sign`/`manage-limits` scopes)**: `WalletController` (`BiatecOIDC`) exposes `POST /wallet/sign`
   (signs an Algorand transaction group via the shared `IDriveService`), `GET`/`PUT /wallet/limits` (the caller's
   own daily/weekly/monthly spending limits and their currency), and `GET /wallet/limits/currencies` (every

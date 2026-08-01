@@ -90,27 +90,28 @@ Important behavior for Drive consent:
 
 ## Scope handling
 
-`/authorize` treats `scope` as a *negotiation*, not an all-or-nothing contract - the only way a request fails
-over scope is if `openid` itself is missing (`invalid_scope`, `"The openid scope is required."`). Every other
-requested scope is either granted or silently dropped:
+Every `/authorize` request is checked against two kinds of "unexpected scope", handled differently on purpose:
 
-- `openid`, `profile`, and `email` — basic identity, always granted to every registered client, regardless of
-  its `AllowedScopes` list.
-- `sign`, `manage-limits` — the wallet-API scopes. Granted only if the client's `AllowedScopes` includes them
-  (see "Client registration" below); otherwise dropped from the grant.
-- Anything else — a typo, a scope this server has never heard of, a scope your OIDC library auto-appends whether
-  you asked for it or not (e.g. some MSAL-flavored clients send a literal `.default` scope when none is
-  explicitly configured) — is dropped the same way. There's nothing to configure to make this work; unrecognized
-  scopes just don't do anything.
+- **Scopes this server recognizes but this client isn't allowlisted for** — in practice, `sign` and/or
+  `manage-limits` requested by a client whose `AllowedScopes` doesn't include them (see "Client registration"
+  below). This **fails the whole request** with `invalid_scope`; the error description names exactly which
+  scope(s) aren't allowlisted, e.g. `"This client is not allowlisted for scope(s): manage-limits. Add them to
+  this client's AllowedScopes in JwtIssuer:Clients to request them."`. This is deliberately loud - if you asked
+  for `manage-limits` and expected to get it, silently issuing a token without it would just leave you confused
+  later about why `PUT /wallet/limits` returns 403.
+- **Scopes this server has never heard of at all** — a typo, or a scope your OIDC client library auto-appends
+  whether you asked for it or not (e.g. some MSAL/Azure AD-flavored clients send a literal `.default` scope when
+  none is explicitly configured). These are **silently dropped**, never rejected - there's nothing you could even
+  fix here, and failing the whole login over library-injected noise would be worse than just ignoring it.
 
-The scope you actually end up with is always visible in the token response's `scope` field (and, for an
-authorization-code exchange, the same value the `/token` response returns) - if `/wallet/sign` or
-`/wallet/limits` unexpectedly returns `403 insufficient_scope`, check that field (or `GET /userinfo`, whose
-underlying access token carries the `sign`/`manage-limits` claims only when actually granted) before assuming
-something is broken. This also means requesting scopes speculatively (e.g. always asking for
-`openid profile email sign manage-limits` regardless of whether your client is allowlisted for the wallet
-scopes yet) is completely safe - you'll just silently not get the ones you're not entitled to, and can add them
-to `AllowedScopes` later without changing anything on the client side.
+`openid` itself is the one scope that's always required regardless of allowlisting - omitting it fails with
+`invalid_scope`, `"The openid scope is required."`. `profile` and `email` are always granted to every registered
+client, regardless of its `AllowedScopes` list - only `sign`/`manage-limits` are actually gated by it.
+
+The scope you actually end up with (after unrecognized scopes are dropped) is always visible in the token
+response's `scope` field (and, for an authorization-code exchange, the same value the `/token` response returns)
+- check that field, or `GET /userinfo`/the access token's own `sign`/`manage-limits` claims, if you're ever
+unsure what a token was actually granted.
 
 ## Wallet API (`sign` / `manage-limits` scopes)
 
@@ -286,11 +287,9 @@ when left blank, so existing clients that never set it keep working, just with a
 filled in.
 
 To let a client use the wallet API, add `"sign"` and/or `"manage-limits"` to its `AllowedScopes` — e.g.
-`["openid", "profile", "email", "sign", "manage-limits"]`. Neither is included by default. Requesting one at
-`/authorize` without it being allowlisted no longer fails the request outright — see "Scope handling" below —
-the scope is just silently dropped, so the caller gets a working login but no `sign`/`manage-limits` claim (and
-therefore a `403` if it then tries `/wallet/sign` or `/wallet/limits`). Check the `scope` field the token response
-actually returns if you're not sure what was granted.
+`["openid", "profile", "email", "sign", "manage-limits"]`. Neither is included by default; requesting one at
+`/authorize` without it being allowlisted fails the whole request with `invalid_scope` (see "Scope handling"
+below) — the error description names exactly which scope(s) to add.
 
 Notes:
 

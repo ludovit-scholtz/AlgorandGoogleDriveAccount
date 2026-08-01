@@ -58,11 +58,43 @@ compatibility with a legacy `returnUrl` direct `id_token` flow.
 - `preferred_username` and `name` set to the short identity derived from Algorand address (first 4 + last 4 chars)
 - standard claims such as `sub`, `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`
 
+## Scopes
+
+Requested via `scope` on `/authorize` (space-separated). Supported scopes:
+
+| Scope | What it does | Requires `AllowedScopes` entry? |
+| --- | --- | --- |
+| `openid` | Standard OIDC identity assertion. **Required** on every request - omitting it fails with `invalid_scope`. | Always granted |
+| `profile` | Adds `preferred_username`/`name` (the short Algorand identity). | Always granted |
+| `email` | Adds the `email` claim. | Always granted |
+| `sign` | Grants `POST /wallet/sign` (sign an Algorand transaction group). Stamps a `sign: "true"` access-token claim. | **Yes** |
+| `manage-limits` | Grants `PUT /wallet/limits` (set the caller's daily/weekly/monthly spending limits). Stamps a `manage-limits: "true"` access-token claim. `GET /wallet/limits` (reading them) only needs `openid`, not this scope. | **Yes** |
+
+`sign` and `manage-limits` are **not** included in a client's `AllowedScopes` by default - see
+"Whitelisting and client registration" below for how to add them. Requesting one without it being
+allowlisted fails the whole `/authorize` request with `invalid_scope` (the error description names
+exactly which scope(s) aren't allowlisted) - it's rejected loudly rather than silently granted
+without it, so you always get a clear signal instead of a token that mysteriously doesn't do what
+you expected.
+
+A scope this service has never heard of at all (a typo, or one an OIDC client library
+auto-appends on its own - e.g. some MSAL/Azure AD-flavored clients send a literal `.default` scope
+when none is explicitly configured) is silently dropped instead, since there's nothing to fix on
+either side and failing the whole login over library noise would be worse. The scope you actually
+end up with is always visible in the token response's `scope` field.
+
 ## Whitelisting and client registration
 
 Clients and allowed redirect URLs are configured in `JwtIssuer:Clients` in `appsettings.json`.
 Redirect URI matching is an allowlist (with `*` wildcard subdomain support via
 `Helper/RedirectUriMatcher.cs`) checked before any authorization response is returned.
+
+Each client also has an `AllowedScopes` list - this is what actually gates `sign`/`manage-limits`
+(see "Scopes" above). To let a client use the wallet API, add the ones it needs:
+
+```json
+"AllowedScopes": ["openid", "profile", "email", "sign", "manage-limits"]
+```
 
 ## SigningPrivateKeyPem setup (secure and working)
 
