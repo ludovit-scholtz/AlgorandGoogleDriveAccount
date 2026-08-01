@@ -165,9 +165,16 @@ namespace BiatecOIDC.Controllers
         /// <param name="requestId">Opaque id of the pending authorize request stored by <c>/authorize</c>.</param>
         [AllowAnonymous]
         [HttpGet("select-provider")]
-        public IActionResult SelectProvider([FromQuery] string requestId)
+        public async Task<IActionResult> SelectProvider([FromQuery] string requestId)
         {
             var configuredProviders = _providerCatalog.All.Where(p => p.IsConfigured).ToList();
+
+            // Peek, not consume - AuthorizeChallenge/AuthorizeCallback still need the pending request
+            // after the user picks a provider. Only used here to show the user who's asking (app name)
+            // and what for (requested scopes) - never to make an authorization decision.
+            var pending = await _jwtIssuerService.PeekPendingAuthorizeRequestAsync(requestId);
+            var appName = ResolveAppName(pending?.ClientId, ResolveClientConfig(pending?.ClientId));
+            var requestedScopes = (pending?.Scope ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
             var buttonsHtml = new StringBuilder();
             foreach (var provider in configuredProviders)
@@ -191,13 +198,27 @@ namespace BiatecOIDC.Controllers
                     </div>
                     """;
 
+            // Requested-scopes summary, so the user knows what they're about to grant before they even
+            // pick a cloud provider - mirrors the detail shown on the consent screen further along, just
+            // earlier in the flow. Omitted entirely if the pending request somehow has no scopes.
+            var scopesHtml = requestedScopes.Length > 0
+                ? $"""
+                    <div class="requested-scopes">
+                        <span class="requested-scopes-label">{WebUtility.HtmlEncode(appName)} is requesting:</span>
+                        <ul>
+                            {string.Join("\n", requestedScopes.Select(s => $"<li>{WebUtility.HtmlEncode(FriendlyScopeName(s))}</li>"))}
+                        </ul>
+                    </div>
+                    """
+                : string.Empty;
+
             var html = $"""
                 <!DOCTYPE html>
                 <html lang="en">
                 <head>
                     <meta charset="UTF-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <title>Sign in to Biatec</title>
+                    <title>Sign in to {WebUtility.HtmlEncode(appName)}</title>
                     <link rel="icon" href="/logo-biatec.png">
                     <link rel="preconnect" href="https://fonts.googleapis.com">
                     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -211,8 +232,9 @@ namespace BiatecOIDC.Controllers
                         <div class="picker-card">
                             <img class="picker-logo" src="/logo-biatec.png" alt="Biatec logo">
                             <div class="eyebrow"><span class="dot"></span> Self-custody sign-in</div>
-                            <h1>Sign in to <span class="glow-text">Biatec</span></h1>
+                            <h1>Sign in to <span class="glow-text">{WebUtility.HtmlEncode(appName)}</span></h1>
                             <p class="subtitle">Choose the cloud account that holds your self-custody Algorand key. Your key never leaves it.</p>
+                            {scopesHtml}
                             {bodyHtml}
                         </div>
                     </div>
@@ -341,7 +363,12 @@ namespace BiatecOIDC.Controllers
                 backdrop-filter: blur(10px);
                 box-shadow: 0 30px 80px rgba(5, 6, 13, 0.55);
             }
-            .picker-logo { height: 40px; width: auto; margin-bottom: 1.5rem; }
+            .picker-logo {
+                height: 76px;
+                width: auto;
+                margin-bottom: 1.75rem;
+                filter: drop-shadow(0 0 22px rgba(77, 227, 255, 0.35));
+            }
             .eyebrow {
                 display: inline-flex;
                 align-items: center;
@@ -365,6 +392,38 @@ namespace BiatecOIDC.Controllers
             }
             h1 { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 0.75rem; }
             .subtitle { font-size: 0.92rem; color: var(--text-1); margin-bottom: 2rem; }
+            .requested-scopes {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid var(--panel-border);
+                border-radius: 14px;
+                padding: 0.9rem 1.1rem;
+                margin-bottom: 1.5rem;
+                text-align: left;
+            }
+            .requested-scopes-label {
+                display: block;
+                font-size: 0.78rem;
+                font-weight: 600;
+                color: var(--text-1);
+                margin-bottom: 0.5rem;
+            }
+            .requested-scopes ul { list-style: none; display: flex; flex-direction: column; gap: 0.35rem; }
+            .requested-scopes li {
+                font-size: 0.85rem;
+                color: var(--text-0);
+                padding-left: 1.1rem;
+                position: relative;
+            }
+            .requested-scopes li::before {
+                content: "";
+                position: absolute;
+                left: 0;
+                top: 0.5em;
+                width: 5px;
+                height: 5px;
+                border-radius: 50%;
+                background: var(--accent-cyan);
+            }
             .provider-list { display: flex; flex-direction: column; gap: 0.9rem; }
             .provider-button {
                 display: flex;
@@ -646,9 +705,10 @@ namespace BiatecOIDC.Controllers
 
             var continueUrl = Url.Action(nameof(AuthorizeConsentContinue), "JwtIssuer", new { requestId }, Request.Scheme)!;
             var reAuthUrl = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = provider.Name, retried = true }, Request.Scheme)!;
+            var appName = ResolveAppName(pending.ClientId, ResolveClientConfig(pending.ClientId));
 
             return Content(
-                BuildConsentHtml(pending.ClientId, wantsSign, wantsLimits, hasStorageAccess, provider.DisplayName, continueUrl, reAuthUrl),
+                BuildConsentHtml(appName, wantsSign, wantsLimits, hasStorageAccess, provider.DisplayName, continueUrl, reAuthUrl),
                 "text/html; charset=utf-8",
                 Encoding.UTF8);
         }
@@ -689,6 +749,50 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
+        /// Looks up <paramref name="clientId"/>'s registered configuration (<c>JwtIssuer:Clients</c>), if
+        /// any - used by <see cref="SelectProvider"/>/<see cref="AuthorizeConsent"/> to resolve a
+        /// human-friendly app name instead of showing the raw <c>client_id</c> to the user.
+        /// </summary>
+        private JwtIssuerClientConfiguration? ResolveClientConfig(string? clientId)
+        {
+            if (string.IsNullOrWhiteSpace(clientId))
+            {
+                return null;
+            }
+
+            var issuerConfig = HttpContext.RequestServices.GetRequiredService<IConfiguration>().GetSection("JwtIssuer").Get<JwtIssuerConfiguration>()
+                ?? new JwtIssuerConfiguration();
+
+            return issuerConfig.Clients.FirstOrDefault(c => string.Equals(c.ClientId, clientId, StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// The name shown to the user for a signing-in app: <see cref="JwtIssuerClientConfiguration.DisplayName"/>
+        /// when the client has one configured, otherwise the raw <paramref name="clientId"/> (e.g.
+        /// <c>"capitalism-pkce"</c>) as a fallback so unconfigured clients still show something reasonable.
+        /// </summary>
+        private static string ResolveAppName(string? clientId, JwtIssuerClientConfiguration? client)
+        {
+            if (client != null && !string.IsNullOrWhiteSpace(client.DisplayName))
+            {
+                return client.DisplayName;
+            }
+
+            return string.IsNullOrWhiteSpace(clientId) ? "This application" : clientId;
+        }
+
+        /// <summary>Human-friendly label for a requested OIDC/wallet scope, shown on <see cref="SelectProvider"/>.</summary>
+        private static string FriendlyScopeName(string scope) => scope switch
+        {
+            "openid" => "Verify your identity",
+            "profile" => "Your basic profile info",
+            "email" => "Your email address",
+            "sign" => "Sign transactions on your behalf (up to your spending limit)",
+            "manage-limits" => "Change your spending limit",
+            _ => scope
+        };
+
+        /// <summary>
         /// Builds the consent screen's HTML, styled to match <c>SelectProviderStyles</c>. Shows a
         /// permission checklist (identity always granted; storage access and sign/manage-limits granted
         /// or denied based on the actual token/what was requested) and either a required confirm button
@@ -696,7 +800,7 @@ namespace BiatecOIDC.Controllers
         /// screen (identity-only access with storage already working).
         /// </summary>
         private static string BuildConsentHtml(
-            string? clientId,
+            string appName,
             bool wantsSign,
             bool wantsLimits,
             bool hasStorageAccess,
@@ -704,7 +808,6 @@ namespace BiatecOIDC.Controllers
             string continueUrl,
             string reAuthUrl)
         {
-            var appName = string.IsNullOrWhiteSpace(clientId) ? "This application" : clientId;
             var encodedProviderName = WebUtility.HtmlEncode(providerDisplayName);
             var wantsPrivileges = wantsSign || wantsLimits;
             var needsConfirmation = wantsPrivileges || !hasStorageAccess;

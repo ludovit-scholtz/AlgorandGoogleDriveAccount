@@ -44,6 +44,14 @@ namespace BiatecOIDC.Model
         /// <summary>Unique client identifier presented as <c>client_id</c>.</summary>
         public string ClientId { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Human-friendly app name shown to the user on the provider-picker and consent screens (e.g.
+        /// "Capitalism 5"), instead of the raw <see cref="ClientId"/> (e.g. "capitalism-pkce"). Falls back
+        /// to <see cref="ClientId"/> when left blank, so existing clients that never set this keep working
+        /// unchanged - just with a less polished label until it's filled in.
+        /// </summary>
+        public string? DisplayName { get; set; }
+
         /// <summary>Client secret for confidential clients. Null/empty makes this a public client (see <c>IsPublicClient</c>).</summary>
         public string? ClientSecret { get; set; }
 

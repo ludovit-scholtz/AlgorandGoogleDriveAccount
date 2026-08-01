@@ -209,6 +209,75 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task AuthorizeConsent_ClientHasDisplayName_ShowsDisplayNameInsteadOfClientId()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid profile email" });
+            var configuration = BuildJwtIssuerConfigurationWithDisplayName("Capitalism 5");
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true, configuration, providerAccessToken: "google-access-token");
+
+            var result = await controller.AuthorizeConsent("request-id");
+
+            var html = ((ContentResult)result).Content!;
+            Assert.That(html, Does.Contain("Capitalism 5"));
+        }
+
+        [Test]
+        public async Task AuthorizeConsent_ClientHasNoDisplayName_FallsBackToClientId()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid profile email" });
+            // No IConfiguration client registration at all (default empty config) - DisplayName can't be
+            // resolved, so the raw ClientId is the only reasonable fallback.
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true, providerAccessToken: "google-access-token");
+
+            var result = await controller.AuthorizeConsent("request-id");
+
+            var html = ((ContentResult)result).Content!;
+            Assert.That(html, Does.Contain(ClientId));
+        }
+
+        [Test]
+        public async Task SelectProvider_ClientHasDisplayName_ShowsDisplayNameAndRequestedScopes()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid sign manage-limits" });
+            var configuration = BuildJwtIssuerConfigurationWithDisplayName("Capitalism 5");
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false, configuration);
+
+            var result = await controller.SelectProvider("request-id");
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result).Content!;
+            Assert.That(html, Does.Contain("Capitalism 5"));
+            Assert.That(html, Does.Contain("Verify your identity"));
+            Assert.That(html, Does.Contain("Sign transactions on your behalf"));
+            Assert.That(html, Does.Contain("Change your spending limit"));
+        }
+
+        [Test]
+        public async Task SelectProvider_NoPendingRequest_StillRendersPickerWithoutScopesSection()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("missing"))
+                .ReturnsAsync((OidcAuthorizeRequest?)null);
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = await controller.SelectProvider("missing");
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result).Content!;
+            Assert.That(html, Does.Not.Contain("is requesting:"));
+        }
+
+        [Test]
         public async Task AuthorizeConsentContinue_ValidRequest_FinalizesAuthorization()
         {
             var jwtIssuerService = CreateJwtIssuerServiceMock();
@@ -309,6 +378,17 @@ namespace BiatecOIDCTests
 
             return new ConfigurationBuilder()
                 .AddInMemoryCollection(values)
+                .Build();
+        }
+
+        private static IConfiguration BuildJwtIssuerConfigurationWithDisplayName(string displayName)
+        {
+            return new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["JwtIssuer:Clients:0:ClientId"] = ClientId,
+                    ["JwtIssuer:Clients:0:DisplayName"] = displayName
+                })
                 .Build();
         }
 

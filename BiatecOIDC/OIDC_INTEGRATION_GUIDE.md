@@ -149,6 +149,7 @@ other. Only set `Issuer` explicitly (as below) if this service is reachable at e
   "Clients": [
     {
       "ClientId": "my-app",
+      "DisplayName": "My App",
       "ClientSecret": "super-strong-secret",
       "RedirectUris": [
         "https://*.example.com/auth/callback",
@@ -181,6 +182,11 @@ Android/iOS/desktop apps and browser SPAs, which cannot keep a secret confidenti
 `RedirectUris` accepts custom (non-`http`/`https`) URI schemes, e.g. `io.example.myapp:/oauth2redirect` for an
 Android app-link/custom-scheme redirect — the same allowlist and wildcard rules apply, matched on scheme + host +
 port + path.
+
+`DisplayName` is optional but recommended — it's the human-friendly name shown to the user on the provider-picker
+and consent screens (e.g. "My App") instead of the raw `ClientId` (e.g. "my-app-pkce"). Falls back to `ClientId`
+when left blank, so existing clients that never set it keep working, just with a less polished label until it's
+filled in.
 
 To let a client use the wallet API, add `"sign"` and/or `"manage-limits"` to its `AllowedScopes` — e.g.
 `["openid", "profile", "email", "sign", "manage-limits"]`. Neither is included by default; a client that never
