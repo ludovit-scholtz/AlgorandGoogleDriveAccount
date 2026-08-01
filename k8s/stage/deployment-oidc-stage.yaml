@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: biatec-oidc-stage-app
-          image: scholtz2/biatec-oidc:1.2026.07.31-main
+          image: scholtz2/biatec-oidc:1.2026.08.01-main
           imagePullPolicy: Always
           resources:
             requests:
