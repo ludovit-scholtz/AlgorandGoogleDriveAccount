@@ -30,6 +30,19 @@ components but found not to extend to `BiatecMCPGoogle.cs` (new entry R-018 open
 reopening R-011). `k8s/main/conf/*` was inspected for the first time (new entry R-019 opened; R-013 left otherwise
 unchanged since GitHub branch-protection settings remain unverifiable from repository content alone).
 
+**2026-08-01 third audit note:** A third engagement
+([audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md),
+signature `claude-code-ai-review-3`) reviewed the substantial new surface area added since the second audit — a
+full three-way project restructure (`BiatecSelfCustodyCore`/`BiatecMCP`/`BiatecOIDC`), Microsoft Entra ID/OneDrive
+as a second storage provider, a multi-seed vault with on-chain rekey support, an AES key-ring rotation mechanism,
+cached/refreshable provider access tokens embedded in issued OIDC tokens, and a new cross-cloud vault-backup
+feature. This pass was narrower than the second audit's full line-by-line re-verification of every prior finding
+(see that report's §5 caveat) and instead prioritized the genuinely new code. It found one new High finding
+(R-020, an OAuth CSRF gap in the new vault-backup flow), two new Medium findings (R-021, a vault-file race
+condition; R-022, a known dependency advisory), confirmed R-018 and R-019 unchanged, extended R-019's concern to
+a second key ring (`ProviderTokenProtection` — see that entry's history), and found a genuine, unprompted
+improvement to R-013 (production deploys are no longer automatic on every push to `master`).
+
 ## Open risks
 
 ### R-013 — CI/CD pipeline has no in-workflow deployment gate; `k8s/main/conf` contents unverified
@@ -37,18 +50,30 @@ unchanged since GitHub branch-protection settings remain unverifiable from repos
 - **Description:** `build-api.yml` deploys directly to production on every push to `master` with no `environment:`
   protection block visible in the workflow file itself; `k8s/main/conf/*` was not inspected for accidentally
   plaintext secret material in this audit.
-- **Likelihood (5-year misuse probability):** 10% — reasoning: depends entirely on external GitHub
-  branch-protection configuration not verifiable from repository content; supply-chain/CI compromise is a
-  recurring real-world incident category industry-wide, and this pipeline's blast radius (direct production
-  deploy) is high if branch protection is ever misconfigured or lapses.
-- **Impact:** A compromised or unreviewed push to `master` would deploy directly to production with no additional
-  gate; if `k8s/main/conf` contains secret material, it would be exposed at a lower protection tier than intended.
-- **Affected component:** `.github/workflows/build-api.yml`; `k8s/main/conf/*` (unverified).
+- **Likelihood (5-year misuse probability):** 5% (revised 2026-08-01 from 10%) — reasoning: the pipeline no longer
+  deploys directly to production on every push to `master` (see Current mitigations and History) — the specific
+  mechanism this entry's Description names is gone. Residual likelihood reflects that GitHub branch-protection
+  configuration on `master` remains unverifiable from repository content alone, and that a manual production
+  promotion is still a human action that could itself be careless or (if the promoting account were compromised)
+  malicious, though this is a materially smaller and better-gated attack surface than "any push reaches
+  production automatically."
+- **Impact:** Unchanged — a compromised or careless production promotion would still deploy directly to
+  production; if `k8s/main/conf-*` contains secret material, it would be exposed at a lower protection tier than
+  intended (see R-019/P-01's `AesOptions`/`ProviderTokenProtection` findings, which are the concrete realization
+  of this).
+- **Affected component:** `.github/workflows/deploy-stage.yml`, `.github/workflows/promote-production.yml`
+  (formerly `build-api.yml`); `k8s/main/conf-mcp/*`, `k8s/main/conf-oidc/*` (formerly `k8s/main/conf/*`).
 - **Current mitigations:** `docs/KUBE_CONFIG_SECURITY.md`-described namespace-scoped, time-limited kubeconfig
-  limits blast radius of the CI credential itself even if the pipeline is triggered maliciously.
-- **Recommended further mitigation:** Verify/require GitHub branch-protection on `master`; audit `k8s/main/conf/*`
-  contents for secret material. **Not a code change** — requires manually checking GitHub repository settings and
-  the contents of `k8s/main/conf/*`, neither of which this remediation pass could perform.
+  limits blast radius of the CI credential itself even if a workflow run is triggered maliciously. **New as of
+  2026-08-01:** `deploy-stage.yml` now deploys only to the `stage` environment on every push to `master`;
+  `promote-production.yml` is `workflow_dispatch`-only (a human must manually trigger it with a specific,
+  already-stage-deployed image tag) and never rebuilds anything — see `docs/STAGE_ENVIRONMENT.md`. This directly
+  closes the "every push to master deploys straight to production with no gate" mechanism the entry was originally
+  opened to describe.
+- **Recommended further mitigation:** Verify/require GitHub branch-protection on `master`; verify who has
+  permission to trigger `promote-production.yml` (a `workflow_dispatch` workflow is only as safe as who can invoke
+  it). **Not a code change** for the branch-protection half — requires manually checking GitHub repository
+  settings, which this audit cannot perform.
 - **Status:** Open.
 - **History:**
   - 2026-23-07 — claude-code-ai-review: opened at 10%, corresponds to finding F-13.
@@ -60,6 +85,12 @@ unchanged since GitHub branch-protection settings remain unverifiable from repos
     found there (a possibly-live AES key/IV committed unchanged for over a year) is tracked separately as **R-019**
     rather than folded into this entry's likelihood, since it is a distinct, more concrete concern than the general
     "contents unverified" note this entry originally carried.
+  - 2026-01-08 — claude-code-ai-review-3: likelihood revised from 10% to 5%, corresponds to finding P-04 in
+    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+    The single-workflow, push-to-master-deploys-to-production pipeline this entry described no longer exists —
+    replaced by a stage-only auto-deploy plus a manually-gated production promotion, an unprompted architectural
+    improvement made independently of any audit recommendation. Not closed outright since GitHub
+    branch-protection settings remain unverified and a manual promotion step is still a human trust boundary.
 
 ## Closed risks
 
@@ -422,6 +453,9 @@ no corresponding registry entry.)_
     [audit-report-2026-24-07-173793a-claude-code-ai-review-2.md](audit-report-2026-24-07-173793a-claude-code-ai-review-2.md).
     Discovered while independently re-verifying R-011's closure — the fix was found genuine for R-011's own
     originally-cited scope but was not extended to this file.
+  - 2026-01-08 — claude-code-ai-review-3: re-confirmed unchanged after the project restructure. The same three
+    tools' generic catch blocks at their new location (`BiatecMCP/MCP/BiatecMCPGoogle.cs`) still return raw
+    `ex.Message`/`ex.Result.Message`. Status/likelihood unchanged.
 
 ### R-019 — Committed `k8s/main/conf/appsettings.json` contains AES key/IV material of unconfirmed live status
 
@@ -483,6 +517,180 @@ no corresponding registry entry.)_
     more specific entry rather than folded into R-013, since R-013's original concern was general ("contents
     unverified") while this entry describes a specific, reproducible piece of evidence (an unchanged-for-a-year,
     syntactically-real-looking committed key) with its own severity and remediation path.
+  - 2026-01-08 — claude-code-ai-review-3: re-confirmed unchanged after the project restructure — the exact same
+    `Key`/`IV` bytes are present, byte-for-byte, in both `k8s/main/conf-mcp/appsettings.json` (formerly
+    `k8s/main/conf/appsettings.json`) and the new `k8s/main/conf-oidc/appsettings.json`, confirmed via
+    `git log --follow -p`. Partial progress noted: the surrounding fields were relabeled `"ActiveKeyId":
+    "placeholder"`/`"KeyId": "placeholder"` as an incidental part of the unrelated AES key-ring-rotation feature,
+    which satisfies part of this entry's recommendation #2 (an unmistakable placeholder label) but not the
+    substance of it (the `Key`/`IV` bytes themselves are unchanged and still real-looking) nor recommendation #3
+    (no startup fail-fast check against the known placeholder value was added — `AesKeyRingResolver.GetActiveKey`
+    validates only syntactic well-formedness, not whether the resolved value matches this specific known-committed
+    sentinel). Likelihood left unchanged at 20% — no new evidence bears on whether the committed value is actually
+    overridden in production. **Scope note:** this audit found the identical pattern now also applies to a second,
+    newly-introduced key ring, `ProviderTokenProtection` (`k8s/main/conf-oidc/appsettings.json`), which protects
+    every relying party's cached Google/Microsoft provider access *and refresh* tokens — arguably higher-impact
+    than this entry's original `AesOptions` scope, since a live refresh token grants ongoing read/write access to
+    the user's cloud storage, not just decryption of one already-encrypted vault file. Tracked as a new, paired
+    entry, **R-023**, rather than folded into this one, so each key ring's status can be tracked and closed
+    independently (they are deployed via the same `google-account-main-app-secret` mechanism but are logically
+    separate secrets with separate blast radii).
+
+### R-020 — Vault-backup OAuth flow has no CSRF binding to the browser session completing consent
+
+- **Description:** The cross-cloud vault-backup feature's OAuth round trip to the *target* cloud provider
+  (`VaultBackupController.Authorize`/`Callback`, `VaultBackupService.HandleCallbackAsync`) uses its unguessable
+  `linkId` as the OAuth `state` parameter, but never binds that value to the browser session that actually
+  completes the consent screen — only to whichever Biatec account called `POST /wallet/backup/start`. An attacker
+  who holds any valid `sign`-scoped Biatec token for their own account can generate a `linkId`, send an unrelated
+  victim a link to `GET /wallet/backup/authorize?linkId=...`, and — if the victim merely completes the resulting,
+  entirely ordinary-looking consent screen while logged into their own Google/Microsoft account — cause the
+  victim's captured provider access token to be spent (via the attacker's own subsequent
+  `POST /wallet/backup/complete` call) to upload the **attacker's** encrypted vault into the **victim's** cloud
+  storage, under the exact file name the victim's own vault uses. On Microsoft/OneDrive this is a direct,
+  in-place overwrite (HTTP `PUT` to a fixed item path); on Google Drive it creates an ambiguous same-named
+  duplicate that can corrupt which file a future read resolves to.
+- **Affected component:** `BiatecOIDC/Controllers/VaultBackupController.cs` (`Authorize`, `Callback`);
+  `BiatecOIDC/BusinessLogic/VaultBackupService.cs` (`StartAsync`, `HandleCallbackAsync`, `CompleteAsync`);
+  `BiatecSelfCustodyCore/Providers/MicrosoftCloudStorageProvider.cs` (`UploadAsync`);
+  `BiatecSelfCustodyCore/Providers/GoogleCloudStorageProvider.cs` (`UploadAsync`).
+- **Likelihood (5-year misuse probability):** 15% — reasoning: exploitation requires no privileged access and no
+  prior relationship between attacker and victim beyond the victim clicking one link and completing one consent
+  screen that looks entirely legitimate (a real Biatec-branded OAuth consent prompt for a real permission, just for
+  the wrong "whose backup" party) — a realistic bar for a targeted or semi-automated phishing campaign. Likelihood
+  is not rated higher because it does require some social-engineering step (it is not a pure server-side
+  vulnerability exploitable with no victim interaction at all), and this system's current user base/exposure is
+  not yet established at scale. Likelihood is not rated lower because self-custody cryptocurrency users are a
+  demonstrated, high-value, recurring phishing target industry-wide, making the social-engineering precondition
+  more realistic here than in an average web application.
+- **Impact:** High. Integrity/availability, not confidentiality or theft — the attacker never obtains the victim's
+  key material and the captured victim token is spent exactly once, for exactly this write, never cached or reused.
+  But the practical consequence is a remote, unauthenticated (from the victim's perspective) denial-of-service
+  against a specific victim's self-custody vault: on OneDrive, the victim's real encrypted vault file is silently
+  destroyed and replaced with undecryptable attacker ciphertext, surfaced to the victim only as a generic
+  "Unable to load the account" error with no indication of cause.
+- **Current mitigations:** The `linkId` itself is unguessable (cryptographically random) and single-use (atomic
+  Redis `GETDEL` on completion), which prevents an attacker from *replaying* someone else's legitimate backup link
+  — but does nothing to prevent an attacker from using their *own*, legitimately-obtained link against an
+  unrelated victim, which is the actual mechanism of this finding.
+- **Recommended further mitigation:** Bind `Authorize`/`Callback` to the completing browser via a purpose-built
+  anti-CSRF mechanism (e.g. an `HttpOnly`/`SameSite=Lax` cookie set by `Authorize` and checked in `Callback`),
+  independent of the OAuth `state` value, which currently only identifies *which pending backup* this is, not
+  *who is authorized to complete it*. See the full remediation options (including a defense-in-depth file-naming
+  change) in the audit report's H-01 finding.
+- **Status:** Open.
+- **History:**
+  - 2026-01-08 — claude-code-ai-review-3: opened at 15%, corresponds to finding H-01 in
+    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+    The vault-backup feature is new since the second audit; this is the first audit to review it.
+
+### R-021 — No optimistic-concurrency control on seed-vault writes; concurrent mutations can silently lose a seed creation or a primary-seed switch
+
+- **Description:** `CreateSeedAsync`, `SwitchPrimarySeedAsync`, and the legacy-vault migration path all follow an
+  unguarded read-modify-write pattern against the seed-vault file, with no ETag/If-Match precondition, compare-
+  and-swap, or distributed lock. Two concurrent mutations against the same account (a double-submitted retry, or
+  two legitimate operations issued moments apart) can both read the same starting state; whichever write lands
+  last silently wins, discarding the other's change with no error surfaced to either caller. The specific
+  sequences this can lose (a just-created seed never persisting, or a primary-seed switch silently not taking
+  effect) are exactly the operations the multi-seed/on-chain-rekey feature exists to make safe.
+- **Affected component:** `BiatecSelfCustodyCore/Repository/CloudAccountRepository.cs` (`CreateSeedAsync`,
+  `SwitchPrimarySeedAsync`); `BiatecSelfCustodyCore/Helper/EncryptedKeyRingFileStore.cs` (`SaveAsync`);
+  both `ICloudStorageProvider.UploadAsync` implementations (neither provider-side call uses a conditional write).
+- **Likelihood (5-year misuse probability):** 8% — reasoning: this requires a race condition (concurrent requests
+  against the same account within a narrow window), not an attacker with no other access — realistic triggers are
+  client-side retry logic double-submitting a request, or a legitimate user issuing a create-then-switch sequence
+  in quick succession from an impatient UI, rather than a deliberate attack. Rated non-negligible because the
+  multi-seed/rekey feature is specifically the recovery-from-compromise path, where a silently-lost state change
+  at exactly the wrong moment (e.g., believing a primary-seed switch after an on-chain rekey succeeded when it
+  didn't) has outsized consequence relative to how rare the triggering race needs to be.
+- **Impact:** Medium. No seed's mnemonic is ever exposed and no existing seed is ever deleted by this race — only
+  the losing write's *addition/change* is discarded. Consequence is a caller believing a state change (a new
+  recovery seed exists; primary has switched) that didn't actually persist, which for the primary-switch case
+  specifically mirrors the exact failure mode `CLAUDE.md` documents as unsafe ("switching primary before
+  \[on-chain rekey confirmation\] would make Biatec sign with a key the account no longer recognizes") — just
+  triggered by a race instead of caller error.
+- **Current mitigations:** None specific to this path. `SwitchPrimarySeedAsync` requiring the `sign` claim, and
+  `CreateSeedAsync` requiring the stricter `rekey` claim, limit who can trigger either mutation at all, but do not
+  address the race between two authorized mutations.
+- **Recommended further mitigation:** Add optimistic-concurrency detection to the vault read-modify-write cycle
+  (e.g. Microsoft Graph's native `If-Match`/`eTag` support on `PUT`; a read-current-hash-and-compare pattern for
+  Google Drive) so a changed-since-read file fails the mutation with a caller-visible, retryable error instead of
+  silently being overwritten.
+- **Status:** Open.
+- **History:**
+  - 2026-01-08 — claude-code-ai-review-3: opened at 8%, corresponds to finding M-01 in
+    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+    The multi-seed vault (and its read-modify-write pattern) is new since the second audit; this is the first
+    audit to review it.
+
+### R-022 — Known moderate-severity advisory (GHSA-59j7-ghrg-fj52) in pinned `Microsoft.IdentityModel.*`/`System.IdentityModel.Tokens.Jwt` 5.5.0 packages
+
+- **Description:** The package family used throughout `JwtIssuerService.cs` to sign/validate every access, ID,
+  and refresh token this system issues, and by both apps' Google/Microsoft `AddOpenIdConnect` handlers to validate
+  the identity provider's own tokens, is pinned at version 5.5.0, which NuGet's own offline advisory database
+  (surfaced as `NU1902` build warnings) flags against `GHSA-59j7-ghrg-fj52`, rated moderate severity. This is not a
+  newly-introduced defect — the same version was already pinned at the time of the first audit — but no prior
+  audit's methodology included a dependency-vulnerability check, so this is the first audit to surface it.
+- **Affected component:** `BiatecMCP.csproj`, `BiatecSelfCustodyCore.csproj` (transitively `BiatecOIDC` too, via
+  its project reference), and both test projects.
+- **Likelihood (5-year misuse probability):** 10% — reasoning: this audit did not fetch the advisory's full
+  technical detail (no network access used for this engagement), so exploitability against this codebase's
+  specific usage pattern is unconfirmed either way; the likelihood is a generic estimate for a moderate-severity,
+  publicly-known advisory in an actively-maintained package family with security researcher attention, weighted
+  down because this codebase does not appear to expose any obviously-attacker-controlled input directly into the
+  vulnerable library surface beyond what any OIDC token-validation code path inherently does.
+- **Impact:** Medium-to-High if the advisory's specific mechanism turns out to be reachable — this package family
+  sits directly on the boundary between "a token is cryptographically valid" and "a token is accepted," the most
+  security-sensitive function in `BiatecOIDC`.
+- **Current mitigations:** None specific; general defense-in-depth (audience/issuer/lifetime validation logic in
+  `JwtIssuerService`, R-003/R-014's fixes) is independent of this package-level concern and would not necessarily
+  mitigate a vulnerability inside the package itself.
+- **Recommended further mitigation:** Upgrade to a patched version of `System.IdentityModel.Tokens.Jwt`/
+  `Microsoft.IdentityModel.JsonWebTokens`/`Microsoft.IdentityModel.Tokens`, re-run the full test suite, and add a
+  recurring dependency-vulnerability scan (e.g. `dotnet list package --vulnerable` in CI) so future advisories are
+  caught automatically rather than depending on an auditor noticing build output.
+- **Status:** Open.
+- **History:**
+  - 2026-01-08 — claude-code-ai-review-3: opened at 10%, corresponds to finding M-02 in
+    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+
+### R-023 — Committed `ProviderTokenProtection` key/IV of unconfirmed live status (paired with R-019)
+
+- **Description:** `k8s/main/conf-oidc/appsettings.json`'s `ProviderTokenProtection` key ring (introduced by the
+  provider-access-token-caching feature, new since the second audit) has the identical shape and identical
+  unresolved question as R-019's `AesOptions` finding: a syntactically valid, correctly-sized AES-256 key/IV,
+  labeled with a `KeyId`/`ActiveKeyId` of the literal string `"placeholder"`, deployed via the same
+  `google-account-main-app-secret` `envFrom` mechanism, with no way for this audit to confirm from repository
+  content alone whether it is actually overridden in production. This key ring protects the `provider_token`/
+  `provider_refresh_token` claims embedded in every access/refresh token `BiatecOIDC` issues — decrypting a
+  captured token's refresh-token claim under a live committed key would hand an attacker an ongoing, renewable
+  Google/Microsoft credential for that user's cloud storage, not merely offline access to one already-encrypted
+  vault file.
+- **Affected component:** `k8s/main/conf-oidc/appsettings.json` (`ProviderTokenProtection` section);
+  `BiatecOIDC/BusinessLogic/ProviderAccessTokenProtector.cs`; `k8s/main/deployment-oidc.yaml`.
+- **Likelihood (5-year misuse probability):** 20% — reasoning: identical to R-019's, since the underlying
+  uncertainty (is the committed value ever live?) and mitigating factors (a plausible, standard, code-consistent
+  design under which it is inert placeholder text) are the same. See R-019's likelihood reasoning for the full
+  discussion; not reduced further here because, unlike R-019's `AesOptions`, this key ring has no prior audit
+  history establishing any additional context.
+- **Impact:** Critical if the committed value is ever live — arguably exceeding R-019's impact, since a live
+  provider refresh token grants ongoing read/write/delete access to a user's cloud storage for as long as the
+  token remains valid, not just offline decryption of one already-encrypted file.
+- **Current mitigations:** Same as R-019 — the Kubernetes `Secret`+`envFrom` mechanism, if actually configured to
+  override `ProviderTokenProtection__Keys__0__Key`/`__IV`, would fully mitigate via standard ASP.NET Core
+  configuration precedence.
+- **Recommended further mitigation:** Same remediation priority order as R-019, applied to this key ring in
+  parallel (both are deployed via the same secret, so verification/rotation work should cover both together): (1)
+  out-of-band verification against the live `Secret`; (2) the `KeyId` relabel is already done here; (3) a startup
+  fail-fast check against the known-placeholder sentinel (not yet implemented for either key ring); (4)
+  precautionary rotation if (1) cannot rule out the committed value having been live.
+- **Status:** Open.
+- **History:**
+  - 2026-01-08 — claude-code-ai-review-3: opened at 20%, corresponds to finding P-01 in
+    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+    The `ProviderTokenProtection` key ring is new since the second audit; this is the first audit to review it.
+    Opened as a paired entry alongside R-019 rather than folded into it, so each key ring's remediation can be
+    tracked and closed independently even though they share the same deployment mechanism and remediation shape.
 
 ## Accepted / unmitigable risks
 
