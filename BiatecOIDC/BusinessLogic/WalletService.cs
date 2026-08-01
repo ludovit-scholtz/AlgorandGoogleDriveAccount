@@ -1,6 +1,5 @@
 using BiatecOIDC.Helper;
 using BiatecSelfCustodyCore.BusinessLogic;
-using BiatecSelfCustodyCore.Helper;
 
 namespace BiatecOIDC.BusinessLogic
 {
@@ -9,12 +8,18 @@ namespace BiatecOIDC.BusinessLogic
     {
         private readonly IDriveService _driveService;
         private readonly ISpendingLimitService _spendingLimitService;
+        private readonly IAssetValuationService _valuationService;
         private readonly ILogger<WalletService> _logger;
 
-        public WalletService(IDriveService driveService, ISpendingLimitService spendingLimitService, ILogger<WalletService> logger)
+        public WalletService(
+            IDriveService driveService,
+            ISpendingLimitService spendingLimitService,
+            IAssetValuationService valuationService,
+            ILogger<WalletService> logger)
         {
             _driveService = driveService;
             _spendingLimitService = spendingLimitService;
+            _valuationService = valuationService;
             _logger = logger;
         }
 
@@ -30,26 +35,41 @@ namespace BiatecOIDC.BusinessLogic
                 throw new ArgumentException("At least one transaction is required.", nameof(transactionsMsgPack));
             }
 
-            var maxAmountPerTransaction = await _spendingLimitService.GetMaxAmountPerTransactionAsync(email);
+            // Decode every transaction up front (cheap, purely local) before doing any network calls -
+            // an undecodable transaction should fail fast, not after a round-trip to the router.
+            var infos = transactionsMsgPack.Select(AlgorandTransactionInspector.Inspect).ToList();
 
-            // Validate every transaction in the group up front, before signing any of them - signing has
-            // no rollback, so a group with one over-limit transaction must never partially sign the rest.
-            foreach (var txMsgPack in transactionsMsgPack)
+            // Price every payment/asset-transfer in the group via the Biatec Router, and total it up -
+            // every such transaction is subject to the spending limit, so an unpriceable asset fails the
+            // whole request (AssetValuationException propagates) rather than being silently skipped.
+            var now = DateTimeOffset.UtcNow;
+            var ledgerEntries = new List<SpendingLedgerEntry>();
+            var totalUsd = 0m;
+
+            foreach (var info in infos)
             {
-                var info = AlgorandTransactionInspector.Inspect(txMsgPack);
-
                 if (info.Kind is not (AlgorandTransactionKind.Payment or AlgorandTransactionKind.AssetTransfer))
                 {
                     continue;
                 }
 
-                if (TransferPolicy.ExceedsMaxAmount(info.Amount, maxAmountPerTransaction))
+                var usdValue = await _valuationService.GetUsdValueAsync(info.AssetId, info.Amount);
+                totalUsd += usdValue;
+                ledgerEntries.Add(new SpendingLedgerEntry
                 {
-                    _logger.LogWarning(
-                        "Rejecting sign request for {Email}: {Kind} amount {Amount} exceeds spending limit {MaxAmount}.",
-                        email, info.Kind, info.Amount, maxAmountPerTransaction);
-                    throw new SpendingLimitExceededException(info.Kind, info.Amount, maxAmountPerTransaction);
-                }
+                    TimestampUtc = now,
+                    AmountUsd = usdValue,
+                    AssetId = info.AssetId,
+                    Kind = info.Kind.ToString()
+                });
+            }
+
+            // Check the whole group's total spend against the caller's daily/weekly/monthly limits before
+            // signing any of it - signing has no rollback, so a group that would exceed a limit must never
+            // partially sign.
+            if (totalUsd > 0m)
+            {
+                await _spendingLimitService.EnsureWithinLimitsAsync(email, provider, accessToken, totalUsd);
             }
 
             var signed = new List<byte[]>(transactionsMsgPack.Count);
@@ -58,7 +78,12 @@ namespace BiatecOIDC.BusinessLogic
                 signed.Add(await _driveService.SignTransactionAsync(email, txMsgPack, provider, accessToken));
             }
 
-            _logger.LogInformation("Signed a {Count}-transaction group for {Email}.", signed.Count, email);
+            if (ledgerEntries.Count > 0)
+            {
+                await _spendingLimitService.RecordSpendAsync(email, provider, accessToken, ledgerEntries);
+            }
+
+            _logger.LogInformation("Signed a {Count}-transaction group for {Email}, totaling {TotalUsd:0.####} USD.", signed.Count, email, totalUsd);
             return signed;
         }
     }

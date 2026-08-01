@@ -76,20 +76,31 @@ manages.
   - `Controllers/JwtIssuerController.cs` — `/authorize` (+ `idp` fast track), `/select-provider` (picker page,
     one button per provider registered in the catalog), `/authorize/challenge`, `/authorize/callback` (verifies
     storage-write access via `catalog.Resolve(idp).HasWriteAccessAsync(...)` before finalizing)
-  - `Controllers/WalletController.cs` — `/wallet/sign` (`sign` claim), `/wallet/limits` get/put (`manage-limits`
-    claim); same manual bearer-token pattern as `JwtIssuerController`'s `/userinfo` (not `[Authorize]` — see
-    `.claude/skills/biatec-oidc-jwt/SKILL.md`)
+  - `Controllers/WalletController.cs` — `/wallet/sign` (`sign` claim), `/wallet/limits` get (identity only)/put
+    (`manage-limits` claim), `/wallet/limits/currencies` (identity only); same manual bearer-token pattern as
+    `JwtIssuerController`'s `/userinfo` (not `[Authorize]` — see `.claude/skills/biatec-oidc-jwt/SKILL.md`)
   - `BusinessLogic/JwtIssuerService.cs` (+ `IJwtIssuerService`) — depends on `BiatecSelfCustodyCore`'s
     `IDriveService` for the `algorand_address` claim; also stamps `biatec_idp`/`sign`/`manage-limits` claims
     onto issued access tokens
-  - `BusinessLogic/WalletService.cs` (+ `IWalletService`) — signs a transaction group via `IDriveService`,
-    enforcing `ISpendingLimitService`'s per-user limit on every `pay`/`axfer` first
-  - `BusinessLogic/SpendingLimitService.cs` (+ `ISpendingLimitService`) — Redis-backed per-user (by email)
-    spending limit, global across all relying-party clients
+  - `BusinessLogic/WalletService.cs` (+ `IWalletService`) — signs a transaction group via `IDriveService`, first
+    pricing every `pay`/`axfer` in USD (`IAssetValuationService`) and checking the group's total against
+    `ISpendingLimitService`'s daily/weekly/monthly limits, then recording the spend to the ledger after signing
+  - `BusinessLogic/SpendingLimitService.cs` (+ `ISpendingLimitService`) — daily (trailing 24h)/weekly (trailing
+    7d)/monthly (trailing 30d) per-user spending limits and a signed-transaction ledger, in a currency the user
+    picks (defaults to USD); both AES-encrypted and stored in the user's own Drive/OneDrive (never Redis, never
+    Biatec's servers in plaintext) via the same `ICloudStorageProviderCatalog`/`AesEncryptionHelper` primitives
+    `CloudAccountRepository` uses for the account file itself
+  - `BusinessLogic/BiatecRouterValuationService.cs` (+ `IAssetValuationService`, `IBiatecRouterQuoteClient`) —
+    prices a spent asset in USD via the `BiatecRouterConnector` NuGet package's public `/quote` endpoint, quoting
+    against `SpendingLimitsConfiguration.UsdReferenceAssetId` (mainnet USDC by default)
+  - `BusinessLogic/CnbExchangeRateService.cs` (+ `IExchangeRateService`) — currency exchange rates for
+    spending-limit configuration, from the Czech National Bank's daily fixing JSON API, cached in Redis
+    (`ExchangeRateConfiguration.CacheDurationMinutes`); backs `GET /wallet/limits/currencies` and the USD→limit-
+    currency conversion `SpendingLimitService` does when checking a limit
   - `Helper/RedirectUriMatcher.cs` — OIDC redirect URI matching incl. wildcard support
-  - `Helper/AlgorandTransactionInspector.cs` — decodes a transaction's raw msgpack to find its real type/amount
-    (generic map peek first — a `Transaction` subclass's `type` property is a hardcoded constant, not decoded
-    off the wire)
+  - `Helper/AlgorandTransactionInspector.cs` — decodes a transaction's raw msgpack to find its real type/amount/
+    asset id (generic map peek first — a `Transaction` subclass's `type` property is a hardcoded constant, not
+    decoded off the wire)
   - `Helper/BearerTokenHelper.cs` — shared `Authorization: Bearer` header extraction (`JwtIssuerController` +
     `WalletController`)
   - `Model/JwtIssuerModels.cs`, `Model/WalletModels.cs`, plus local `RedisConfiguration`/`CorsConfiguration` copies
@@ -252,20 +263,32 @@ setup stage needs.
   `JwtIssuer:Clients` in `appsettings.json`; see `RedirectUriMatcher` for wildcard redirect URI matching rules and
   `OIDC_INTEGRATION_GUIDE.md` for the full integration contract.
 - **Wallet API (`sign`/`manage-limits` scopes)**: `WalletController` (`BiatecOIDC`) exposes `POST /wallet/sign`
-  (signs an Algorand transaction group via the shared `IDriveService`) and `GET`/`PUT /wallet/limits` (the
-  caller's own per-transaction spending limit, via `ISpendingLimitService`, Redis-backed, global per user —
-  not per relying-party client). Both are gated on a dedicated claim of the same name as the scope
-  (`sign`/`manage-limits`), stamped onto the access token by `JwtIssuerService.CreateAccessToken` only when
-  that scope was granted **and** the client's `AllowedScopes` allowlists it — existing clients don't get these
-  implicitly. `AlgorandTransactionInspector` (`BiatecOIDC/Helper`) decodes a raw transaction's msgpack to find
-  its real type (`Transaction` subclasses' `type` property is a hardcoded per-class constant, not something
-  decoded off the wire — the generic map must be peeked first); `TransferPolicy.ExceedsMaxAmount`
-  (`BiatecSelfCustodyCore/Helper`, shared with `BiatecMCP`'s `transferAsset` tool) does the actual limit check,
-  applied only to `pay`/`axfer` transactions, checked for every transaction in the group **before** any of them
-  are signed. The provider needed to read the self-custody file (`biatec_idp`) is now also stamped onto the
-  access token at issuance, never caller-supplied, so it can't be spoofed to point at the wrong storage backend.
-  `BiatecOIDC/wwwroot/index.html` (served at `/`, reachable on `oidc.biatec.io`'s own Ingress) is this API's
-  documentation site.
+  (signs an Algorand transaction group via the shared `IDriveService`), `GET`/`PUT /wallet/limits` (the caller's
+  own daily/weekly/monthly spending limits and their currency), and `GET /wallet/limits/currencies` (every
+  currency a limit can be set in, with its current USD rate). `POST /wallet/sign` and `PUT /wallet/limits` are
+  gated on a dedicated claim of the same name as the scope (`sign`/`manage-limits`), stamped onto the access
+  token by `JwtIssuerService.CreateAccessToken` only when that scope was granted **and** the client's
+  `AllowedScopes` allowlists it — existing clients don't get these implicitly; `GET /wallet/limits` and
+  `GET /wallet/limits/currencies` only require a validly authenticated caller (no dedicated claim, since they're
+  read-only). `AlgorandTransactionInspector` (`BiatecOIDC/Helper`) decodes a raw transaction's msgpack to find
+  its real type/amount/asset id (`Transaction` subclasses' `type` property is a hardcoded per-class constant, not
+  something decoded off the wire — the generic map must be peeked first). Every `pay`/`axfer` in a sign request
+  is priced in USD by `IAssetValuationService`/`BiatecRouterValuationService` (quoting against the Biatec Router,
+  via the `BiatecRouterConnector` NuGet package's public `/quote` endpoint — mainnet USDC by default, see
+  `SpendingLimitsConfiguration`), summed, converted into the caller's configured limit currency via
+  `IExchangeRateService`/`CnbExchangeRateService` (Czech National Bank daily fixing, cached in Redis), and checked
+  against `ISpendingLimitService`'s rolling daily (24h)/weekly (7d)/monthly (30d) windows **before** any
+  transaction in the group is signed — a group that would exceed a limit never partially signs. An asset that
+  can't be priced (`AssetValuationException`) or a limit currency whose rate can't be fetched
+  (`UnsupportedCurrencyException`) fails the whole request (503) rather than being silently treated as free.
+  Both the limit settings and a rolling ledger of every signed `pay`/`axfer` (used to compute real trailing spend
+  without re-querying the blockchain) are AES-encrypted and stored in the wallet owner's **own** cloud drive —
+  not Redis, not Biatec's servers — via `SpendingLimitService`, reusing the same
+  `ICloudStorageProviderCatalog`/`AesEncryptionHelper` primitives `CloudAccountRepository` uses for the account
+  file itself. The provider needed to read the self-custody file and spending-limit data (`biatec_idp`) is
+  stamped onto the access token at issuance, never caller-supplied, so it can't be spoofed to point at the wrong
+  storage backend. `BiatecOIDC/wwwroot/index.html` (served at `/`, reachable on `oidc.biatec.io`'s own Ingress)
+  is this API's documentation site.
 - **Service tiers**: `PortfolioValuationService` (`BiatecMCP`) computes a user's Algorand portfolio value to
   auto-assign Free/Professional/Enterprise tiers (device limits, support SLA) — no billing, purely value-based.
 
@@ -306,7 +329,11 @@ setup stage needs.
 ## Skills
 
 - `biatec-oidc-jwt` (`.claude/skills/biatec-oidc-jwt/SKILL.md`) — condensed reference for the OIDC/JWT issuer
-  (endpoints, claims, redirect-URI/logout allowlist rules, signing-key format). Use this instead of reading the two
-  full guide docs above when working on `/authorize`, `/token`, `/userinfo`, `/introspect`, `/verify`,
-  `/connect/endsession`, `/logout`, `JwtIssuerService.cs`, `JwtIssuerController.cs`, `RedirectUriMatcher.cs`, or
-  `JwtIssuer:*` config (all in `BiatecOIDC/`).
+  (endpoints, claims, redirect-URI/logout allowlist rules, signing-key format) and the wallet API's
+  daily/weekly/monthly spending-limit enforcement (Biatec Router USD valuation, Czech National Bank FX rates,
+  encrypted cloud-drive storage). Use this instead of reading the two full guide docs above when working on
+  `/authorize`, `/token`, `/userinfo`, `/introspect`, `/verify`, `/connect/endsession`, `/logout`, `/wallet/sign`,
+  `/wallet/limits`, `/wallet/limits/currencies`, `JwtIssuerService.cs`, `JwtIssuerController.cs`,
+  `WalletController.cs`, `WalletService.cs`, `SpendingLimitService.cs`, `BiatecRouterValuationService.cs`,
+  `CnbExchangeRateService.cs`, `RedirectUriMatcher.cs`, or `JwtIssuer:*`/`SpendingLimits:*`/`ExchangeRates:*`
+  config (all in `BiatecOIDC/`).

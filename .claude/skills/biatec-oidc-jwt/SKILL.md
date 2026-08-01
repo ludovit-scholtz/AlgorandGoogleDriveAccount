@@ -1,6 +1,6 @@
 ---
 name: biatec-oidc-jwt
-description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, AlgorandTransactionInspector) — endpoints, claims/scopes, redirect-URI/logout allowlist rules, signing-key format, spending-limit enforcement. Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, or JwtIssuer:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
+description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, AlgorandTransactionInspector) — endpoints, claims/scopes, redirect-URI/logout allowlist rules, signing-key format, daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates. Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, /wallet/limits/currencies, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
 ---
 
 # Biatec OIDC / JWT issuer
@@ -41,7 +41,9 @@ Access tokens (not ID tokens) additionally carry, when applicable:
 - `sign` (value `"true"`) — present only if the `sign` scope was requested **and** allowlisted for the client.
   Required by `WalletController.SignTransactionGroup` (`POST /wallet/sign`).
 - `manage-limits` (value `"true"`) — present only if the `manage-limits` scope was requested and allowlisted.
-  Required by `WalletController.GetSpendingLimit`/`UpdateSpendingLimit` (`GET`/`PUT /wallet/limits`).
+  Required by `WalletController.UpdateSpendingLimit` (`PUT /wallet/limits`) only - `GetSpendingLimit`
+  (`GET /wallet/limits`) and `GetSupportedCurrencies` (`GET /wallet/limits/currencies`) only require a validly
+  authenticated caller (the standard `openid` scope), no `manage-limits` needed to read.
 
 These two are deliberately explicit claims, not something callers infer by re-parsing the space-separated `scope`
 claim — see `JwtIssuerService.CreateAccessToken`'s `WalletApiScopes` array. Neither is in any client's
@@ -55,20 +57,44 @@ way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `V
 `[Authorize]`/a JWT Bearer scheme - see "Why manual token parsing" below).
 
 - `POST /wallet/sign` — requires the `sign` claim. Body: `{ "transactions": ["<base64 msgpack>", ...],
-  "accessToken": "<provider access token>" }`. Every `pay`/`axfer` transaction in the group is checked against
-  the caller's spending limit (`ISpendingLimitService.GetMaxAmountPerTransactionAsync`, keyed by email) *before*
-  any of them are signed via the shared `IDriveService.SignTransactionAsync` - a group with one over-limit
-  transaction never partially signs the rest. `accessToken` is the caller-supplied Google/Microsoft token needed
-  to read/decrypt the self-custody file (deliberately not persisted server-side - see
-  `docs/STAGE_ENVIRONMENT.md`-adjacent reasoning in `CLAUDE.md`'s self-custody model notes). Throws (mapped to
-  HTTP by `WalletController`): `SpendingLimitExceededException` → 403, `FormatException` (bad transaction) → 400,
-  `UnauthorizedAccessException` (expired/invalid provider token) → 401.
-- `GET`/`PUT /wallet/limits` — require the `manage-limits` claim. Global per user (by email), not per
-  relying-party client - any app holding a `sign`-scoped token for that user is bound by the same limit,
-  wherever it was last set. `0` means unbounded (same convention as `TransferPolicy.ExceedsMaxAmount`).
+  "accessToken": "<provider access token>" }`. Every `pay`/`axfer` transaction in the group is priced in USD via
+  `IAssetValuationService` (`BiatecRouterValuationService`, quoting against the Biatec Router - see below), summed,
+  and the total is checked against the caller's daily (trailing 24h)/weekly (trailing 7d)/monthly (trailing 30d)
+  spending limits (`ISpendingLimitService.EnsureWithinLimitsAsync`) *before* any transaction is signed via the
+  shared `IDriveService.SignTransactionAsync` - a group that would exceed a limit never partially signs. Signed
+  spend is then recorded to the caller's encrypted ledger (`ISpendingLimitService.RecordSpendAsync`).
+  `accessToken` is the caller-supplied Google/Microsoft token needed to read/decrypt the self-custody file *and*
+  the spending-limit data (deliberately not persisted server-side - see `docs/STAGE_ENVIRONMENT.md`-adjacent
+  reasoning in `CLAUDE.md`'s self-custody model notes). Throws (mapped to HTTP by `WalletController`):
+  `SpendingLimitExceededException` → 403, `FormatException` (bad transaction) → 400, `UnauthorizedAccessException`
+  (expired/invalid provider token) → 401, `AssetValuationException`/`UnsupportedCurrencyException` → 503 (a spent
+  asset couldn't be priced, or the limit currency's FX rate couldn't be fetched - every transaction is subject to
+  the limit, so this fails closed rather than treating an unpriceable asset as free).
+- `GET /wallet/limits` — only requires a valid bearer token (any authenticated caller reads their own limits, no
+  `manage-limits` claim). `PUT /wallet/limits` requires the `manage-limits` claim. Limits (`SpendingLimitSettings`:
+  `CurrencyCode` + `DailyLimit`/`WeeklyLimit`/`MonthlyLimit`, `0` = unbounded per window) and the signed-transaction
+  ledger (`SpendingLedgerEntry` list, USD-denominated, pruned to the last 30 days on every write) are **not** in
+  Redis - `ISpendingLimitService`/`SpendingLimitService` stores both AES-encrypted in the wallet owner's own
+  cloud drive (same `ICloudStorageProviderCatalog`/`AesEncryptionHelper` primitives `CloudAccountRepository` uses
+  for the account file itself), under `SpendingLimits.<AESID>.dat`/`SpendingLedger.<AESID>.dat`. Windows are
+  rolling (measured back from "now"), not calendar-aligned - deliberately, so a limit can't be doubled up by
+  spending right before and right after a calendar boundary. Global per user (by email), not per relying-party
+  client - any app holding a `sign`-scoped token for that user is bound by the same limits, wherever last set.
+- `GET /wallet/limits/currencies` — only requires a valid bearer token. Lists every currency `PUT /wallet/limits`
+  accepts plus its current USD rate, via `IExchangeRateService`/`CnbExchangeRateService` (Czech National Bank's
+  daily fixing JSON API, cached in `IDistributedCache`/Redis for `ExchangeRateConfiguration.CacheDurationMinutes`,
+  default 6h). USD is always supported (rate `1.0`, no fetch needed); CZK is added locally since ČNB never quotes
+  CZK against itself; every other code comes from the fixing table, converted via CZK as the pivot currency
+  (`usdPerUnit(C) = czkPerUnit(C) / czkPerUnit(USD)`).
+- `IAssetValuationService`/`BiatecRouterValuationService` prices a spent asset by quoting it against
+  `SpendingLimitsConfiguration.UsdReferenceAssetId` (mainnet USDC, `31566704`, by default) via the
+  `BiatecRouterConnector` NuGet package's public, unauthenticated `/quote` endpoint (`IBiatecRouterQuoteClient` -
+  a thin seam around the generated client, for testability). Spending the reference asset itself converts locally
+  (no router call needed). `EnsureWithinLimitsAsync` then converts that USD figure into the caller's configured
+  limit currency via `IExchangeRateService.ConvertFromUsdAsync` before comparing against the configured ceiling.
 
 `AlgorandTransactionInspector` (`BiatecOIDC/Helper/AlgorandTransactionInspector.cs`) decodes a transaction's raw
-msgpack to find its real type and amount. This needs a generic (untyped) msgpack map decode first - the
+msgpack to find its real type, amount, and asset id. This needs a generic (untyped) msgpack map decode first - the
 Algorand4 SDK's `Transaction` subclasses' `type` property is a hardcoded C# constant of that subclass, **not**
 something decoded off the wire (verified empirically: decoding a payment's bytes as `AssetTransferTransaction`
 silently reports `type="axfer"`). Handles both a bare `Transaction` and a `SignedTransaction` wrapper (multisig

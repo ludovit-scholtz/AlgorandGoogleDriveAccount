@@ -54,6 +54,8 @@ namespace BiatecOIDC
             builder.Services.Configure<RedisConfiguration>(builder.Configuration.GetSection("Redis"));
             builder.Services.Configure<CorsConfiguration>(builder.Configuration.GetSection("Cors"));
             builder.Services.Configure<JwtIssuerConfiguration>(builder.Configuration.GetSection("JwtIssuer"));
+            builder.Services.Configure<SpendingLimitsConfiguration>(builder.Configuration.GetSection("SpendingLimits"));
+            builder.Services.Configure<ExchangeRateConfiguration>(builder.Configuration.GetSection("ExchangeRates"));
 
             var googleCloudConfig = new GoogleCloudServiceConfiguration();
             builder.Configuration.GetSection("CloudServices:Google").Bind(googleCloudConfig);
@@ -133,8 +135,19 @@ namespace BiatecOIDC
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IJwtIssuerService, BiatecOIDC.BusinessLogic.JwtIssuerService>();
 
             // Wallet API (WalletController): signs transaction groups gated on the "sign" claim and
-            // manages the per-user spending limit gated on the "manage-limits" claim - see
-            // JwtIssuerService.CreateAccessToken for how those claims get onto the access token.
+            // manages the per-user daily/weekly/monthly spending limits gated on the "manage-limits" claim
+            // - see JwtIssuerService.CreateAccessToken for how those claims get onto the access token.
+            // BiatecRouterQuoteClient/CnbExchangeRateService are typed HttpClients (see the Google/Microsoft
+            // provider registrations above for why): BiatecRouterQuoteClient prices a spent asset in USD via
+            // the Biatec Router's public /quote endpoint; CnbExchangeRateService converts that USD value into
+            // the caller's configured limit currency using the Czech National Bank's cached daily fixing.
+            builder.Services.AddHttpClient<BiatecOIDC.BusinessLogic.BiatecRouterQuoteClient>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IBiatecRouterQuoteClient>(sp => sp.GetRequiredService<BiatecOIDC.BusinessLogic.BiatecRouterQuoteClient>());
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IAssetValuationService, BiatecOIDC.BusinessLogic.BiatecRouterValuationService>();
+
+            builder.Services.AddHttpClient<BiatecOIDC.BusinessLogic.CnbExchangeRateService>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IExchangeRateService>(sp => sp.GetRequiredService<BiatecOIDC.BusinessLogic.CnbExchangeRateService>());
+
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.ISpendingLimitService, BiatecOIDC.BusinessLogic.SpendingLimitService>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IWalletService, BiatecOIDC.BusinessLogic.WalletService>();
 
@@ -370,9 +383,9 @@ namespace BiatecOIDC
         /// </summary>
         private static bool IsConfiguredValue(string? value)
         {
-            return !string.IsNullOrWhiteSpace(value) 
-            && !value.StartsWith("your-", StringComparison.OrdinalIgnoreCase)
-            && value != "ClientId";
+            return !string.IsNullOrWhiteSpace(value)
+                && !value.StartsWith("your-", StringComparison.OrdinalIgnoreCase)
+                && value != "ClientId";
         }
     }
 }

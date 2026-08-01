@@ -51,8 +51,15 @@ for a given client (don't mix the two for the same integration).
   - Convenience token verification endpoint.
 - `POST /wallet/sign`
   - Signs an Algorand transaction group. Requires the `sign` scope (see "Wallet API" below).
-- `GET`/`PUT /wallet/limits`
-  - Reads/sets the caller's own spending limit for `/wallet/sign`. Requires the `manage-limits` scope.
+- `GET /wallet/limits`
+  - Reads the caller's own daily/weekly/monthly spending limits. Only requires being authenticated
+    (`openid`) - no `manage-limits` scope needed to read your own limits.
+- `PUT /wallet/limits`
+  - Sets the caller's own daily/weekly/monthly spending limits and their currency. Requires the
+    `manage-limits` scope.
+- `GET /wallet/limits/currencies`
+  - Lists every currency a spending limit can be configured in, with its current USD exchange rate. Only
+    requires being authenticated.
 
 ## Important Claims in Tokens
 
@@ -80,24 +87,45 @@ Important behavior for Drive consent:
 ## Wallet API (`sign` / `manage-limits` scopes)
 
 Beyond identity, Biatec OIDC can sign Algorand transaction groups directly on behalf of the wallet owner, subject
-to a spending limit the owner controls. This is a separate, opt-in capability — request these scopes at
-`/authorize` only if your integration needs them, and they must be explicitly added to your client's allowed
-scopes when it's registered (never granted implicitly, regardless of what you request).
+to daily/weekly/monthly spending limits the owner controls, in a currency of their choosing. This is a separate,
+opt-in capability — request these scopes at `/authorize` only if your integration needs them, and they must be
+explicitly added to your client's allowed scopes when it's registered (never granted implicitly, regardless of
+what you request).
 
 Full request/response examples, curl snippets, and a live discovery link are on the documentation site at
 `https://oidc.biatec.io/` (the `#wallet-api` section) — this section is a summary.
 
 - **`POST /wallet/sign`** (needs `sign`) — body: `{ "transactions": ["<base64 msgpack>", ...],
   "accessToken": "<your current Google/Microsoft access token>" }`. Every payment/asset-transfer in the group is
-  checked against the caller's configured spending limit *before* anything is signed — if any one transaction
-  exceeds it, the whole request is rejected (`403 spending_limit_exceeded`) and nothing is signed. Returns
-  `{ "signedTransactions": ["<base64 msgpack>", ...] }` in the same order as the request.
-- **`GET /wallet/limits`** / **`PUT /wallet/limits`** (need `manage-limits`) — read or set the caller's own
-  per-transaction limit: `{ "maxAmountPerTransaction": 5000000 }` (microAlgos for a payment, base units of the
-  asset for a transfer; `0` means unbounded). The limit belongs to the wallet owner, not to your application —
-  it applies the same way across every app the owner has authorized with a `sign`-scoped token.
-- The `accessToken` passed to `/wallet/sign` is used once, in-memory, to read and decrypt the owner's self-custody
-  file, and is never persisted — same self-custody model as the rest of this service (see the root `CLAUDE.md`).
+  priced in USD via the Biatec Router, and the group's *total* is checked against the caller's daily (trailing
+  24h), weekly (trailing 7d), and monthly (trailing 30d) spending limits *before* anything is signed — if the
+  total would exceed any configured (non-zero) limit, the whole request is rejected
+  (`403 spending_limit_exceeded`) and nothing is signed. Returns `{ "signedTransactions": ["<base64 msgpack>",
+  ...] }` in the same order as the request. A `503` (`asset_valuation_failed` or
+  `spending_limit_currency_unavailable`) means a spent asset couldn't be priced, or the caller's limit currency's
+  exchange rate couldn't be fetched — every transaction is subject to the limit, so an unpriceable asset fails the
+  request rather than being silently treated as free.
+- **`GET /wallet/limits`** (only needs to be authenticated) — read the caller's own limits:
+  `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000 }` (`0` on any of the
+  three means that window is unbounded). Pass `?accessToken=<your provider token>` to read the caller's own
+  encrypted limit file from their Drive/OneDrive; a first-time caller who's never configured limits gets an
+  all-zero, USD-denominated default rather than a 404.
+- **`PUT /wallet/limits`** (needs `manage-limits`) — set the caller's own limits: same shape as the `GET`
+  response, plus `"accessToken"` in the body (same token used for `/wallet/sign`). `currencyCode` defaults to
+  `"USD"` if omitted/blank; an unsupported code is rejected with `400 unsupported_currency` (see
+  `GET /wallet/limits/currencies` for the supported list). The limits belong to the wallet owner, not to your
+  application — they apply the same way across every app the owner has authorized with a `sign`-scoped token.
+- **`GET /wallet/limits/currencies`** (only needs to be authenticated) — every currency `PUT /wallet/limits`
+  will accept, with its current USD rate: `{ "currencies": [ { "code": "USD", "name": null, "usdPerUnit": 1.0 },
+  { "code": "EUR", "name": "EMU euro", "usdPerUnit": 1.08 }, ... ] }`. Rates come from the Czech National Bank's
+  daily fixing and are cached for several hours - not a real-time feed.
+- All three spending-limit files — the settings above and a rolling ledger of every signed payment/asset-transfer
+  (used to compute the real trailing spend without re-querying the blockchain on every sign) — are AES-encrypted
+  and stored in the wallet owner's own Google Drive/OneDrive folder, exactly like the self-custody account file
+  itself. Biatec's servers never persist this data in plaintext.
+- The `accessToken` passed to these endpoints is used once, in-memory, to read and decrypt the owner's self-custody
+  file and spending-limit data, and is never persisted — same self-custody model as the rest of this service (see
+  the root `CLAUDE.md`).
 
 ## Configuration
 

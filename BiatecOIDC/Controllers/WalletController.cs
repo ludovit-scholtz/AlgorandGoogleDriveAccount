@@ -10,14 +10,15 @@ using Microsoft.AspNetCore.Mvc;
 namespace BiatecOIDC.Controllers
 {
     /// <summary>
-    /// Self-custody wallet API: signs Algorand transaction groups and manages the caller's spending
-    /// limit. Every endpoint here requires a Biatec OIDC access token (<c>Authorization: Bearer</c>).
-    /// State-changing endpoints additionally require the relevant scope-derived claim - <c>sign</c> for
-    /// <see cref="SignTransactionGroup"/>, <c>manage-limits</c> for <see cref="UpdateSpendingLimit"/> -
-    /// exactly as granted at <c>/authorize</c> (see <c>JwtIssuerService.CreateAccessToken</c>); a token
-    /// missing the claim is rejected with 403, never silently treated as authorized.
-    /// <see cref="GetSpendingLimit"/> is read-only and only requires a validly-authenticated caller (the
-    /// standard <c>openid</c> scope) to verify the caller's identity - no <c>manage-limits</c> claim needed.
+    /// Self-custody wallet API: signs Algorand transaction groups and manages the caller's
+    /// daily/weekly/monthly spending limits. Every endpoint here requires a Biatec OIDC access token
+    /// (<c>Authorization: Bearer</c>). State-changing endpoints additionally require the relevant
+    /// scope-derived claim - <c>sign</c> for <see cref="SignTransactionGroup"/>, <c>manage-limits</c> for
+    /// <see cref="UpdateSpendingLimit"/> - exactly as granted at <c>/authorize</c> (see
+    /// <c>JwtIssuerService.CreateAccessToken</c>); a token missing the claim is rejected with 403, never
+    /// silently treated as authorized. <see cref="GetSpendingLimit"/> and
+    /// <see cref="GetSupportedCurrencies"/> are read-only and only require a validly-authenticated caller
+    /// (the standard <c>openid</c> scope) - no <c>manage-limits</c> claim needed.
     /// </summary>
     [ApiController]
     [Route("wallet")]
@@ -26,30 +27,35 @@ namespace BiatecOIDC.Controllers
         private readonly IJwtIssuerService _jwtIssuerService;
         private readonly IWalletService _walletService;
         private readonly ISpendingLimitService _spendingLimitService;
+        private readonly IExchangeRateService _exchangeRateService;
         private readonly ILogger<WalletController> _logger;
 
         public WalletController(
             IJwtIssuerService jwtIssuerService,
             IWalletService walletService,
             ISpendingLimitService spendingLimitService,
+            IExchangeRateService exchangeRateService,
             ILogger<WalletController> logger)
         {
             _jwtIssuerService = jwtIssuerService;
             _walletService = walletService;
             _spendingLimitService = spendingLimitService;
+            _exchangeRateService = exchangeRateService;
             _logger = logger;
         }
 
         /// <summary>
-        /// Signs an Algorand transaction group. Every payment/asset-transfer in the group is checked
-        /// against the caller's spending limit before anything is signed.
+        /// Signs an Algorand transaction group. The group's total USD value (every payment/asset-transfer
+        /// in it, priced via the Biatec Router) is checked against the caller's daily/weekly/monthly
+        /// spending limits before anything is signed.
         /// </summary>
         /// <param name="request">The transactions to sign (base64 msgpack) plus the provider access token needed to read the self-custody file.</param>
         /// <returns>The signed transactions (base64 msgpack), in the same order as the request.</returns>
         /// <response code="200">All transactions were within limit and signed successfully.</response>
         /// <response code="400">The request was malformed, or a transaction could not be decoded.</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
-        /// <response code="403">The token lacks the <c>sign</c> claim, or a transaction exceeds the caller's spending limit.</response>
+        /// <response code="403">The token lacks the <c>sign</c> claim, or the group exceeds the caller's spending limit.</response>
+        /// <response code="503">A spent asset's USD value, or the caller's limit currency's exchange rate, could not be determined.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpPost("sign")]
@@ -99,6 +105,14 @@ namespace BiatecOIDC.Controllers
             {
                 return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
             }
+            catch (AssetValuationException ex)
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "asset_valuation_failed", Detail = ex.Message });
+            }
+            catch (UnsupportedCurrencyException ex)
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "spending_limit_currency_unavailable", Detail = ex.Message });
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unexpected error signing transaction group for {Email}.", email);
@@ -106,13 +120,18 @@ namespace BiatecOIDC.Controllers
             }
         }
 
-        /// <summary>Returns the caller's current per-transaction spending limit.</summary>
-        /// <response code="200">The current limit (<c>0</c> means unbounded).</response>
+        /// <summary>Returns the caller's current daily/weekly/monthly spending limits and their currency.</summary>
+        /// <param name="accessToken">
+        /// The caller's provider access token, used to read the encrypted spending-limit file from their
+        /// own Drive/OneDrive. Omit only if relying on an ambient cookie session (not applicable for
+        /// server-to-server bearer-token calls).
+        /// </param>
+        /// <response code="200">The current limits (all-zero/unbounded, in USD, if never configured).</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("limits")]
-        public async Task<IActionResult> GetSpendingLimit()
+        public async Task<IActionResult> GetSpendingLimit([FromQuery] string? accessToken)
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
             if (authError != null)
@@ -121,13 +140,23 @@ namespace BiatecOIDC.Controllers
             }
 
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
-            var maxAmount = await _spendingLimitService.GetMaxAmountPerTransactionAsync(email);
-            return Ok(new SpendingLimitResponse { MaxAmountPerTransaction = maxAmount });
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+
+            try
+            {
+                var settings = await _spendingLimitService.GetLimitsAsync(email, provider, accessToken);
+                return Ok(ToResponse(settings));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
         }
 
-        /// <summary>Sets the caller's per-transaction spending limit.</summary>
-        /// <param name="request">The new limit (<c>0</c> to clear/unbound it).</param>
-        /// <response code="200">The limit was updated.</response>
+        /// <summary>Sets the caller's daily/weekly/monthly spending limits and the currency they're expressed in.</summary>
+        /// <param name="request">The new limits (<c>0</c> to leave a window unbounded) and their currency.</param>
+        /// <response code="200">The limits were updated.</response>
+        /// <response code="400">The requested currency isn't supported - see <c>GET /wallet/limits/currencies</c>.</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
         /// <response code="403">The token lacks the <c>manage-limits</c> claim.</response>
         [AllowAnonymous]
@@ -142,10 +171,76 @@ namespace BiatecOIDC.Controllers
             }
 
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
-            await _spendingLimitService.SetMaxAmountPerTransactionAsync(email, request.MaxAmountPerTransaction);
-            _logger.LogInformation("{Email} updated their spending limit to {MaxAmount}.", email, request.MaxAmountPerTransaction);
-            return Ok(new SpendingLimitResponse { MaxAmountPerTransaction = request.MaxAmountPerTransaction });
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+
+            var settings = new SpendingLimitSettings
+            {
+                CurrencyCode = string.IsNullOrWhiteSpace(request.CurrencyCode) ? "USD" : request.CurrencyCode,
+                DailyLimit = request.DailyLimit,
+                WeeklyLimit = request.WeeklyLimit,
+                MonthlyLimit = request.MonthlyLimit
+            };
+
+            try
+            {
+                await _spendingLimitService.SetLimitsAsync(email, provider, request.AccessToken, settings);
+            }
+            catch (UnsupportedCurrencyException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "unsupported_currency", Detail = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+
+            _logger.LogInformation("{Email} updated their spending limits (currency {Currency}).", email, settings.CurrencyCode);
+            return Ok(ToResponse(settings));
         }
+
+        /// <summary>
+        /// Lists every currency a spending limit can be configured in, with its current USD exchange rate.
+        /// Rates come from the Czech National Bank's daily fixing and are cached, so they reflect the most
+        /// recent published fixing rather than a live market feed.
+        /// </summary>
+        /// <response code="200">The supported currencies and their current USD rates.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired.</response>
+        /// <response code="503">The exchange rate feed could not be reached.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpGet("limits/currencies")]
+        public async Task<IActionResult> GetSupportedCurrencies()
+        {
+            var authError = TryAuthenticate(requiredClaim: null, out _);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            try
+            {
+                var currencies = await _exchangeRateService.GetSupportedCurrenciesAsync();
+                return Ok(new SupportedCurrenciesResponse
+                {
+                    Currencies = currencies
+                        .Select(c => new CurrencyRateResponse { Code = c.Code, Name = c.DisplayName, UsdPerUnit = c.UsdPerUnit })
+                        .ToList()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unable to fetch the supported currency list.");
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "exchange_rate_unavailable", Detail = "Unable to fetch current exchange rates." });
+            }
+        }
+
+        private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings) => new()
+        {
+            CurrencyCode = settings.CurrencyCode,
+            DailyLimit = settings.DailyLimit,
+            WeeklyLimit = settings.WeeklyLimit,
+            MonthlyLimit = settings.MonthlyLimit
+        };
 
         /// <summary>
         /// Extracts and validates the bearer access token and confirms it carries an <c>email</c> claim

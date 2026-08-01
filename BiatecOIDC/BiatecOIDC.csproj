@@ -13,6 +13,10 @@
 
   <ItemGroup>
     <PackageReference Include="Algorand4" Version="4.7.4.2026071920" />
+    <!-- Client for the Biatec Router API (router.api.biatec.io) - used only for its public, unauthenticated
+         /quote endpoint (BiatecRouterValuationService) to price a spent asset in USD for spending-limit
+         enforcement. Not used for its swap/route-transaction-building features. -->
+    <PackageReference Include="BiatecRouterConnector" Version="1.0.0.2026011820" />
     <PackageReference Include="Google.Apis.Auth" Version="1.75.0" />
     <PackageReference Include="Google.Apis.Auth.AspNetCore3" Version="1.75.0" />
     <!-- Direct reference for AlgorandTransactionInspector's generic msgpack map decode (peeking the
