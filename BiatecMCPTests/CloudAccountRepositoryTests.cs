@@ -101,7 +101,10 @@ namespace BiatecMCPTests
             var historicalFileName = ActiveFileName(historicalKey);
             var activeFileName = ActiveFileName(activeKey);
 
-            var mnemonicBytes = System.Text.Encoding.UTF8.GetBytes(new Algorand.Algod.Model.Account().ToMnemonic());
+            // Simulates a file predating BOTH the AES key-ring feature AND the multi-seed vault format:
+            // the legacy content is just the raw mnemonic bytes, not a serialized SeedVault.
+            var mnemonic = new Algorand.Algod.Model.Account().ToMnemonic();
+            var mnemonicBytes = System.Text.Encoding.UTF8.GetBytes(mnemonic);
             var encryptedUnderHistoricalKey = AesEncryptionHelper.Encrypt(mnemonicBytes, AesKeyRingResolver.KeyBytes(historicalKey), AesKeyRingResolver.IvBytes(historicalKey), TestEmail);
             _fakeProvider.Files[historicalFileName] = encryptedUnderHistoricalKey;
 
@@ -113,9 +116,14 @@ namespace BiatecMCPTests
             Assert.That(_fakeProvider.Files.ContainsKey(activeFileName), Is.True);
             Assert.That(_fakeProvider.Files.ContainsKey(historicalFileName), Is.False);
 
-            // The migrated content really is the same mnemonic, just re-encrypted under the active key.
+            // The migrated content is a single-seed vault wrapping the same mnemonic, re-encrypted under
+            // the active key (both the AES-rotation migration and the legacy-format-to-vault migration
+            // happen together, in one pass).
             var decrypted = AesEncryptionHelper.Decrypt(_fakeProvider.Files[activeFileName], AesKeyRingResolver.KeyBytes(activeKey), AesKeyRingResolver.IvBytes(activeKey), TestEmail);
-            Assert.That(decrypted, Is.EqualTo(mnemonicBytes));
+            var vault = System.Text.Json.JsonSerializer.Deserialize<SeedVault>(decrypted, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            Assert.That(vault!.Seeds, Has.Count.EqualTo(1));
+            Assert.That(vault.Seeds[0].Mnemonic, Is.EqualTo(mnemonic));
+            Assert.That(vault.Seeds[0].IsPrimary, Is.True);
 
             // A second load now hits the fast path - no further migration/deletion.
             var uploadCountAfterMigration = _fakeProvider.UploadCount;
@@ -133,6 +141,90 @@ namespace BiatecMCPTests
 
             Assert.That(async () => await repository.LoadAccountAsync(TestEmail, 0, "Fake"),
                 Throws.InstanceOf<UnauthorizedAccessException>());
+        }
+
+        // ───────────────────────── Multi-seed vault ─────────────────────────
+
+        [Test]
+        public async Task ListSeedsAsync_FirstEverLoad_ReturnsExactlyOnePrimarySeed()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token"); // creates the vault
+
+            var seeds = await repository.ListSeedsAsync(TestEmail, "Fake", "token");
+
+            Assert.That(seeds, Has.Count.EqualTo(1));
+            Assert.That(seeds[0].IsPrimary, Is.True);
+        }
+
+        [Test]
+        public async Task CreateSeedAsync_OnExistingVault_AppendsNonPrimarySeedWithoutRemovingTheOld()
+        {
+            var repository = CreateRepository();
+            var firstAccount = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token"); // creates the first (primary) seed
+
+            var newSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
+
+            Assert.That(newSeed.IsPrimary, Is.False, "a second seed must not silently become primary");
+            var seeds = await repository.ListSeedsAsync(TestEmail, "Fake", "token");
+            Assert.That(seeds, Has.Count.EqualTo(2));
+            Assert.That(seeds.Count(s => s.IsPrimary), Is.EqualTo(1));
+
+            // The primary seed (and therefore LoadAccountAsync's derived account) is unaffected by minting a spare key.
+            var accountAfterCreate = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+            Assert.That(accountAfterCreate.Address.EncodeAsString(), Is.EqualTo(firstAccount.Address.EncodeAsString()));
+        }
+
+        [Test]
+        public async Task CreateSeedAsync_AsTheVeryFirstSeed_IsAutomaticallyPrimary()
+        {
+            var repository = CreateRepository();
+
+            var seed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
+
+            Assert.That(seed.IsPrimary, Is.True);
+        }
+
+        [Test]
+        public async Task SwitchPrimarySeedAsync_ValidAddress_MakesItPrimaryAndDemotesTheOthers()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+            var newSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
+
+            await repository.SwitchPrimarySeedAsync(TestEmail, "Fake", newSeed.PrimaryAddress, "token");
+
+            var seeds = await repository.ListSeedsAsync(TestEmail, "Fake", "token");
+            Assert.That(seeds.Single(s => s.IsPrimary).PrimaryAddress, Is.EqualTo(newSeed.PrimaryAddress));
+
+            // LoadAccountAsync now derives from the newly-primary seed - a materially different account.
+            var accountAfterSwitch = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+            Assert.That(accountAfterSwitch.Address.EncodeAsString(), Is.EqualTo(newSeed.PrimaryAddress));
+        }
+
+        [Test]
+        public void SwitchPrimarySeedAsync_UnknownAddress_ThrowsInvalidOperationException()
+        {
+            var repository = CreateRepository();
+
+            Assert.That(async () =>
+                {
+                    await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+                    await repository.SwitchPrimarySeedAsync(TestEmail, "Fake", "NOTAREALADDRESS", "token");
+                },
+                Throws.InvalidOperationException);
+        }
+
+        [Test]
+        public async Task GetEncryptedVaultForBackupAsync_ReturnsTheSameBytesStoredUnderTheActiveFileName()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var (fileName, encryptedBytes) = await repository.GetEncryptedVaultForBackupAsync(TestEmail, "Fake", "token");
+
+            Assert.That(_fakeProvider.Files.ContainsKey(fileName), Is.True);
+            Assert.That(encryptedBytes, Is.EqualTo(_fakeProvider.Files[fileName]));
         }
 
         [Test]
@@ -193,6 +285,8 @@ namespace BiatecMCPTests
             public Task<string?> GetAmbientAccessTokenAsync() => Task.FromResult(AmbientAccessToken);
             public Task<string?> GetAmbientRefreshTokenAsync() => Task.FromResult<string?>(null);
             public Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken) => Task.FromResult<ProviderTokenRefreshResult?>(null);
+            public string BuildAuthorizationUrl(string redirectUri, string state) => $"https://example.invalid/authorize?redirect_uri={redirectUri}&state={state}";
+            public Task<string?> ExchangeAuthorizationCodeAsync(string code, string redirectUri) => Task.FromResult<string?>(null);
         }
     }
 }

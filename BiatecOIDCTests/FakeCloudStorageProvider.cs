@@ -59,5 +59,8 @@ namespace BiatecOIDCTests
 
         public Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken) =>
             Task.FromResult(_refreshAccessToken?.Invoke(refreshToken));
+
+        public string BuildAuthorizationUrl(string redirectUri, string state) => $"https://example.invalid/authorize?redirect_uri={redirectUri}&state={state}";
+        public Task<string?> ExchangeAuthorizationCodeAsync(string code, string redirectUri) => Task.FromResult<string?>(null);
     }
 }

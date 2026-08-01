@@ -50,7 +50,8 @@ for a given client (don't mix the two for the same integration).
 - `POST /verify`
   - Convenience token verification endpoint.
 - `POST /wallet/sign`
-  - Signs an Algorand transaction group. Requires the `sign` scope (see "Wallet API" below).
+  - Signs an Algorand transaction group. Requires the `sign` scope, and additionally the `rekey` scope if
+    any transaction in the group carries Algorand's `rekey` field (see "Wallet API" below).
 - `GET /wallet/limits`
   - Reads the caller's own daily/weekly/monthly spending limits. Only requires being authenticated
     (`openid`) - no `manage-limits` scope needed to read your own limits.
@@ -60,6 +61,20 @@ for a given client (don't mix the two for the same integration).
 - `GET /wallet/limits/currencies`
   - Lists every currency a spending limit can be configured in, with its current USD exchange rate. Only
     requires being authenticated.
+- `GET /wallet/seeds`
+  - Lists every Algorand seed ever generated for the caller (never the mnemonic itself - just each seed's
+    identifying address, creation date, and whether it's primary). Only requires being authenticated.
+- `POST /wallet/seeds`
+  - Generates a brand-new, independent seed and adds it to the caller's vault - existing seeds are never
+    removed. Requires the `rekey` scope (see "Multi-seed vault and rekey" below).
+- `PUT /wallet/seeds/primary`
+  - Switches which seed in the caller's vault is used for normal signing going forward. Requires the `sign`
+    scope.
+- `POST /wallet/backup/start`, `GET /wallet/backup/authorize`, `GET /wallet/backup/callback`,
+  `POST /wallet/backup/complete`
+  - Explicit, user-triggered copy of the encrypted vault to a second cloud provider (see "Cross-cloud vault
+    backup" below). `start`/`complete` require the `sign` scope; `authorize`/`callback` are a browser round
+    trip, not API calls.
 
 ## Important Claims in Tokens
 
@@ -76,6 +91,9 @@ Access tokens additionally carry, when applicable:
 - `biatec_idp`: which provider (`Google`/`Microsoft`) the wallet is stored under.
 - `sign`: `"true"` — only present if the `sign` scope was requested and is allowlisted for your client.
 - `manage-limits`: `"true"` — only present if the `manage-limits` scope was requested and allowlisted.
+- `rekey`: `"true"` — only present if the `rekey` scope was requested and allowlisted. The strictest wallet
+  claim: without it, `POST /wallet/sign` refuses (403) any transaction group containing a rekey transaction,
+  even with `sign` present.
 - `provider_token`: an encrypted (never plaintext) copy of your Google/Microsoft access token, cached so wallet
   API calls don't need to separately supply one — only present when one was available to cache at issuance time.
   Opaque to you (and to any relying party inspecting the token) — only this service can decrypt it. See "Provider
@@ -92,8 +110,8 @@ Important behavior for Drive consent:
 
 Every `/authorize` request is checked against two kinds of "unexpected scope", handled differently on purpose:
 
-- **Scopes this server recognizes but this client isn't allowlisted for** — in practice, `sign` and/or
-  `manage-limits` requested by a client whose `AllowedScopes` doesn't include them (see "Client registration"
+- **Scopes this server recognizes but this client isn't allowlisted for** — in practice, `sign`, `manage-limits`,
+  and/or `rekey` requested by a client whose `AllowedScopes` doesn't include them (see "Client registration"
   below). This **fails the whole request** with `invalid_scope`; the error description names exactly which
   scope(s) aren't allowlisted, e.g. `"This client is not allowlisted for scope(s): manage-limits. Add them to
   this client's AllowedScopes in JwtIssuer:Clients to request them."`. This is deliberately loud - if you asked
@@ -113,7 +131,7 @@ response's `scope` field (and, for an authorization-code exchange, the same valu
 - check that field, or `GET /userinfo`/the access token's own `sign`/`manage-limits` claims, if you're ever
 unsure what a token was actually granted.
 
-## Wallet API (`sign` / `manage-limits` scopes)
+## Wallet API (`sign` / `manage-limits` / `rekey` scopes)
 
 Beyond identity, Biatec OIDC can sign Algorand transaction groups directly on behalf of the wallet owner, subject
 to daily/weekly/monthly spending limits the owner controls, in a currency of their choosing. This is a separate,
@@ -130,15 +148,18 @@ self-custody data is resolved entirely from an encrypted copy cached inside that
 "Provider access token caching" below) - this is what lets the exact same Biatec token work from any
 device/backend, not just the one the user originally signed in on.
 
-- **`POST /wallet/sign`** (needs `sign`) — body: `{ "transactions": ["<base64 msgpack>", ...] }`. Every
-  payment/asset-transfer in the group is priced in USD via the Biatec Router, and the group's *total* is checked
-  against the caller's daily (trailing 24h), weekly (trailing 7d), and monthly (trailing 30d) spending limits
-  *before* anything is signed — if the total would exceed any configured (non-zero) limit, the whole request is
-  rejected (`403 spending_limit_exceeded`) and nothing is signed. Returns
-  `{ "signedTransactions": ["<base64 msgpack>", ...] }` in the same order as the request. A `503`
-  (`asset_valuation_failed` or `spending_limit_currency_unavailable`) means a spent asset couldn't be priced, or
-  the caller's limit currency's exchange rate couldn't be fetched — every transaction is subject to the limit, so
-  an unpriceable asset fails the request rather than being silently treated as free.
+- **`POST /wallet/sign`** (needs `sign`; additionally needs `rekey` if any transaction in the group carries
+  Algorand's `rekey` field) — body: `{ "transactions": ["<base64 msgpack>", ...] }`. Every payment/asset-transfer
+  in the group is priced in USD via the Biatec Router, and the group's *total* is checked against the caller's
+  daily (trailing 24h), weekly (trailing 7d), and monthly (trailing 30d) spending limits *before* anything is
+  signed — if the total would exceed any configured (non-zero) limit, the whole request is rejected
+  (`403 spending_limit_exceeded`) and nothing is signed. A group containing a rekey transaction is checked for
+  the `rekey` claim before any of that - a `sign`-only token gets `403 insufficient_scope` naming `rekey`
+  specifically, and nothing in the group is signed. Returns `{ "signedTransactions": ["<base64 msgpack>", ...] }`
+  in the same order as the request. A `503` (`asset_valuation_failed` or `spending_limit_currency_unavailable`)
+  means a spent asset couldn't be priced, or the caller's limit currency's exchange rate couldn't be fetched —
+  every transaction is subject to the limit, so an unpriceable asset fails the request rather than being
+  silently treated as free.
 - **`GET /wallet/limits`** (only needs to be authenticated, no body/query parameters at all) — read the caller's
   own limits: `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000 }` (`0` on any
   of the three means that window is unbounded). A first-time caller who's never configured limits gets an
@@ -162,6 +183,65 @@ device/backend, not just the one the user originally signed in on.
   token was ever cached for this session (or it's since gone stale - see below), the call fails with
   `401 storage_access_denied`; there is no parameter to work around this with, the caller needs a fresh
   interactive sign-in through `/authorize`.
+
+## Multi-seed vault and rekey
+
+A wallet owner isn't limited to a single Algorand seed. Biatec stores a *vault* of independently-generated
+seeds, one of which is "primary" - the one `POST /wallet/sign` and every other signing operation derives from.
+Seeds are never deleted, even once superseded, since an older one may still authorize the account on a
+different network, or be part of a multisig configured entirely outside Biatec.
+
+- **`GET /wallet/seeds`** (only needs to be authenticated) — lists every seed ever generated, oldest first:
+  `{ "seeds": [ { "address": "ABC...", "createdUtc": "2026-01-01T00:00:00Z", "isPrimary": true }, ... ] }`. The
+  mnemonic itself is never returned by any endpoint - `address` (that seed's own slot-0 derived account) is
+  how you refer to a specific seed elsewhere in this API.
+- **`POST /wallet/seeds`** (needs `rekey`) — generates a fresh, independent seed and appends it to the vault.
+  The new seed starts out **not** primary (unless it's the caller's very first seed ever) - minting a spare
+  key never by itself changes what Biatec currently signs with. Returns the new seed's summary, same shape as
+  a `GET /wallet/seeds` entry.
+- **`PUT /wallet/seeds/primary`** (needs `sign`) — body: `{ "address": "ABC..." }`. Makes the named seed
+  primary (demoting whichever one was primary before). `400 seed_not_found` if no seed in the vault has that
+  address.
+
+**The recovery-from-suspected-compromise flow**, end to end:
+1. `POST /wallet/seeds` to mint a new seed - call it `newAddress`.
+2. Your backend builds an Algorand transaction with `sender` = the account's existing address and
+   `rekey`/`RekeyTo` = `newAddress`, and calls `POST /wallet/sign` with a token that has **both** `sign` and
+   `rekey` (this is what actually gets checked - minting a spare seed via step 1 requires only `rekey`, but
+   the transaction that reassigns the account requires both, same as any other signed transaction).
+3. Submit the signed transaction to the network yourself and wait for confirmation - Biatec never submits
+   transactions on your behalf, only signs them.
+4. Only once the rekey is confirmed on-chain, call `PUT /wallet/seeds/primary` with `newAddress`. Doing this
+   *before* on-chain confirmation would make Biatec start signing with a key the account no longer recognizes
+   - the account's original key remains the correct one to sign with until the rekey transaction actually
+   lands.
+
+The `rekey` scope is the single most dangerous one this service issues - see "Wallet API" above for why it's
+gated separately from `sign`, and note the consent screen shows a distinct, explicit danger warning whenever a
+client requests it.
+
+## Cross-cloud vault backup
+
+An explicit, user-triggered copy of the encrypted vault file from a user's primary cloud provider (whichever
+one their Biatec session is currently using) to a *second* one they separately authorize - so losing access to
+one cloud account (a provider ban, forgotten credentials) doesn't mean losing every key in the vault. Nothing
+here runs automatically; it's a four-step flow, the middle two of which happen in a browser, not via the API:
+
+1. **`POST /wallet/backup/start`** (needs `sign`) — body: `{ "targetProvider": "Microsoft" }` (must differ
+   from the caller's current provider). Returns `{ "linkId": "...", "authorizeUrl": "https://.../wallet/backup/authorize?linkId=..." }`.
+2. Open `authorizeUrl` in a browser. It redirects to the target provider's own consent screen (requesting only
+   the storage-write scope needed to hold the vault file - nothing else).
+3. After the user consents, the browser lands on **`GET /wallet/backup/callback`**, which exchanges the
+   authorization code for the target provider's access token, verifies it actually grants storage-write
+   access, and shows a plain confirmation page. This step is *not* the normal OIDC sign-in flow - it
+   deliberately never touches the caller's `biatec_idp` cookie session, so authorizing a second provider here
+   never changes which provider your Biatec token is tied to.
+4. **`POST /wallet/backup/complete`** (needs `sign`) — body: `{ "linkId": "..." }`. Downloads the vault's
+   current encrypted bytes from the primary provider and uploads the identical bytes to the target provider
+   under the same file name (no re-encryption needed - both live under the same AES key ring regardless of
+   storage backend). The target provider's access token is used exactly once, for this copy, and is never
+   cached or persisted afterwards - a `400 backup_failed` means the link expired, was already used, or the
+   copy itself failed; start again from step 1.
 
 ## Provider access token caching
 

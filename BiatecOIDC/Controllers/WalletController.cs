@@ -5,6 +5,7 @@ using BiatecOIDC.Model;
 using BiatecOIDC.Swagger;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
+using BiatecSelfCustodyCore.Repository;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,12 +13,14 @@ namespace BiatecOIDC.Controllers
 {
     /// <summary>
     /// Self-custody wallet API: signs Algorand transaction groups and manages the caller's
-    /// daily/weekly/monthly spending limits. Every endpoint here requires a Biatec OIDC access token
-    /// (<c>Authorization: Bearer</c>). State-changing endpoints additionally require the relevant
-    /// scope-derived claim - <c>sign</c> for <see cref="SignTransactionGroup"/>, <c>manage-limits</c> for
-    /// <see cref="UpdateSpendingLimit"/> - exactly as granted at <c>/authorize</c> (see
-    /// <c>JwtIssuerService.CreateAccessToken</c>); a token missing the claim is rejected with 403, never
-    /// silently treated as authorized. <see cref="GetSpendingLimit"/> and
+    /// daily/weekly/monthly spending limits and seed vault. Every endpoint here requires a Biatec OIDC
+    /// access token (<c>Authorization: Bearer</c>). State-changing endpoints additionally require the
+    /// relevant scope-derived claim - <c>sign</c> for <see cref="SignTransactionGroup"/> (any transaction),
+    /// <c>rekey</c> additionally for <see cref="SignTransactionGroup"/> when the group contains a rekey
+    /// transaction (the strictest claim Biatec issues - see <c>JwtIssuerService.WalletApiScopes</c>'s
+    /// remarks), <c>manage-limits</c> for <see cref="UpdateSpendingLimit"/> - exactly as granted at
+    /// <c>/authorize</c> (see <c>JwtIssuerService.CreateAccessToken</c>); a token missing the claim is
+    /// rejected with 403, never silently treated as authorized. <see cref="GetSpendingLimit"/> and
     /// <see cref="GetSupportedCurrencies"/> are read-only and only require a validly-authenticated caller
     /// (the standard <c>openid</c> scope) - no <c>manage-limits</c> claim needed.
     /// </summary>
@@ -43,6 +46,7 @@ namespace BiatecOIDC.Controllers
         private readonly IExchangeRateService _exchangeRateService;
         private readonly IProviderAccessTokenProtector _providerTokenProtector;
         private readonly ICloudStorageProviderCatalog _providerCatalog;
+        private readonly ICloudAccountRepository _accountRepository;
         private readonly ILogger<WalletController> _logger;
 
         public WalletController(
@@ -52,6 +56,7 @@ namespace BiatecOIDC.Controllers
             IExchangeRateService exchangeRateService,
             IProviderAccessTokenProtector providerTokenProtector,
             ICloudStorageProviderCatalog providerCatalog,
+            ICloudAccountRepository accountRepository,
             ILogger<WalletController> logger)
         {
             _jwtIssuerService = jwtIssuerService;
@@ -60,6 +65,7 @@ namespace BiatecOIDC.Controllers
             _exchangeRateService = exchangeRateService;
             _providerTokenProtector = providerTokenProtector;
             _providerCatalog = providerCatalog;
+            _accountRepository = accountRepository;
             _logger = logger;
         }
 
@@ -73,7 +79,8 @@ namespace BiatecOIDC.Controllers
         /// <response code="200">All transactions were within limit and signed successfully.</response>
         /// <response code="400">The request was malformed, or a transaction could not be decoded.</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
-        /// <response code="403">The token lacks the <c>sign</c> claim, or the group exceeds the caller's spending limit.</response>
+        /// <response code="403">The token lacks the <c>sign</c> claim, lacks the <c>rekey</c> claim while the
+        /// group contains a rekey transaction, or the group exceeds the caller's spending limit.</response>
         /// <response code="503">A spent asset's USD value, or the caller's limit currency's exchange rate, could not be determined.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
@@ -99,6 +106,31 @@ namespace BiatecOIDC.Controllers
             catch (FormatException)
             {
                 return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Each transaction must be base64-encoded." });
+            }
+
+            // Rekey is gated on its own, stricter claim - independent of (and in addition to) `sign` above -
+            // since a rekey transaction permanently reassigns which key controls the account, unlike a
+            // pay/axfer which is bounded by the spending limit. A group containing even one rekey
+            // transaction is refused outright if the caller's token lacks it; the rest of the group (if
+            // any) never gets a chance to partially sign.
+            var containsRekey = decodedTransactions.Any(tx =>
+            {
+                try
+                {
+                    return AlgorandTransactionInspector.Inspect(tx).IsRekey;
+                }
+                catch (FormatException)
+                {
+                    return false; // Undecodable transactions are reported by WalletService below, not here.
+                }
+            });
+            if (containsRekey && !string.Equals(principal!.FindFirstValue(WalletScopes.Rekey), "true", StringComparison.Ordinal))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+                {
+                    Title = "insufficient_scope",
+                    Detail = "This transaction group contains a rekey transaction, which requires the 'rekey' scope/claim - the token presented does not have it."
+                });
             }
 
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
@@ -256,6 +288,129 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
+        /// Lists every seed ever generated for the caller. Never includes a mnemonic - only each seed's
+        /// identifying address, creation date, and whether it's currently primary.
+        /// </summary>
+        /// <response code="200">The caller's seeds.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpGet("seeds")]
+        public async Task<IActionResult> ListSeeds()
+        {
+            var authError = TryAuthenticate(requiredClaim: null, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            try
+            {
+                var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.ListSeedsAsync(email, provider, token));
+                return Ok(new ListSeedsResponse
+                {
+                    Seeds = seeds.Select(s => new SeedResponse { Address = s.PrimaryAddress, CreatedUtc = s.CreatedUtc, IsPrimary = s.IsPrimary }).ToList()
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Generates a brand-new, independent seed and adds it to the caller's vault. Existing seeds are
+        /// never removed - the new seed starts out non-primary (unless it's the caller's very first seed
+        /// ever) until <see cref="SwitchPrimarySeed"/> is called explicitly, so this alone never changes
+        /// what Biatec currently signs with. Intended as the first step of recovering from a suspected key
+        /// compromise: mint a new seed here, then have the client build and submit (via
+        /// <see cref="SignTransactionGroup"/>, which requires the <c>rekey</c> claim) an on-chain rekey
+        /// transaction pointing at its address, then finally call <see cref="SwitchPrimarySeed"/> once
+        /// that's confirmed.
+        /// </summary>
+        /// <response code="200">The newly-created seed.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        /// <response code="403">The token lacks the <c>rekey</c> claim.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpPost("seeds")]
+        public async Task<IActionResult> CreateSeed()
+        {
+            var authError = TryAuthenticate(WalletScopes.Rekey, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            try
+            {
+                var seed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.CreateSeedAsync(email, provider, token));
+                return Ok(new SeedResponse { Address = seed.PrimaryAddress, CreatedUtc = seed.CreatedUtc, IsPrimary = seed.IsPrimary });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Switches which seed in the caller's vault is primary - the one <see cref="SignTransactionGroup"/>
+        /// and other signing operations derive from going forward. Does not touch the blockchain itself -
+        /// call this only after an on-chain rekey transaction naming the new seed's address has actually
+        /// been confirmed, otherwise Biatec would start signing with a key the account no longer recognizes.
+        /// </summary>
+        /// <param name="request">The address of the seed (see <c>GET /wallet/seeds</c>) to make primary.</param>
+        /// <response code="200">The seed is now primary.</response>
+        /// <response code="400">No seed with that address exists in the caller's vault.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        /// <response code="403">The token lacks the <c>sign</c> claim.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpPut("seeds/primary")]
+        public async Task<IActionResult> SwitchPrimarySeed([FromBody] SwitchPrimarySeedRequest request)
+        {
+            var authError = TryAuthenticate(WalletScopes.Sign, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Address))
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Address is required." });
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            try
+            {
+                await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.SwitchPrimarySeedAsync(email, provider, request.Address, token));
+                return Ok();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "seed_not_found", Detail = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
         /// The provider access token to use for this call, decrypted from the bearer token's own
         /// <c>provider_token</c> claim (see the class remarks) - callers never supply this themselves.
         /// Returns <c>null</c> if no provider token was ever cached, or it can no longer be decrypted
@@ -405,6 +560,7 @@ namespace BiatecOIDC.Controllers
         {
             public const string Sign = "sign";
             public const string ManageLimits = "manage-limits";
+            public const string Rekey = "rekey";
         }
     }
 }

@@ -227,6 +227,36 @@ setup stage needs.
   rotation" below for the `%AESID%` placeholder) in the user's own Google Drive folder or OneDrive app folder,
   depending which provider they signed in with. Biatec servers only decrypt in-memory during an explicitly
   authorized signing operation — never persist plaintext keys.
+- **Multi-seed vault and on-chain rekey**: the account file's decrypted content is a `SeedVault`
+  (`BiatecSelfCustodyCore.Model`) — a list of independently-generated `SeedVaultEntry` seeds, each identified
+  by its own ARC-76 slot-0 address (`PrimaryAddress`), with exactly one flagged `IsPrimary` at a time.
+  `CloudAccountRepository.LoadAccountAsync` always derives from whichever seed is primary (`slot` still
+  parameterizes derivation *within* that seed, exactly as before this existed); an existing plain-mnemonic
+  file (pre-dating this feature) is transparently wrapped into a single-seed vault the first time it's read,
+  same "migrate on read" philosophy as the AES key-ring rotation below. Seeds are **never deleted** — a
+  since-superseded seed may still authorize the account on a different network, or be part of a multisig
+  configured outside Biatec. `WalletController` (`BiatecOIDC`) exposes this as `GET /wallet/seeds` (list,
+  `openid` only), `POST /wallet/seeds` (mint a new seed, requires the `rekey` claim — it's the first step of
+  recovering from a suspected key compromise), and `PUT /wallet/seeds/primary` (switch which seed is primary,
+  requires `sign`). Biatec never builds or submits the on-chain rekey transaction itself — the RP's own
+  backend builds a transaction with Algorand's `rekey` field set to the new seed's address and submits it
+  through the existing `POST /wallet/sign`, which is what actually enforces the `rekey` claim: see the
+  "Wallet API" bullet below and `AlgorandTransactionInspector`'s `IsRekey` detection. Only once that
+  transaction is confirmed on-chain should the caller call `PUT /wallet/seeds/primary` — switching primary
+  before that would make Biatec sign with a key the account no longer recognizes.
+- **Cross-cloud vault backup**: an explicit, user-triggered copy of the encrypted vault file from a user's
+  primary cloud provider to a second one they separately authorize (`IVaultBackupService`/`VaultBackupService`,
+  `VaultBackupController`, all `BiatecOIDC`) — mitigates losing the keys to a ban or forgotten credentials on
+  a single cloud account. Nothing here is automatic; it's a three-step flow (`POST /wallet/backup/start`
+  requires `sign`, a browser round-trip through `GET /wallet/backup/authorize`/`callback`, then
+  `POST /wallet/backup/complete` requires `sign`), Redis-backed (`vaultbackup:pending:`/`vaultbackup:linked:`
+  prefixes, mirroring `JwtIssuerService`'s one-time-use record pattern). Deliberately does **not** use the
+  normal `Challenge()`/OIDC-scheme sign-in flow to authorize the second provider — that would re-fire the
+  scheme's `OnTokenValidated` and overwrite the user's real `biatec_idp` cookie claim — instead it drives a
+  manual OAuth2 authorization-code round trip via two new `ICloudStorageProvider` members,
+  `BuildAuthorizationUrl`/`ExchangeAuthorizationCodeAsync` (each provider owns its own OAuth specifics, same
+  extension-point philosophy as the rest of the interface). The second provider's access token is used exactly
+  once (to copy the file) and is never cached or persisted beyond that.
 - **AES key-ring rotation**: `AesOptions` (self-custody file, shared by both apps) and `ProviderTokenProtection`
   (`BiatecOIDC`'s cached provider access/refresh tokens) are each a rotatable key ring
   (`BiatecSelfCustodyCore.Model.IAesKeyRingConfiguration`: an `ActiveKeyId` plus a `Keys[]` list of
@@ -304,17 +334,26 @@ setup stage needs.
   MSAL-flavored OIDC clients auto-append regardless of configuration) is silently dropped instead, since there's
   nothing to fix and failing login over library-injected noise would be worse. The actual grant is always visible
   in the token response's `scope` field.
-- **Wallet API (`sign`/`manage-limits` scopes)**: `WalletController` (`BiatecOIDC`) exposes `POST /wallet/sign`
-  (signs an Algorand transaction group via the shared `IDriveService`), `GET`/`PUT /wallet/limits` (the caller's
-  own daily/weekly/monthly spending limits and their currency), and `GET /wallet/limits/currencies` (every
-  currency a limit can be set in, with its current USD rate). `POST /wallet/sign` and `PUT /wallet/limits` are
-  gated on a dedicated claim of the same name as the scope (`sign`/`manage-limits`), stamped onto the access
-  token by `JwtIssuerService.CreateAccessToken` only when that scope was granted **and** the client's
-  `AllowedScopes` allowlists it — existing clients don't get these implicitly; `GET /wallet/limits` and
-  `GET /wallet/limits/currencies` only require a validly authenticated caller (no dedicated claim, since they're
-  read-only). `AlgorandTransactionInspector` (`BiatecOIDC/Helper`) decodes a raw transaction's msgpack to find
-  its real type/amount/asset id (`Transaction` subclasses' `type` property is a hardcoded per-class constant, not
-  something decoded off the wire — the generic map must be peeked first). Every `pay`/`axfer` in a sign request
+- **Wallet API (`sign`/`manage-limits`/`rekey` scopes)**: `WalletController` (`BiatecOIDC`) exposes
+  `POST /wallet/sign` (signs an Algorand transaction group via the shared `IDriveService`), `GET`/`PUT /wallet/limits`
+  (the caller's own daily/weekly/monthly spending limits and their currency), `GET /wallet/limits/currencies`
+  (every currency a limit can be set in, with its current USD rate), and `GET`/`POST /wallet/seeds` +
+  `PUT /wallet/seeds/primary` (the multi-seed vault — see the bullet above). `POST /wallet/sign` and
+  `PUT /wallet/limits` are gated on a dedicated claim of the same name as the scope (`sign`/`manage-limits`),
+  stamped onto the access token by `JwtIssuerService.CreateAccessToken` only when that scope was granted **and**
+  the client's `AllowedScopes` allowlists it — existing clients don't get these implicitly; `GET /wallet/limits`,
+  `GET /wallet/limits/currencies`, and `GET /wallet/seeds` only require a validly authenticated caller (no
+  dedicated claim, since they're read-only). `POST /wallet/sign` additionally requires the stricter `rekey`
+  claim — gated the same allowlist way — whenever the transaction group contains a transaction with Algorand's
+  `rekey` field set (a normal `sign`-scoped token is refused with 403 otherwise); this is deliberately a
+  *separate*, stricter claim from `sign` because a rekey transaction permanently reassigns which key controls
+  the account, unlike a payment/asset-transfer bounded by the spending limit — the consent screen shows a
+  distinct danger warning when a client requests it (see `JwtIssuerController.BuildConsentHtml`'s
+  `wantsRekey`/`rekeyDangerSection`). `AlgorandTransactionInspector` (`BiatecOIDC/Helper`) decodes a raw
+  transaction's msgpack to find its real type/amount/asset id, and separately whether it's a rekey
+  (`Transaction` subclasses' `type` property is a hardcoded per-class constant, not something decoded off the
+  wire — the generic map must be peeked first; a rekey field can accompany any transaction type, independent of
+  that type discriminator). Every `pay`/`axfer` in a sign request
   is priced in USD by `IAssetValuationService`/`BiatecRouterValuationService` (quoting against the Biatec Router,
   via the `BiatecRouterConnector` NuGet package's public `/quote` endpoint — mainnet USDC by default, see
   `SpendingLimitsConfiguration`), summed, converted into the caller's configured limit currency via

@@ -155,9 +155,10 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Is.TypeOf<ContentResult>());
             var html = ((ContentResult)result).Content!;
-            // Identity + storage + sign + limits all granted - four granted rows, zero denied.
+            // Identity + storage + sign + limits granted - four granted rows; rekey wasn't requested, so
+            // it's the sole denied row.
             Assert.That(CountOccurrences(html, "permission-icon granted"), Is.EqualTo(4));
-            Assert.That(html, Does.Not.Contain("permission-icon denied"));
+            Assert.That(CountOccurrences(html, "permission-icon denied"), Is.EqualTo(1));
             Assert.That(html, Does.Contain("Confirm &amp; Continue"));
             // Sensitive scopes requested - must not auto-continue without the user clicking through.
             Assert.That(html, Does.Not.Contain("setInterval"));
@@ -178,9 +179,9 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Is.TypeOf<ContentResult>());
             var html = ((ContentResult)result).Content!;
-            // Identity + storage are granted; sign + limits are both denied since neither was requested.
+            // Identity + storage are granted; sign, limits, and rekey are all denied since none was requested.
             Assert.That(CountOccurrences(html, "permission-icon granted"), Is.EqualTo(2));
-            Assert.That(CountOccurrences(html, "permission-icon denied"), Is.EqualTo(2));
+            Assert.That(CountOccurrences(html, "permission-icon denied"), Is.EqualTo(3));
             Assert.That(html, Does.Not.Contain("Confirm &amp; Continue"));
             // No sensitive scopes requested and storage already works - safe to auto-continue.
             Assert.That(html, Does.Contain("setInterval"));
@@ -505,6 +506,8 @@ namespace BiatecOIDCTests
             public Task<string?> GetAmbientAccessTokenAsync() => Task.FromResult(_ambientAccessToken);
             public Task<string?> GetAmbientRefreshTokenAsync() => Task.FromResult(_ambientRefreshToken);
             public Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken) => Task.FromResult<ProviderTokenRefreshResult?>(null);
+            public string BuildAuthorizationUrl(string redirectUri, string state) => $"https://example.invalid/authorize?redirect_uri={redirectUri}&state={state}";
+            public Task<string?> ExchangeAuthorizationCodeAsync(string code, string redirectUri) => Task.FromResult<string?>(null);
         }
 
         private sealed class InMemoryDistributedCache : IDistributedCache

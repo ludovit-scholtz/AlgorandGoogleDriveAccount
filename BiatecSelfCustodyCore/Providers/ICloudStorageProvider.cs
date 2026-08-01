@@ -88,5 +88,25 @@ namespace BiatecSelfCustodyCore.Providers
         /// available" and fall back to requiring a fresh interactive sign-in.
         /// </summary>
         Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken);
+
+        /// <summary>
+        /// Builds this provider's own OAuth2 authorization URL (requesting exactly <see cref="RequiredScope"/>,
+        /// nothing else) for a manual, out-of-band consent round trip - used by <c>BiatecOIDC</c>'s
+        /// cross-cloud vault backup flow to link a *second* provider without disturbing the caller's
+        /// existing signed-in session (deliberately not routed through this provider's normal ASP.NET Core
+        /// authentication scheme/<c>Challenge()</c>, which would re-fire that scheme's cookie sign-in).
+        /// </summary>
+        /// <param name="redirectUri">Must exactly match the redirect URI used in <see cref="ExchangeAuthorizationCodeAsync"/>.</param>
+        /// <param name="state">Opaque value round-tripped back unchanged - used to correlate the callback with the request that started it.</param>
+        string BuildAuthorizationUrl(string redirectUri, string state);
+
+        /// <summary>
+        /// Exchanges an authorization <paramref name="code"/> (obtained via the URL from
+        /// <see cref="BuildAuthorizationUrl"/>) for an access token, via this provider's own OAuth token
+        /// endpoint. Returns <c>null</c> (never throws) if the code is invalid/expired/already used, or the
+        /// request otherwise fails.
+        /// </summary>
+        /// <param name="redirectUri">Must exactly match the redirect URI used in <see cref="BuildAuthorizationUrl"/>.</param>
+        Task<string?> ExchangeAuthorizationCodeAsync(string code, string redirectUri);
     }
 }

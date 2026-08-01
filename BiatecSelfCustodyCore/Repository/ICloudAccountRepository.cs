@@ -3,14 +3,29 @@ using Algorand.Algod.Model;
 namespace BiatecSelfCustodyCore.Repository
 {
     /// <summary>
-    /// Loads (creating on first use) the AES-encrypted Algorand account file from whichever cloud
-    /// storage provider the caller names.
+    /// Identifies one <see cref="Model.SeedVaultEntry"/> to a caller without ever exposing its mnemonic -
+    /// <see cref="PrimaryAddress"/> (the seed's slot-0 derived address) is what the caller uses to refer to
+    /// it, e.g. when switching which seed is primary.
+    /// </summary>
+    /// <param name="PrimaryAddress">This seed's identifying address (see <see cref="Model.SeedVaultEntry.PrimaryAddress"/>).</param>
+    /// <param name="CreatedUtc">When this seed was generated.</param>
+    /// <param name="IsPrimary">Whether this is the seed currently used for normal signing.</param>
+    public sealed record SeedSummary(string PrimaryAddress, DateTimeOffset CreatedUtc, bool IsPrimary);
+
+    /// <summary>
+    /// Loads (creating on first use) the AES-encrypted Algorand seed vault file from whichever cloud
+    /// storage provider the caller names. A user may hold more than one independently-generated seed (see
+    /// <see cref="Model.SeedVault"/>) - exactly one is "primary" at a time and used for normal signing;
+    /// the rest are kept forever since they may still authorize other networks or a multisig configured
+    /// outside Biatec.
     /// </summary>
     public interface ICloudAccountRepository
     {
         /// <summary>
         /// Loads the account for <paramref name="email"/>/<paramref name="slot"/>, creating a new
-        /// encrypted account file if one doesn't exist yet.
+        /// encrypted seed vault (with one seed) if one doesn't exist yet. Always derives from whichever
+        /// seed is currently primary - <paramref name="slot"/> is the derivation index within that seed,
+        /// exactly as before this type held more than one seed.
         /// </summary>
         /// <param name="email"></param>
         /// <param name="slot"></param>
@@ -25,5 +40,32 @@ namespace BiatecSelfCustodyCore.Repository
         /// cookie session for <paramref name="provider"/>.
         /// </param>
         Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null);
+
+        /// <summary>Lists every seed ever generated for this user, most-recently-created last. Never includes a mnemonic.</summary>
+        Task<IReadOnlyList<SeedSummary>> ListSeedsAsync(string email, string provider, string? accessToken = null);
+
+        /// <summary>
+        /// Generates a brand-new, independent seed and appends it to the vault - existing seeds are never
+        /// removed or modified. The very first seed a user ever has is automatically primary; every
+        /// subsequent one starts out non-primary until <see cref="SwitchPrimarySeedAsync"/> is called
+        /// explicitly, so minting a spare key for an eventual on-chain rekey never silently changes what
+        /// Biatec currently signs with.
+        /// </summary>
+        Task<SeedSummary> CreateSeedAsync(string email, string provider, string? accessToken = null);
+
+        /// <summary>
+        /// Marks the seed identified by <paramref name="primaryAddress"/> as primary (and every other seed
+        /// as non-primary) for future <see cref="LoadAccountAsync"/> calls. Throws
+        /// <see cref="InvalidOperationException"/> if no seed in the vault has that address.
+        /// </summary>
+        Task SwitchPrimarySeedAsync(string email, string provider, string primaryAddress, string? accessToken = null);
+
+        /// <summary>
+        /// Returns the vault file's current name and raw encrypted bytes (still encrypted - never decrypted
+        /// by this method), for copying to a second cloud provider as an explicit backup. Ensures the vault
+        /// exists under the active AES key generation's file name first (migrating it from a historical
+        /// generation if necessary), so the copy is always the canonical, most-current form.
+        /// </summary>
+        Task<(string FileName, byte[] EncryptedBytes)> GetEncryptedVaultForBackupAsync(string email, string provider, string? accessToken = null);
     }
 }

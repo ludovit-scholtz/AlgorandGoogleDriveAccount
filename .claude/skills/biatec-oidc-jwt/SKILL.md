@@ -1,8 +1,9 @@
 ---
 name: biatec-oidc-jwt
-description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector) — endpoints, claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped), redirect-URI/logout allowlist rules, signing-key format, daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, and the encrypted provider-access-token caching embedded in issued tokens, including its automatic renewal from
+description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector, ICloudAccountRepository's multi-seed vault, IVaultBackupService) — endpoints, claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped, and the strict `rekey` scope required for any rekey transaction), redirect-URI/logout allowlist rules, signing-key format, daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, the encrypted provider-access-token caching embedded in issued tokens, including its automatic renewal from
 a cached provider refresh token (both on Biatec token refresh and, opportunistically, mid-request in
-WalletController). Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, /wallet/limits/currencies, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
+WalletController), the multi-seed vault (GET/POST /wallet/seeds, PUT /wallet/seeds/primary), and explicit
+cross-cloud vault backup (POST/GET /wallet/backup/*). Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, /wallet/limits/currencies, /wallet/seeds, /wallet/backup, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, CloudAccountRepository.cs, VaultBackupService.cs, VaultBackupController.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
 ---
 
 # Biatec OIDC / JWT issuer
@@ -46,6 +47,12 @@ Access tokens (not ID tokens) additionally carry, when applicable:
   Required by `WalletController.UpdateSpendingLimit` (`PUT /wallet/limits`) only - `GetSpendingLimit`
   (`GET /wallet/limits`) and `GetSupportedCurrencies` (`GET /wallet/limits/currencies`) only require a validly
   authenticated caller (the standard `openid` scope), no `manage-limits` needed to read.
+- `rekey` (value `"true"`) — present only if the `rekey` scope was requested and allowlisted. The strictest
+  wallet claim: required by `SignTransactionGroup` (`POST /wallet/sign`) whenever the transaction group
+  contains a transaction with Algorand's `rekey` field set (`AlgorandTransactionInspector`'s `IsRekey`), in
+  *addition* to `sign` - a `sign`-only token still gets 403 for a rekey transaction. Also required by
+  `CreateSeed` (`POST /wallet/seeds`), since minting a spare seed is the first step of the recovery-from-
+  compromise flow this scope exists for. See "Multi-seed vault" below.
 - `provider_token` — the caller's Google/Microsoft access token, AES-256-GCM encrypted under a key dedicated to
   this (`ProviderTokenProtectionConfiguration`, never `AesOptions`) - see "Provider access token caching" below.
 - `provider_refresh_token` — the caller's Google/Microsoft refresh token, encrypted the same way
@@ -80,7 +87,10 @@ Not part of the OIDC protocol itself - a Biatec-specific self-custody API layere
 way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `ValidateBearerAccessToken`, **not**
 `[Authorize]`/a JWT Bearer scheme - see "Why manual token parsing" below).
 
-- `POST /wallet/sign` — requires the `sign` claim. Body: `{ "transactions": ["<base64 msgpack>", ...] }` - no
+- `POST /wallet/sign` — requires the `sign` claim; if any transaction in the group has Algorand's `rekey` field
+  set (`AlgorandTransactionInspector.Inspect(...).IsRekey`, checked in `WalletController.SignTransactionGroup`
+  right after decoding, before anything else), also requires the `rekey` claim - a `sign`-only token gets 403
+  `insufficient_scope` naming `rekey`, and nothing in the group is signed. Body: `{ "transactions": ["<base64 msgpack>", ...] }` - no
   provider-token field, no wallet endpoint accepts one; the Google/Microsoft token needed to read/decrypt the
   self-custody file *and* the spending-limit data is always resolved from the bearer token's own encrypted
   `provider_token` claim, via `WalletController.ResolveProviderAccessToken` (see "Provider access token caching"
@@ -121,13 +131,79 @@ way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `V
   limit currency via `IExchangeRateService.ConvertFromUsdAsync` before comparing against the configured ceiling.
 
 `AlgorandTransactionInspector` (`BiatecOIDC/Helper/AlgorandTransactionInspector.cs`) decodes a transaction's raw
-msgpack to find its real type, amount, and asset id. This needs a generic (untyped) msgpack map decode first - the
-Algorand4 SDK's `Transaction` subclasses' `type` property is a hardcoded C# constant of that subclass, **not**
-something decoded off the wire (verified empirically: decoding a payment's bytes as `AssetTransferTransaction`
-silently reports `type="axfer"`). Handles both a bare `Transaction` and a `SignedTransaction` wrapper (multisig
-co-signing - the real fields are nested one level down, under the wire key `"txn"`). Anything that isn't
-`pay`/`axfer` (app calls, asset config, key registration, ...) returns `AlgorandTransactionKind.Other` and is not
-spending-limit-checked, per the current scope of this feature.
+msgpack to find its real type, amount, and asset id, and separately whether it's a rekey. This needs a generic
+(untyped) msgpack map decode first - the Algorand4 SDK's `Transaction` subclasses' `type` property is a
+hardcoded C# constant of that subclass, **not** something decoded off the wire (verified empirically: decoding
+a payment's bytes as `AssetTransferTransaction` silently reports `type="axfer"`). Handles both a bare
+`Transaction` and a `SignedTransaction` wrapper (multisig co-signing - the real fields are nested one level
+down, under the wire key `"txn"`). Anything that isn't `pay`/`axfer` (app calls, asset config, key
+registration, ...) returns `AlgorandTransactionKind.Other` and is not spending-limit-checked, per the current
+scope of that feature - `IsRekey` is read independently of `Kind`, since a rekey can accompany any transaction
+type (wire key `"rekey"`, a 32-byte address; present whenever non-empty).
+
+## Multi-seed vault (`ICloudAccountRepository`, `BiatecSelfCustodyCore/Repository/`)
+
+The account file's decrypted content is a `SeedVault` (`BiatecSelfCustodyCore.Model`) - `List<SeedVaultEntry>`,
+each entry `{ Mnemonic, PrimaryAddress (its own ARC-76 slot-0 address, used as the entry's identifier instead
+of a separate id), CreatedUtc, IsPrimary }`. Exactly one entry is `IsPrimary` at a time;
+`LoadAccountAsync(email, slot, provider, accessToken)` **keeps its pre-existing signature** and always derives
+from whichever seed is primary via `ARC76.GetEmailAccount(email, primary.Mnemonic, slot)` - `slot` still
+parameterizes derivation *within* that seed exactly as before this existed, so `BiatecMCP`'s `getAlgorandAddress`
+and everything else calling `LoadAccountAsync` needed zero changes.
+
+- `CloudAccountRepository.LoadVaultOrEmptyAsync`/`LoadVaultEnsuringAtLeastOneSeedAsync` - the former never
+  side-effect-creates a seed (used by `ListSeedsAsync`/`CreateSeedAsync`/`SwitchPrimarySeedAsync`, which need to
+  see a genuinely-empty vault as empty to make correct decisions); the latter auto-creates the first seed if
+  none exists yet (used by `LoadAccountAsync`/`GetEncryptedVaultForBackupAsync`, which need something to
+  work with). Getting this distinction wrong was a real bug caught by
+  `CloudAccountRepositoryTests.CreateSeedAsync_AsTheVeryFirstSeed_IsAutomaticallyPrimary` during development -
+  `CreateSeedAsync` must NOT go through the auto-create path, or a truly-first `CreateSeedAsync` call ends up
+  minting *two* seeds (the auto-created one plus its own) and returns the wrong one as primary.
+- An existing plain-mnemonic file (from before this feature existed) is transparently wrapped into a
+  single-seed vault (`IsPrimary = true`) the first time it's read and re-saved immediately - same "migrate on
+  read" self-healing philosophy as `EncryptedKeyRingFileStore`'s AES key-ring migration, and composes with it:
+  a file can need *both* migrations (legacy format *and* a historical AES key) in one pass.
+- `WalletController` exposes this as `GET /wallet/seeds` (list, `openid` only, never returns a mnemonic),
+  `POST /wallet/seeds` (mint a new seed, requires `rekey` - the new seed starts non-primary unless it's the
+  very first seed ever), and `PUT /wallet/seeds/primary` (switch primary, requires `sign`, 400 if the given
+  address isn't in the vault). Biatec never builds/submits the on-chain rekey transaction itself - see
+  `OIDC_INTEGRATION_GUIDE.md`'s "Multi-seed vault and rekey" section for the full recovery-flow sequence
+  (mint seed → RP builds+submits a `rekey`-claim-gated `/wallet/sign` call → wait for confirmation → only then
+  switch primary).
+- `GetEncryptedVaultForBackupAsync(email, provider, accessToken)` returns the vault's current file name and
+  raw (still-encrypted) bytes, ensuring it's migrated onto the active AES key/active-generation file name
+  first - used only by `VaultBackupService` below, never decrypts anything itself.
+
+## Cross-cloud vault backup (`IVaultBackupService`/`VaultBackupService`, `VaultBackupController`)
+
+Explicit, user-triggered copy of the encrypted vault file to a second cloud provider - mitigates losing every
+key to a single provider ban/forgotten credentials. Modeled on `BiatecMCP`'s `DevicePairingService` Redis
+session/poll pattern but implemented fresh in `BiatecOIDC` (separately deployed, no shared runtime state), and
+deliberately using a **manual OAuth2 authorization-code exchange** - not `Challenge()`/`AddOpenIdConnect` -
+specifically because `Challenge()`-ing a second provider scheme would re-fire that scheme's `OnTokenValidated`
+(`CloudStorageProviderClaims.Stamp`) against the caller's *real* cookie session, silently overwriting
+`biatec_idp`. Two new `ICloudStorageProvider` members carry each provider's own OAuth specifics:
+`BuildAuthorizationUrl(redirectUri, state)` (that provider's `/authorize` endpoint + its `RequiredScope`, only)
+and `ExchangeAuthorizationCodeAsync(code, redirectUri)` (`grant_type=authorization_code` against the same
+token endpoint `RefreshAccessTokenAsync` already POSTs to for each provider).
+
+- Redis records (`IConnectionMultiplexer`, same style as `JwtIssuerService`'s `AuthorizationCodeRecord`):
+  `vaultbackup:pending:{linkId}` (`PendingVaultBackup{Email, TargetProvider}`, ~15 min TTL, written by
+  `StartAsync`) and `vaultbackup:linked:{linkId}` (adds the target provider's raw access token, ~10 min TTL,
+  one-shot read-and-delete via `StringGetDeleteAsync` in `CompleteAsync` - never usable twice, never lingers).
+- `POST /wallet/backup/start` (needs `sign`) → `StartAsync` (throws if `targetProvider` equals the caller's
+  current provider, or isn't a recognized+configured one) → `{ linkId, authorizeUrl }`.
+- `GET /wallet/backup/authorize?linkId=...` (`[AllowAnonymous]`, browser) → looks up the pending record,
+  302s to `provider.BuildAuthorizationUrl(callbackUrl, linkId)`.
+- `GET /wallet/backup/callback?code&state` (`[AllowAnonymous]`, browser, `state` = `linkId`) →
+  `HandleCallbackAsync`: exchanges the code, verifies `HasWriteAccessAsync`, writes the linked record, deletes
+  the pending one, renders a plain confirmation page.
+- `POST /wallet/backup/complete` (needs `sign`) → `CompleteAsync`: reads-and-deletes the linked record
+  (fails if missing/expired, or its `Email` doesn't match the caller), calls
+  `ICloudAccountRepository.GetEncryptedVaultForBackupAsync` against the caller's **primary** provider (using
+  the bearer token's own cached `provider_token`, same resolution as everywhere else in `WalletController`),
+  and `UploadAsync`s the identical bytes to the target provider under the same file name - no re-encryption,
+  since both live under the same `AesOptions` key ring regardless of storage backend.
 
 ## Provider access token caching
 

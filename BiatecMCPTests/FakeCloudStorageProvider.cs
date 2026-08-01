@@ -21,5 +21,7 @@ namespace BiatecMCPTests
         public Task<string?> GetAmbientAccessTokenAsync() => Task.FromResult<string?>(null);
         public Task<string?> GetAmbientRefreshTokenAsync() => Task.FromResult<string?>(null);
         public Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken) => Task.FromResult<ProviderTokenRefreshResult?>(null);
+        public string BuildAuthorizationUrl(string redirectUri, string state) => $"https://example.invalid/authorize?redirect_uri={redirectUri}&state={state}";
+        public Task<string?> ExchangeAuthorizationCodeAsync(string code, string redirectUri) => Task.FromResult<string?>(null);
     }
 }

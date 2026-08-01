@@ -1,9 +1,14 @@
 using System.Security.Claims;
+using Algorand;
+using Algorand.Algod.Model;
+using Algorand.Algod.Model.Transactions;
+using Algorand.Utils;
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Controllers;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
+using BiatecSelfCustodyCore.Repository;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -23,6 +28,7 @@ namespace BiatecOIDCTests
         private Mock<IProviderAccessTokenProtector> _mockProviderTokenProtector = null!;
         private Mock<ICloudStorageProviderCatalog> _mockProviderCatalog = null!;
         private Mock<ICloudStorageProvider> _mockCloudStorageProvider = null!;
+        private Mock<ICloudAccountRepository> _mockAccountRepository = null!;
         private WalletController _controller = null!;
 
         [SetUp]
@@ -42,6 +48,7 @@ namespace BiatecOIDCTests
                 .ReturnsAsync((ProviderTokenRefreshResult?)null);
             _mockProviderCatalog = new Mock<ICloudStorageProviderCatalog>();
             _mockProviderCatalog.Setup(c => c.Resolve(It.IsAny<string?>())).Returns(_mockCloudStorageProvider.Object);
+            _mockAccountRepository = new Mock<ICloudAccountRepository>();
 
             _controller = new WalletController(
                 _mockJwtIssuerService.Object,
@@ -50,6 +57,7 @@ namespace BiatecOIDCTests
                 _mockExchangeRateService.Object,
                 _mockProviderTokenProtector.Object,
                 _mockProviderCatalog.Object,
+                _mockAccountRepository.Object,
                 new Mock<ILogger<WalletController>>().Object)
             {
                 ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
@@ -155,6 +163,82 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Is.InstanceOf<OkObjectResult>());
             _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "decrypted-google-token"), Times.Once);
+        }
+
+        private static readonly Digest TestGenesisHash = new(new byte[32]);
+
+        private static string BuildRekeyPaymentTransactionBase64()
+        {
+            var addr = new Account().Address;
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 0,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash,
+                RekeyTo = new Account().Address
+            };
+            return Convert.ToBase64String(Encoder.EncodeToMsgPackOrdered(pay));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_RekeyTransactionWithoutRekeyClaim_ReturnsForbiddenAndDoesNotSign()
+        {
+            SetBearerHeader("valid-token");
+            // Has "sign" but not "rekey" - a normal wallet-scoped token, exactly what an attacker would
+            // most plausibly get their hands on, which is the whole point of gating rekey separately.
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
+
+            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { BuildRekeyPaymentTransactionBase64() }
+            });
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_RekeyTransactionWithRekeyClaim_Signs()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim("rekey", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
+            var signedBytes = new byte[] { 7, 7, 7 };
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>()))
+                .ReturnsAsync(new List<byte[]> { signedBytes });
+
+            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { BuildRekeyPaymentTransactionBase64() }
+            });
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>()), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_NonRekeyTransactionWithoutRekeyClaim_StillSignsNormally()
+        {
+            // The new rekey gate must not affect ordinary transactions at all.
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>()))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
+
+            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) }
+            });
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
         }
 
         [Test]

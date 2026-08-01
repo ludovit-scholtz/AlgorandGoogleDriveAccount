@@ -24,12 +24,20 @@ namespace BiatecOIDC.Helper
     /// Always <c>0</c> for <see cref="AlgorandTransactionKind.Other"/>.
     /// </param>
     /// <param name="AssetId">The transferred asset id for an asset transfer; <c>0</c> otherwise (native ALGO has no asset id).</param>
-    public sealed record AlgorandTransferInfo(AlgorandTransactionKind Kind, ulong Amount, ulong AssetId);
+    /// <param name="IsRekey">
+    /// Whether this transaction carries a non-empty <c>rekey</c> field - i.e. it would permanently reassign
+    /// which private key is authorized to sign for the sender's account. Independent of <paramref name="Kind"/>
+    /// - a rekey can accompany a payment, an asset transfer, or any other transaction type.
+    /// </param>
+    public sealed record AlgorandTransferInfo(AlgorandTransactionKind Kind, ulong Amount, ulong AssetId, bool IsRekey);
 
     /// <summary>
     /// Determines whether a raw Algorand transaction (msgpack-encoded, as accepted by
     /// <c>WalletController.SignTransactionGroup</c>) is a payment or asset transfer, and if so, its
-    /// amount - so <c>WalletService</c> can enforce the caller's spending limit before signing.
+    /// amount - so <c>WalletService</c> can enforce the caller's spending limit before signing - and
+    /// separately, whether it carries a <c>rekey</c> field, so <c>WalletController</c> can require the
+    /// stricter <c>rekey</c> claim before signing a transaction that would reassign the account's
+    /// authorized key.
     /// </summary>
     /// <remarks>
     /// The Algorand4 SDK's <c>Transaction</c> base class carries none of the type-specific fields (amount,
@@ -49,6 +57,7 @@ namespace BiatecOIDC.Helper
         private const string AssetTransferAssetIdKey = "xaid";
         private const string PaymentType = "pay";
         private const string AssetTransferType = "axfer";
+        private const string RekeyKey = "rekey";
 
         private static readonly MessagePackSerializerOptions MapOptions =
             MessagePackSerializerOptions.Standard.WithResolver(ContractlessStandardResolver.Instance);
@@ -84,11 +93,14 @@ namespace BiatecOIDC.Helper
                 throw new FormatException("Unable to determine the transaction's type - no 'type' field found.");
             }
 
+            // Independent of "type" - a rekey field can accompany any transaction kind, not just pay/axfer.
+            var isRekey = map.TryGetValue(RekeyKey, out var rekeyObj) && rekeyObj is byte[] { Length: > 0 };
+
             return type switch
             {
-                PaymentType => new AlgorandTransferInfo(AlgorandTransactionKind.Payment, ReadUInt64(map, PaymentAmountKey), 0),
-                AssetTransferType => new AlgorandTransferInfo(AlgorandTransactionKind.AssetTransfer, ReadUInt64(map, AssetTransferAmountKey), ReadUInt64(map, AssetTransferAssetIdKey)),
-                _ => new AlgorandTransferInfo(AlgorandTransactionKind.Other, 0, 0)
+                PaymentType => new AlgorandTransferInfo(AlgorandTransactionKind.Payment, ReadUInt64(map, PaymentAmountKey), 0, isRekey),
+                AssetTransferType => new AlgorandTransferInfo(AlgorandTransactionKind.AssetTransfer, ReadUInt64(map, AssetTransferAmountKey), ReadUInt64(map, AssetTransferAssetIdKey), isRekey),
+                _ => new AlgorandTransferInfo(AlgorandTransactionKind.Other, 0, 0, isRekey)
             };
         }
 

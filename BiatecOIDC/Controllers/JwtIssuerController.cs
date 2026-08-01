@@ -294,6 +294,11 @@ namespace BiatecOIDC.Controllers
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             """;
 
+        /// <summary>Danger triangle glyph for the <c>rekey</c> permission row on the consent screen - the single most dangerous scope Biatec issues.</summary>
+        private const string WarningIconSvg = """
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            """;
+
         private const string SelectProviderStyles = """
             :root {
                 --bg-0: #05060d;
@@ -502,12 +507,16 @@ namespace BiatecOIDC.Controllers
             }
             .permission-icon.granted { background: rgba(53, 230, 164, 0.16); color: var(--accent-green); }
             .permission-icon.denied { background: rgba(255, 84, 112, 0.14); color: var(--accent-red); }
+            .permission-icon.danger { background: rgba(255, 84, 112, 0.28); color: var(--accent-red); }
             .permission-icon svg { width: 13px; height: 13px; }
             .permission-text { display: flex; flex-direction: column; gap: 0.1rem; }
             .permission-text strong { color: var(--text-0); font-size: 0.82rem; }
             .permission-text span { color: var(--text-1); font-size: 0.72rem; }
             .consent-warning { border-color: rgba(255, 184, 77, 0.3); }
             .consent-safe { border-color: rgba(53, 230, 164, 0.3); background: linear-gradient(180deg, rgba(53, 230, 164, 0.08), transparent); }
+            .consent-danger { border-color: rgba(255, 84, 112, 0.6); background: linear-gradient(180deg, rgba(255, 84, 112, 0.16), transparent); }
+            .consent-danger p { color: var(--text-0); }
+            .consent-danger strong { color: var(--accent-red); }
             .consent-card .callout { padding: 0.7rem 0.85rem; }
             .consent-card .callout p { font-size: 0.78rem; }
             .consent-continue-btn {
@@ -665,7 +674,10 @@ namespace BiatecOIDC.Controllers
         /// <summary>
         /// Consent screen shown after sign-in and before a code/token is issued. Not part of the public
         /// OIDC contract. Always shows that identity will be verified; shows a granted/denied row for the
-        /// <c>sign</c> and <c>manage-limits</c> wallet scopes based on whether the client requested them;
+        /// <c>sign</c>, <c>manage-limits</c>, and <c>rekey</c> wallet scopes based on whether the client
+        /// requested them (<c>rekey</c> additionally gets its own separate, more alarming danger callout -
+        /// see <see cref="BuildConsentHtml"/> - since it's the one scope that risks total, irreversible
+        /// loss of funds rather than spend bounded by a limit);
         /// and shows a granted/denied row for storage write access to the user's own Google Drive/OneDrive
         /// app-only folder, which is what actually holds the encrypted self-custody account file (separate
         /// from anything the OIDC client itself requested). If any of those three is missing/denied, the
@@ -694,6 +706,7 @@ namespace BiatecOIDC.Controllers
             var scopes = (pending.Scope ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var wantsSign = scopes.Contains("sign", StringComparer.Ordinal);
             var wantsLimits = scopes.Contains("manage-limits", StringComparer.Ordinal);
+            var wantsRekey = scopes.Contains("rekey", StringComparer.Ordinal);
 
             // Same provider/token/write-access check AuthorizeCallback already does before its own
             // automatic one-shot incremental-consent retry - re-checked here so the result is visible on
@@ -708,7 +721,7 @@ namespace BiatecOIDC.Controllers
             var appName = ResolveAppName(pending.ClientId, ResolveClientConfig(pending.ClientId));
 
             return Content(
-                BuildConsentHtml(appName, wantsSign, wantsLimits, hasStorageAccess, provider.DisplayName, continueUrl, reAuthUrl),
+                BuildConsentHtml(appName, wantsSign, wantsLimits, wantsRekey, hasStorageAccess, provider.DisplayName, continueUrl, reAuthUrl),
                 "text/html; charset=utf-8",
                 Encoding.UTF8);
         }
@@ -789,6 +802,7 @@ namespace BiatecOIDC.Controllers
             "email" => "Your email address",
             "sign" => "Sign transactions on your behalf (up to your spending limit)",
             "manage-limits" => "Change your spending limit",
+            "rekey" => "⚠ Rekey your account (can permanently transfer control - risk of total fund loss)",
             _ => scope
         };
 
@@ -803,13 +817,14 @@ namespace BiatecOIDC.Controllers
             string appName,
             bool wantsSign,
             bool wantsLimits,
+            bool wantsRekey,
             bool hasStorageAccess,
             string providerDisplayName,
             string continueUrl,
             string reAuthUrl)
         {
             var encodedProviderName = WebUtility.HtmlEncode(providerDisplayName);
-            var wantsPrivileges = wantsSign || wantsLimits;
+            var wantsPrivileges = wantsSign || wantsLimits || wantsRekey;
             var needsConfirmation = wantsPrivileges || !hasStorageAccess;
             var encodedContinueUrl = WebUtility.HtmlEncode(continueUrl);
             var encodedReAuthUrl = WebUtility.HtmlEncode(reAuthUrl);
@@ -830,6 +845,10 @@ namespace BiatecOIDC.Controllers
                 <div class="permission-row">
                     <span class="permission-icon {(wantsLimits ? "granted" : "denied")}">{(wantsLimits ? CheckIconSvg : CrossIconSvg)}</span>
                     <div class="permission-text"><strong>Change your spending limit</strong><span>{(wantsLimits ? "Requested - lets this app read and update your per-transaction spending limit." : "Not requested - this app cannot change your spending limit.")}</span></div>
+                </div>
+                <div class="permission-row">
+                    <span class="permission-icon {(wantsRekey ? "danger" : "denied")}">{(wantsRekey ? WarningIconSvg : CrossIconSvg)}</span>
+                    <div class="permission-text"><strong>&#9888; Rekey your account</strong><span>{(wantsRekey ? "Requested - lets this app permanently reassign which key controls your Algorand account. If misused or leaked, this can mean TOTAL, IRREVERSIBLE LOSS of every asset in the account." : "Not requested - this app cannot reassign control of your account.")}</span></div>
                 </div>
                 """;
 
@@ -858,12 +877,32 @@ namespace BiatecOIDC.Controllers
                         """
                     : string.Empty;
 
+                // Rekey is the single most dangerous scope Biatec issues - a separate, more alarming callout
+                // than the general privilege warning above, since granting it is unlike any other scope: it
+                // risks total, irreversible loss of funds if the token/session is ever compromised, not just
+                // spend bounded by a configured limit.
+                var rekeyDangerSection = wantsRekey
+                    ? $"""
+                        <div class="callout consent-danger">
+                            <span class="callout-icon">&#9762;</span>
+                            <p><strong>DANGER: this app is requesting the ability to REKEY your account.</strong>
+                            A rekey permanently reassigns which private key controls your Algorand address. If the
+                            access you grant here (or your Biatec session/token) is ever stolen or leaked, an
+                            attacker could use it to take over your account forever and drain everything in it -
+                            this cannot be undone by changing a password or revoking a spending limit. Only
+                            continue if you fully trust <strong>{WebUtility.HtmlEncode(appName)}</strong> and
+                            understand this risk.</p>
+                        </div>
+                        """
+                    : string.Empty;
+
                 var continueLabel = hasStorageAccess ? "Confirm &amp; Continue" : "Continue without storage access";
                 var continueClass = hasStorageAccess ? "consent-continue-btn" : "consent-continue-btn secondary";
 
                 bodyHtml = $"""
                     {storageSection}
                     {privilegeSection}
+                    {rekeyDangerSection}
                     <a class="{continueClass}" href="{encodedContinueUrl}">{continueLabel}</a>
                     """;
             }

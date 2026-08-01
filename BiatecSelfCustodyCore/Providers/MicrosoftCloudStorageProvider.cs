@@ -117,6 +117,51 @@ namespace BiatecSelfCustodyCore.Providers
             }
         }
 
+        public string BuildAuthorizationUrl(string redirectUri, string state)
+        {
+            var tenantId = Uri.EscapeDataString(_entraConfig.CurrentValue.TenantId);
+            var clientId = Uri.EscapeDataString(_entraConfig.CurrentValue.ClientId);
+            var encodedRedirectUri = Uri.EscapeDataString(redirectUri);
+            var scope = Uri.EscapeDataString(RequiredScope);
+            var encodedState = Uri.EscapeDataString(state);
+            return $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize?client_id={clientId}&redirect_uri={encodedRedirectUri}&response_type=code&scope={scope}&state={encodedState}";
+        }
+
+        public async Task<string?> ExchangeAuthorizationCodeAsync(string code, string redirectUri)
+        {
+            try
+            {
+                var tokenEndpoint = $"https://login.microsoftonline.com/{_entraConfig.CurrentValue.TenantId}/oauth2/v2.0/token";
+                using var request = new HttpRequestMessage(HttpMethod.Post, tokenEndpoint)
+                {
+                    Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                    {
+                        ["client_id"] = _entraConfig.CurrentValue.ClientId,
+                        ["client_secret"] = _entraConfig.CurrentValue.ClientSecret,
+                        ["code"] = code,
+                        ["redirect_uri"] = redirectUri,
+                        ["grant_type"] = "authorization_code"
+                    })
+                };
+
+                using var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return null;
+                }
+
+                using var payload = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                return payload.RootElement.TryGetProperty("access_token", out var accessTokenProperty)
+                    ? accessTokenProperty.GetString()
+                    : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to exchange a Microsoft authorization code for an access token.");
+                return null;
+            }
+        }
+
         public async Task<bool> HasWriteAccessAsync(string accessToken)
         {
             try

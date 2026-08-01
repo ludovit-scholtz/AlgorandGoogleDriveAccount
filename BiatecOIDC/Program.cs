@@ -159,6 +159,11 @@ namespace BiatecOIDC
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.ISpendingLimitService, BiatecOIDC.BusinessLogic.SpendingLimitService>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IWalletService, BiatecOIDC.BusinessLogic.WalletService>();
 
+            // Explicit, user-triggered copy of the encrypted seed vault to a second cloud provider - see
+            // IVaultBackupService's remarks for why this uses a manual OAuth2 code exchange rather than the
+            // ASP.NET Core Challenge()/cookie sign-in flow.
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IVaultBackupService, BiatecOIDC.BusinessLogic.VaultBackupService>();
+
             builder.Services.AddHttpContextAccessor();
 
             // Add Redis distributed cache

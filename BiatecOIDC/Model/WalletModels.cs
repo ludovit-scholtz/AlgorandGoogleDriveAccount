@@ -78,4 +78,31 @@ namespace BiatecOIDC.Model
         /// </summary>
         public List<CurrencyRateResponse> Currencies { get; set; } = new();
     }
+
+    /// <summary>One seed in the caller's vault, as returned by <c>GET /wallet/seeds</c> and <c>POST /wallet/seeds</c>. Never includes the mnemonic.</summary>
+    public class SeedResponse
+    {
+        /// <summary>This seed's identifying address - its ARC-76 slot-0 derived account address.</summary>
+        public string Address { get; set; } = string.Empty;
+
+        /// <summary>When this seed was generated.</summary>
+        public DateTimeOffset CreatedUtc { get; set; }
+
+        /// <summary>Whether this is the seed currently used for normal signing (<c>POST /wallet/sign</c>).</summary>
+        public bool IsPrimary { get; set; }
+    }
+
+    /// <summary>Response body for <c>GET /wallet/seeds</c>.</summary>
+    public class ListSeedsResponse
+    {
+        /// <summary>Every seed ever generated for this user, oldest first. Exactly one has <see cref="SeedResponse.IsPrimary"/> set.</summary>
+        public List<SeedResponse> Seeds { get; set; } = new();
+    }
+
+    /// <summary>Request body for <c>PUT /wallet/seeds/primary</c>.</summary>
+    public class SwitchPrimarySeedRequest
+    {
+        /// <summary>The identifying address (see <see cref="SeedResponse.Address"/>) of the seed to make primary.</summary>
+        public string Address { get; set; } = string.Empty;
+    }
 }

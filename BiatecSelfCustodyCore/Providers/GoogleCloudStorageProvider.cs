@@ -135,6 +135,49 @@ namespace BiatecSelfCustodyCore.Providers
             }
         }
 
+        public string BuildAuthorizationUrl(string redirectUri, string state)
+        {
+            var clientId = Uri.EscapeDataString(_googleServiceConfig.CurrentValue.ClientId ?? string.Empty);
+            var encodedRedirectUri = Uri.EscapeDataString(redirectUri);
+            var scope = Uri.EscapeDataString(DriveFileScope);
+            var encodedState = Uri.EscapeDataString(state);
+            return $"https://accounts.google.com/o/oauth2/v2/auth?client_id={clientId}&redirect_uri={encodedRedirectUri}&response_type=code&scope={scope}&state={encodedState}";
+        }
+
+        public async Task<string?> ExchangeAuthorizationCodeAsync(string code, string redirectUri)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, "https://oauth2.googleapis.com/token")
+                {
+                    Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                    {
+                        ["client_id"] = _googleServiceConfig.CurrentValue.ClientId ?? string.Empty,
+                        ["client_secret"] = _googleServiceConfig.CurrentValue.ClientSecret ?? string.Empty,
+                        ["code"] = code,
+                        ["redirect_uri"] = redirectUri,
+                        ["grant_type"] = "authorization_code"
+                    })
+                };
+
+                using var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return null;
+                }
+
+                using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                return payload.RootElement.TryGetProperty("access_token", out var accessTokenProperty)
+                    ? accessTokenProperty.GetString()
+                    : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to exchange a Google authorization code for an access token.");
+                return null;
+            }
+        }
+
         public async Task<bool> HasWriteAccessAsync(string accessToken)
         {
             try

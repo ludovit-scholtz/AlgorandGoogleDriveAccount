@@ -155,6 +155,94 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public void Inspect_PaymentWithRekey_ReturnsIsRekeyTrue()
+        {
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 0,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash,
+                RekeyTo = NewTestAddress()
+            };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(pay));
+
+            Assert.That(info.IsRekey, Is.True);
+        }
+
+        [Test]
+        public void Inspect_PaymentWithoutRekey_ReturnsIsRekeyFalse()
+        {
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 5,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash
+            };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(pay));
+
+            Assert.That(info.IsRekey, Is.False);
+        }
+
+        [Test]
+        public void Inspect_OtherTransactionKindWithRekey_StillReturnsIsRekeyTrue()
+        {
+            // A rekey can accompany any transaction type, not just pay/axfer.
+            var addr = NewTestAddress();
+            var acfg = new AssetCreateTransaction
+            {
+                Sender = addr,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash,
+                RekeyTo = NewTestAddress()
+            };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(acfg));
+
+            Assert.That(info.Kind, Is.EqualTo(AlgorandTransactionKind.Other));
+            Assert.That(info.IsRekey, Is.True);
+        }
+
+        [Test]
+        public void Inspect_SignedTransactionWrappingRekeyPayment_UnwrapsAndReturnsIsRekeyTrue()
+        {
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 1,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash,
+                RekeyTo = NewTestAddress()
+            };
+            var signedWrapper = new SignedTransaction { Tx = pay };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(signedWrapper));
+
+            Assert.That(info.IsRekey, Is.True);
+        }
+
+        [Test]
         public void Inspect_EmptyBytes_ThrowsFormatException()
         {
             Assert.Throws<FormatException>(() => AlgorandTransactionInspector.Inspect(Array.Empty<byte>()));

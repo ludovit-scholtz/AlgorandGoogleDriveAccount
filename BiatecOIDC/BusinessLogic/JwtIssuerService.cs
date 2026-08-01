@@ -96,8 +96,8 @@ namespace BiatecOIDC.BusinessLogic
                 // "sign" and "manage-limits" are wallet-API authorization scopes (see BiatecOIDC's
                 // WalletController) - granting them stamps a matching claim of the same name onto the
                 // issued access token; see JwtIssuerService.CreateAccessToken.
-                scopes_supported = new[] { "openid", "profile", "email", "sign", "manage-limits" },
-                claims_supported = new[] { "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "email", "name", "preferred_username", "algorand_address", "biatec_idp", "sign", "manage-limits" }
+                scopes_supported = new[] { "openid", "profile", "email", "sign", "manage-limits", "rekey" },
+                claims_supported = new[] { "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "email", "name", "preferred_username", "algorand_address", "biatec_idp", "sign", "manage-limits", "rekey" }
             };
         }
 
@@ -814,11 +814,14 @@ namespace BiatecOIDC.BusinessLogic
         /// <summary>
         /// OIDC scopes that, when granted, stamp a matching claim of the same name (value <c>"true"</c>)
         /// onto the issued access token - checked by <see cref="BiatecOIDC.Controllers.WalletController"/>
-        /// to authorize <c>/wallet/sign</c> (requires <c>sign</c>) and the spending-limit endpoints
-        /// (requires <c>manage-limits</c>). Deliberately explicit claims rather than re-parsing the
-        /// <c>scope</c> claim's space-separated string at authorization time.
+        /// to authorize <c>/wallet/sign</c> (requires <c>sign</c>), the spending-limit endpoints (requires
+        /// <c>manage-limits</c>), and signing any transaction group that contains a <c>rekey</c> field
+        /// (requires <c>rekey</c> - the most dangerous scope: it permanently reassigns which key controls
+        /// an account, so a leaked token/session carrying it risks total loss of funds, not just spend up to
+        /// a limit). Deliberately explicit claims rather than re-parsing the <c>scope</c> claim's
+        /// space-separated string at authorization time.
         /// </summary>
-        private static readonly string[] WalletApiScopes = { "sign", "manage-limits" };
+        private static readonly string[] WalletApiScopes = { "sign", "manage-limits", "rekey" };
 
         /// <summary>
         /// Basic identity scopes every client can always be granted, regardless of its configured

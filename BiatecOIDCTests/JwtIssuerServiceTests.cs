@@ -726,6 +726,35 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task RekeyScopeNotAllowlistedForClient_ReturnsInvalidScope()
+        {
+            // Same two-tier scope validation as sign/manage-limits - rekey is the strictest wallet scope,
+            // so a client explicitly asking for it without being allowlisted must be rejected loudly, not
+            // silently granted a token that mysteriously can't sign a rekey transaction.
+            var request = ValidCodeRequest();
+            request.Scope = "openid profile email rekey";
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Error, Is.EqualTo("invalid_scope"));
+            Assert.That(result.ErrorDescription, Does.Contain("rekey"));
+        }
+
+        [Test]
+        public async Task RekeyScopeAllowlistedForClient_IsGranted()
+        {
+            DefaultConfig.Clients[0].AllowedScopes = new List<string> { "openid", "profile", "email", "rekey" };
+            var request = ValidCodeRequest();
+            request.Scope = "openid profile email rekey";
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.NormalizedRequest!.Scope, Is.EqualTo("openid profile email rekey"));
+        }
+
+        [Test]
         public async Task UnsupportedResponseType_ReturnsUnsupportedResponseType()
         {
             var request = ValidCodeRequest();
@@ -1315,6 +1344,30 @@ namespace BiatecOIDCTests
             var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
             Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "manage-limits")?.Value, Is.EqualTo("true"));
             Assert.That(jwt.Claims.Any(c => c.Type == "sign"), Is.False);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_ScopeIncludesRekey_AccessTokenHasRekeyClaim()
+        {
+            var code = "rekey-scope-code";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri, scope: "openid profile email rekey");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
+            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "rekey")?.Value, Is.EqualTo("true"));
+            Assert.That(jwt.Claims.Any(c => c.Type == "sign"), Is.False);
+            Assert.That(jwt.Claims.Any(c => c.Type == "manage-limits"), Is.False);
         }
 
         [Test]

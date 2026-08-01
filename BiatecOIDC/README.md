@@ -69,8 +69,9 @@ Requested via `scope` on `/authorize` (space-separated). Supported scopes:
 | `email` | Adds the `email` claim. | Always granted |
 | `sign` | Grants `POST /wallet/sign` (sign an Algorand transaction group). Stamps a `sign: "true"` access-token claim. | **Yes** |
 | `manage-limits` | Grants `PUT /wallet/limits` (set the caller's daily/weekly/monthly spending limits). Stamps a `manage-limits: "true"` access-token claim. `GET /wallet/limits` (reading them) only needs `openid`, not this scope. | **Yes** |
+| `rekey` | The strictest scope. Grants `POST /wallet/sign` permission to sign a transaction group that contains an Algorand `rekey` field (permanently reassigns which key controls the account) - without it, such a group is refused with 403 even if `sign` is present. Also grants `POST /wallet/seeds` (mint a spare seed ahead of an on-chain rekey). Stamps a `rekey: "true"` access-token claim. **The consent screen shows a distinct danger warning when a client requests this scope** - a leaked token/session carrying it risks total, irreversible loss of every asset in the account. | **Yes** |
 
-`sign` and `manage-limits` are **not** included in a client's `AllowedScopes` by default - see
+`sign`, `manage-limits`, and `rekey` are **not** included in a client's `AllowedScopes` by default - see
 "Whitelisting and client registration" below for how to add them. Requesting one without it being
 allowlisted fails the whole `/authorize` request with `invalid_scope` (the error description names
 exactly which scope(s) aren't allowlisted) - it's rejected loudly rather than silently granted
@@ -89,11 +90,11 @@ Clients and allowed redirect URLs are configured in `JwtIssuer:Clients` in `apps
 Redirect URI matching is an allowlist (with `*` wildcard subdomain support via
 `Helper/RedirectUriMatcher.cs`) checked before any authorization response is returned.
 
-Each client also has an `AllowedScopes` list - this is what actually gates `sign`/`manage-limits`
+Each client also has an `AllowedScopes` list - this is what actually gates `sign`/`manage-limits`/`rekey`
 (see "Scopes" above). To let a client use the wallet API, add the ones it needs:
 
 ```json
-"AllowedScopes": ["openid", "profile", "email", "sign", "manage-limits"]
+"AllowedScopes": ["openid", "profile", "email", "sign", "manage-limits", "rekey"]
 ```
 
 ## SigningPrivateKeyPem setup (secure and working)
