@@ -638,15 +638,59 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task UnsupportedScopeForClient_ReturnsInvalidScope()
+        public async Task UnrecognizedScope_IsSilentlyDroppedRatherThanRejected()
         {
+            // Scopes are narrowed, not hard-rejected - an unrecognized scope (e.g. a library-injected
+            // "resource/.default", or a plain typo) should never block the whole authorization request.
             var request = ValidCodeRequest();
             request.Scope = "openid custom_scope";
 
             var result = await Service.ValidateAuthorizeRequestAsync(request);
 
-            Assert.That(result.IsValid, Is.False);
-            Assert.That(result.Error, Is.EqualTo("invalid_scope"));
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.NormalizedRequest!.Scope, Is.EqualTo("openid"));
+        }
+
+        [Test]
+        public async Task DotDefaultScope_IsSilentlyDroppedRatherThanRejected()
+        {
+            // Some OIDC client libraries (notably MSAL/Azure AD-flavored ones) auto-append a literal
+            // ".default" scope when none is explicitly configured - this must not break sign-in.
+            var request = ValidCodeRequest();
+            request.Scope = "openid profile email .default";
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.NormalizedRequest!.Scope, Is.EqualTo("openid profile email"));
+        }
+
+        [Test]
+        public async Task WalletScopeNotAllowlistedForClient_IsDroppedRatherThanRejected()
+        {
+            // "sign"/"manage-limits" are gated by the client's AllowedScopes - requesting one without it
+            // being allowlisted narrows the grant (so login still succeeds) rather than blocking the
+            // whole request; the client can tell exactly what it got from the token response's scope.
+            var request = ValidCodeRequest();
+            request.Scope = "openid profile email manage-limits";
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.NormalizedRequest!.Scope, Is.EqualTo("openid profile email"));
+        }
+
+        [Test]
+        public async Task WalletScopeAllowlistedForClient_IsGranted()
+        {
+            DefaultConfig.Clients[0].AllowedScopes = new List<string> { "openid", "profile", "email", "manage-limits" };
+            var request = ValidCodeRequest();
+            request.Scope = "openid profile email manage-limits";
+
+            var result = await Service.ValidateAuthorizeRequestAsync(request);
+
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.NormalizedRequest!.Scope, Is.EqualTo("openid profile email manage-limits"));
         }
 
         [Test]

@@ -1,6 +1,6 @@
 ---
 name: biatec-oidc-jwt
-description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector) — endpoints, claims/scopes, redirect-URI/logout allowlist rules, signing-key format, daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, and the encrypted provider-access-token caching embedded in issued tokens. Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, /wallet/limits/currencies, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
+description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector) — endpoints, claims/scopes (including scope narrowing/negotiation - unrecognized or non-allowlisted scopes like a literal ".default" are dropped, never a hard invalid_scope failure), redirect-URI/logout allowlist rules, signing-key format, daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, and the encrypted provider-access-token caching embedded in issued tokens. Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, /wallet/limits/currencies, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
 ---
 
 # Biatec OIDC / JWT issuer
@@ -51,6 +51,19 @@ These two are deliberately explicit claims, not something callers infer by re-pa
 claim — see `JwtIssuerService.CreateAccessToken`'s `WalletApiScopes` array. Neither is in any client's
 `AllowedScopes` by default (`{"openid","profile","email"}`) - adding wallet capability to a client is an explicit
 allowlist edit in `JwtIssuer:Clients`, never implicit.
+
+## Scope handling (`ValidateAuthorizeRequestAsync`)
+
+Scopes are **narrowed, never hard-rejected**, except for the one spec-required check: `openid` must be requested,
+or the whole `/authorize` request fails with `invalid_scope`. Everything else -
+`AlwaysGrantedScopes` (`openid`/`profile`/`email`, always granted to every client regardless of `AllowedScopes`),
+`WalletApiScopes` (`sign`/`manage-limits`, granted only if allowlisted), and anything unrecognized (typos, a
+library-injected `.default` some MSAL-flavored OIDC clients auto-append, a scope this server has never heard of)
+- is filtered down to the intersection and written back onto `normalized.Scope`, never causing a rejection. This
+replaced an earlier hard-fail-the-whole-request behavior specifically because real-world OIDC clients routinely
+send scopes speculatively or via library defaults that don't line up with what's actually allowlisted, and
+failing the whole login over it was surprising/hard to debug. The client can always see exactly what it got via
+the token response's `scope` field (or the presence/absence of the `sign`/`manage-limits` claims themselves).
 
 ## Wallet API (WalletController, `/wallet/*`)
 

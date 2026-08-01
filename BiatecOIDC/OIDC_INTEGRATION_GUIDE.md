@@ -88,6 +88,30 @@ Important behavior for Drive consent:
 - `algorand_address` is optional and omitted when Drive access is unavailable.
 - Integrator apps should treat `algorand_address` as nullable and request incremental consent only when Drive-backed actions are needed.
 
+## Scope handling
+
+`/authorize` treats `scope` as a *negotiation*, not an all-or-nothing contract - the only way a request fails
+over scope is if `openid` itself is missing (`invalid_scope`, `"The openid scope is required."`). Every other
+requested scope is either granted or silently dropped:
+
+- `openid`, `profile`, and `email` — basic identity, always granted to every registered client, regardless of
+  its `AllowedScopes` list.
+- `sign`, `manage-limits` — the wallet-API scopes. Granted only if the client's `AllowedScopes` includes them
+  (see "Client registration" below); otherwise dropped from the grant.
+- Anything else — a typo, a scope this server has never heard of, a scope your OIDC library auto-appends whether
+  you asked for it or not (e.g. some MSAL-flavored clients send a literal `.default` scope when none is
+  explicitly configured) — is dropped the same way. There's nothing to configure to make this work; unrecognized
+  scopes just don't do anything.
+
+The scope you actually end up with is always visible in the token response's `scope` field (and, for an
+authorization-code exchange, the same value the `/token` response returns) - if `/wallet/sign` or
+`/wallet/limits` unexpectedly returns `403 insufficient_scope`, check that field (or `GET /userinfo`, whose
+underlying access token carries the `sign`/`manage-limits` claims only when actually granted) before assuming
+something is broken. This also means requesting scopes speculatively (e.g. always asking for
+`openid profile email sign manage-limits` regardless of whether your client is allowlisted for the wallet
+scopes yet) is completely safe - you'll just silently not get the ones you're not entitled to, and can add them
+to `AllowedScopes` later without changing anything on the client side.
+
 ## Wallet API (`sign` / `manage-limits` scopes)
 
 Beyond identity, Biatec OIDC can sign Algorand transaction groups directly on behalf of the wallet owner, subject
@@ -262,8 +286,11 @@ when left blank, so existing clients that never set it keep working, just with a
 filled in.
 
 To let a client use the wallet API, add `"sign"` and/or `"manage-limits"` to its `AllowedScopes` — e.g.
-`["openid", "profile", "email", "sign", "manage-limits"]`. Neither is included by default; a client that never
-lists them can request them at `/authorize` all it wants, it will get `invalid_scope` back.
+`["openid", "profile", "email", "sign", "manage-limits"]`. Neither is included by default. Requesting one at
+`/authorize` without it being allowlisted no longer fails the request outright — see "Scope handling" below —
+the scope is just silently dropped, so the caller gets a working login but no `sign`/`manage-limits` claim (and
+therefore a `403` if it then tries `/wallet/sign` or `/wallet/limits`). Check the `scope` field the token response
+actually returns if you're not sure what was granted.
 
 Notes:
 

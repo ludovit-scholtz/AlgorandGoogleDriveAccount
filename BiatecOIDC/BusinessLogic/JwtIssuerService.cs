@@ -228,13 +228,22 @@ namespace BiatecOIDC.BusinessLogic
                 return (false, "invalid_request", "redirect_uri is not allowlisted for this client_id.", null, null);
             }
 
-            var disallowedScopes = requestedScopes
-                .Where(s => !client.AllowedScopes.Contains(s, StringComparer.Ordinal))
+            // Scopes are narrowed, never hard-rejected: any requested scope the client isn't allowlisted
+            // for (or that this server doesn't recognize at all - e.g. a library-injected "resource/.default"
+            // some OIDC clients auto-append) is silently dropped rather than failing the whole
+            // authorization request. This matches how Google/Microsoft/most real-world providers behave -
+            // scope is a negotiation, not an all-or-nothing contract - and means a client whose scope list
+            // doesn't line up exactly with what's allowlisted still gets to sign the user in with
+            // whatever it *is* entitled to, instead of being blocked outright. `openid`/`profile`/`email`
+            // are basic identity scopes every client can always have (see the class-level `scopes_supported`
+            // discovery metadata and OIDC_INTEGRATION_GUIDE.md); only the wallet-API scopes (`sign`,
+            // `manage-limits`) are actually gated by `AllowedScopes`. The narrowed set is reflected back to
+            // the caller in the token response's `scope` field, so a client can always tell exactly what it
+            // was granted instead of having to guess from a rejected request.
+            var grantedScopes = requestedScopes
+                .Where(s => AlwaysGrantedScopes.Contains(s, StringComparer.Ordinal) || client.AllowedScopes.Contains(s, StringComparer.Ordinal))
                 .ToList();
-            if (disallowedScopes.Count != 0)
-            {
-                return (false, "invalid_scope", $"Unsupported scope(s) for client: {string.Join(", ", disallowedScopes)}", null, null);
-            }
+            normalized.Scope = string.Join(' ', grantedScopes);
 
             if (string.Equals(normalized.ResponseType, "id_token", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(normalized.Nonce))
             {
@@ -711,6 +720,14 @@ namespace BiatecOIDC.BusinessLogic
         /// <c>scope</c> claim's space-separated string at authorization time.
         /// </summary>
         private static readonly string[] WalletApiScopes = { "sign", "manage-limits" };
+
+        /// <summary>
+        /// Basic identity scopes every client can always be granted, regardless of its configured
+        /// <see cref="JwtIssuerClientConfiguration.AllowedScopes"/> - only the wallet-API scopes
+        /// (<see cref="WalletApiScopes"/>) are actually gated by that allowlist. See
+        /// <see cref="ValidateAuthorizeRequestAsync"/>'s scope-narrowing logic.
+        /// </summary>
+        private static readonly string[] AlwaysGrantedScopes = { "openid", "profile", "email" };
 
         private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string? provider, string shortIdentity, string scope, string? protectedProviderAccessToken)
         {
