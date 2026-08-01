@@ -22,7 +22,15 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         Task<OidcAuthorizeRequest?> PeekPendingAuthorizeRequestAsync(string requestId);
 
-        Task<(bool Success, string? Error, string? ErrorDescription, Dictionary<string, string>? Response)> CreateAuthorizeResponseAsync(OidcAuthorizeRequest request, JwtIssuerClientConfiguration client, ClaimsPrincipal user);
+        /// <param name="providerAccessToken">
+        /// The caller's current live Google/Microsoft access token, if available (resolved from the
+        /// ambient cookie session at the call site) - encrypted and cached inside the issued access token
+        /// (and carried through refreshes) so wallet-API callers don't have to separately manage/resend
+        /// it. Pass <c>null</c> if unavailable; the issued token simply won't carry a cached provider
+        /// token, and callers fall back to supplying their own explicitly. See
+        /// <c>OIDC_INTEGRATION_GUIDE.md</c>'s "Provider access token caching" section.
+        /// </param>
+        Task<(bool Success, string? Error, string? ErrorDescription, Dictionary<string, string>? Response)> CreateAuthorizeResponseAsync(OidcAuthorizeRequest request, JwtIssuerClientConfiguration client, ClaimsPrincipal user, string? providerAccessToken);
         Task<(bool Success, int StatusCode, string? Error, string? ErrorDescription, OidcTokenResponse? Response)> ExchangeTokenAsync(OidcTokenRequest request, string? basicAuthHeader);
 
         (bool IsValid, ClaimsPrincipal? Principal, IDictionary<string, object>? Claims, string? Error) ValidateBearerAccessToken(string token);

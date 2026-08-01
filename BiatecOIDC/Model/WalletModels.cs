@@ -14,8 +14,11 @@ namespace BiatecOIDC.Model
         /// <summary>
         /// The caller's current Google/Microsoft access token for the signed-in provider, used to
         /// read/decrypt the self-custody account file, and to read/write the caller's encrypted
-        /// spending-limit settings and ledger. Required unless the caller is relying on an ambient
-        /// cookie session (not applicable for server-to-server bearer-token calls).
+        /// spending-limit settings and ledger. Optional - if omitted, falls back to the encrypted copy
+        /// cached inside the bearer token itself (see <c>WalletController</c>'s remarks and
+        /// <c>OIDC_INTEGRATION_GUIDE.md</c>'s "Provider access token caching" section). Only needs to be
+        /// supplied explicitly if that cached copy is unavailable or has gone stale (e.g. it's outlived
+        /// the underlying Google/Microsoft token's own ~1 hour lifetime).
         /// </summary>
         public string? AccessToken { get; set; }
     }
@@ -48,8 +51,8 @@ namespace BiatecOIDC.Model
 
         /// <summary>
         /// The caller's current Google/Microsoft access token, used to read/write the encrypted
-        /// spending-limit file in their own Drive/OneDrive - the same token used for
-        /// <c>POST /wallet/sign</c>'s <c>AccessToken</c>.
+        /// spending-limit file in their own Drive/OneDrive - same optional/fallback behavior as
+        /// <c>POST /wallet/sign</c>'s <c>AccessToken</c> (see its doc comment).
         /// </summary>
         public string? AccessToken { get; set; }
     }

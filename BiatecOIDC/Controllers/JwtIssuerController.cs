@@ -1158,7 +1158,17 @@ namespace BiatecOIDC.Controllers
 
         private async Task<IActionResult> FinalizeAuthorizeAsync(OidcAuthorizeRequest request, JwtIssuerClientConfiguration client)
         {
-            var result = await _jwtIssuerService.CreateAuthorizeResponseAsync(request, client, User);
+            // Resolved here (not inside JwtIssuerService) because only the controller has access to the
+            // ambient cookie session at this point - FinalizeAuthorizeAsync always runs within an
+            // [Authorize]-protected request (AuthorizeConsentContinue), so the caller's live Google/Microsoft
+            // token (if any) is available now and won't be once the RP later calls /token server-to-server.
+            // GetAmbientAccessTokenAsync (not the plain HttpContext.GetTokenAsync used elsewhere in this
+            // controller) is used deliberately - Google's implementation proactively refreshes a
+            // near-expired token, maximizing how long the cached copy stays valid from this moment on.
+            var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
+            var providerAccessToken = await provider.GetAmbientAccessTokenAsync();
+
+            var result = await _jwtIssuerService.CreateAuthorizeResponseAsync(request, client, User, providerAccessToken);
             if (!result.Success || result.Response == null)
             {
                 return BuildAuthorizeErrorResponse(request.RedirectUri, request.State, result.Error ?? "server_error", result.ErrorDescription ?? "Authorization failed.", request.ResponseMode);

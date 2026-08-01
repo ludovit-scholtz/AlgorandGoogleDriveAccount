@@ -55,7 +55,7 @@ namespace BiatecOIDCTests
                 .Setup(service => service.StorePendingAuthorizeRequestAsync(It.IsAny<OidcAuthorizeRequest>()))
                 .ReturnsAsync("request-id");
             jwtIssuerService
-                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>()))
+                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>()))
                 .ReturnsAsync((true, null, null, new Dictionary<string, string>
                 {
                     ["code"] = "issued-code",
@@ -285,7 +285,7 @@ namespace BiatecOIDCTests
                 .Setup(service => service.GetPendingAuthorizeRequestAsync("request-id"))
                 .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, RedirectUri = RedirectUri, ResponseMode = "query", State = "state-1", Scope = "openid profile email" });
             jwtIssuerService
-                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>()))
+                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>()))
                 .ReturnsAsync((true, null, null, new Dictionary<string, string>
                 {
                     ["code"] = "issued-code",
@@ -298,6 +298,42 @@ namespace BiatecOIDCTests
             Assert.That(result, Is.TypeOf<RedirectResult>());
             var redirect = (RedirectResult)result;
             Assert.That(redirect.Url, Does.Contain("code=issued-code"));
+        }
+
+        [Test]
+        public async Task AuthorizeConsentContinue_AmbientProviderTokenAvailable_PassesItToCreateAuthorizeResponseAsync()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.GetPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, RedirectUri = RedirectUri, ResponseMode = "query", State = "state-1", Scope = "openid profile email" });
+            jwtIssuerService
+                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>()))
+                .ReturnsAsync((true, null, null, new Dictionary<string, string> { ["code"] = "issued-code", ["state"] = "state-1" }));
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true, providerAccessToken: "live-google-token");
+
+            await controller.AuthorizeConsentContinue("request-id");
+
+            jwtIssuerService.Verify(service => service.CreateAuthorizeResponseAsync(
+                It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), "live-google-token"), Times.Once);
+        }
+
+        [Test]
+        public async Task AuthorizeConsentContinue_NoAmbientProviderToken_PassesNullToCreateAuthorizeResponseAsync()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.GetPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, RedirectUri = RedirectUri, ResponseMode = "query", State = "state-1", Scope = "openid profile email" });
+            jwtIssuerService
+                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>()))
+                .ReturnsAsync((true, null, null, new Dictionary<string, string> { ["code"] = "issued-code", ["state"] = "state-1" }));
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
+
+            await controller.AuthorizeConsentContinue("request-id");
+
+            jwtIssuerService.Verify(service => service.CreateAuthorizeResponseAsync(
+                It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), null), Times.Once);
         }
 
         [Test]
@@ -394,7 +430,12 @@ namespace BiatecOIDCTests
 
         private static JwtIssuerController CreateController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, bool authenticated, IConfiguration? configuration = null, string? providerAccessToken = null)
         {
-            var providerCatalog = new CloudStorageProviderCatalog(new ICloudStorageProvider[] { new FakeCloudStorageProvider() });
+            // Shared with HttpContext.GetTokenAsync's stubbed value below (see the AuthenticationService
+            // setup further down) - FinalizeAuthorizeAsync resolves the ambient token via
+            // ICloudStorageProvider.GetAmbientAccessTokenAsync() (for the freshest possible token, see its
+            // own comment), while AuthorizeConsent/AuthorizeCallback use the plain
+            // HttpContext.GetTokenAsync - both need to observe the same providerAccessToken in tests.
+            var providerCatalog = new CloudStorageProviderCatalog(new ICloudStorageProvider[] { new FakeCloudStorageProvider(providerAccessToken) });
             var controller = new JwtIssuerController(jwtIssuerService, cache, providerCatalog);
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Scheme = "https";
@@ -444,6 +485,13 @@ namespace BiatecOIDCTests
         /// <summary>Minimal test double standing in for the real Google/Microsoft providers, which need heavier dependencies to construct.</summary>
         private sealed class FakeCloudStorageProvider : ICloudStorageProvider
         {
+            private readonly string? _ambientAccessToken;
+
+            public FakeCloudStorageProvider(string? ambientAccessToken = null)
+            {
+                _ambientAccessToken = ambientAccessToken;
+            }
+
             public string Name => "Google";
             public string DisplayName => "Google";
             public string RequiredScope => "fake-scope";
@@ -451,7 +499,7 @@ namespace BiatecOIDCTests
             public Task<byte[]?> TryDownloadAsync(string fileName, string accessToken) => Task.FromResult<byte[]?>(null);
             public Task UploadAsync(string fileName, byte[] content, string accessToken) => Task.CompletedTask;
             public Task<bool> HasWriteAccessAsync(string accessToken) => Task.FromResult(true);
-            public Task<string?> GetAmbientAccessTokenAsync() => Task.FromResult<string?>(null);
+            public Task<string?> GetAmbientAccessTokenAsync() => Task.FromResult(_ambientAccessToken);
         }
 
         private sealed class InMemoryDistributedCache : IDistributedCache

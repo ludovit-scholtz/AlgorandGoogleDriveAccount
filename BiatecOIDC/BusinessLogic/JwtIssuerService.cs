@@ -22,6 +22,7 @@ namespace BiatecOIDC.BusinessLogic
         private readonly IConnectionMultiplexer _redis;
         private readonly IOptionsMonitor<JwtIssuerConfiguration> _config;
         private readonly IDriveService _driveService;
+        private readonly IProviderAccessTokenProtector _providerTokenProtector;
         private readonly IHostEnvironment _environment;
         private readonly ILogger<JwtIssuerService> _logger;
         private readonly RSA _rsa;
@@ -36,12 +37,14 @@ namespace BiatecOIDC.BusinessLogic
             IConnectionMultiplexer redis,
             IOptionsMonitor<JwtIssuerConfiguration> config,
             IDriveService driveService,
+            IProviderAccessTokenProtector providerTokenProtector,
             IHostEnvironment environment,
             ILogger<JwtIssuerService> logger)
         {
             _redis = redis;
             _config = config;
             _driveService = driveService;
+            _providerTokenProtector = providerTokenProtector;
             _environment = environment;
             _logger = logger;
 
@@ -320,7 +323,8 @@ namespace BiatecOIDC.BusinessLogic
         public async Task<(bool Success, string? Error, string? ErrorDescription, Dictionary<string, string>? Response)> CreateAuthorizeResponseAsync(
             OidcAuthorizeRequest request,
             JwtIssuerClientConfiguration client,
-            ClaimsPrincipal user)
+            ClaimsPrincipal user,
+            string? providerAccessToken)
         {
             var email = user.FindFirst(ClaimTypes.Email)?.Value;
             if (string.IsNullOrWhiteSpace(email))
@@ -356,6 +360,16 @@ namespace BiatecOIDC.BusinessLogic
                 return (true, null, null, response);
             }
 
+            // Captured now (while the ambient cookie session still has it) so it survives the code
+            // exchange and every subsequent refresh - see IProviderAccessTokenProtector and
+            // OIDC_INTEGRATION_GUIDE.md's "Provider access token caching" section. Null (never throws) if
+            // the caller didn't have a live provider token, or if the protection key isn't configured -
+            // either way the issued tokens simply won't carry a provider_token claim, and wallet API
+            // callers fall back to supplying their own token explicitly, exactly like before this existed.
+            var protectedProviderAccessToken = string.IsNullOrWhiteSpace(providerAccessToken)
+                ? null
+                : _providerTokenProtector.Protect(providerAccessToken, email);
+
             var code = GenerateOpaqueToken(48);
             var codeData = new AuthorizationCodeRecord
             {
@@ -371,6 +385,7 @@ namespace BiatecOIDC.BusinessLogic
                 ShortIdentity = shortIdentity,
                 CodeChallenge = request.CodeChallenge,
                 CodeChallengeMethod = request.CodeChallengeMethod,
+                ProtectedProviderAccessToken = protectedProviderAccessToken,
                 CreatedUtc = DateTimeOffset.UtcNow,
                 ExpiresUtc = DateTimeOffset.UtcNow.AddSeconds(Current.AuthorizationCodeLifetimeSeconds)
             };
@@ -448,6 +463,7 @@ namespace BiatecOIDC.BusinessLogic
                     codeRecord.ShortIdentity,
                     codeRecord.Nonce,
                     codeRecord.Scope,
+                    codeRecord.ProtectedProviderAccessToken,
                     includeRefreshToken: true);
 
                 return (true, 200, null, null, response);
@@ -492,6 +508,7 @@ namespace BiatecOIDC.BusinessLogic
                     refreshRecord.ShortIdentity,
                     nonce: null,
                     refreshRecord.Scope,
+                    refreshRecord.ProtectedProviderAccessToken,
                     includeRefreshToken: true);
 
                 return (true, 200, null, null, response);
@@ -605,9 +622,10 @@ namespace BiatecOIDC.BusinessLogic
             string shortIdentity,
             string? nonce,
             string scope,
+            string? protectedProviderAccessToken,
             bool includeRefreshToken)
         {
-            var accessToken = CreateAccessToken(subject, clientId, email, algorandAddress, provider, shortIdentity, scope);
+            var accessToken = CreateAccessToken(subject, clientId, email, algorandAddress, provider, shortIdentity, scope, protectedProviderAccessToken);
             var idToken = CreateIdToken(subject, clientId, email, algorandAddress, shortIdentity, nonce);
 
             string? refreshToken = null;
@@ -624,6 +642,12 @@ namespace BiatecOIDC.BusinessLogic
                     Provider = provider,
                     ShortIdentity = shortIdentity,
                     Scope = scope,
+                    // Carried forward unchanged - a refresh_token grant is a server-to-server call with no
+                    // ambient cookie session to pull a fresher provider token from (see
+                    // OIDC_INTEGRATION_GUIDE.md's "Provider access token caching" section). It naturally
+                    // stops working once the underlying Google/Microsoft token itself expires; the caller
+                    // then needs a fresh interactive sign-in to re-cache one.
+                    ProtectedProviderAccessToken = protectedProviderAccessToken,
                     CreatedUtc = DateTimeOffset.UtcNow,
                     ExpiresUtc = DateTimeOffset.UtcNow.AddDays(Current.RefreshTokenLifetimeDays)
                 };
@@ -688,7 +712,7 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         private static readonly string[] WalletApiScopes = { "sign", "manage-limits" };
 
-        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string? provider, string shortIdentity, string scope)
+        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string? provider, string shortIdentity, string scope, string? protectedProviderAccessToken)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.AccessTokenLifetimeMinutes);
@@ -720,6 +744,16 @@ namespace BiatecOIDC.BusinessLogic
                 {
                     claims.Add(new Claim(walletScope, "true"));
                 }
+            }
+
+            // Encrypted (never plaintext) cached Google/Microsoft access token, so wallet API callers don't
+            // have to separately manage/resend their own provider token on every call - see
+            // ProviderAccessTokenProtector and OIDC_INTEGRATION_GUIDE.md's "Provider access token caching"
+            // section for the full design/threat-model writeup. Only present when one was actually
+            // captured and successfully encrypted (see CreateAuthorizeResponseAsync/BuildTokenResponseAsync).
+            if (!string.IsNullOrWhiteSpace(protectedProviderAccessToken))
+            {
+                claims.Add(new Claim(ProviderAccessTokenProtector.ClaimType, protectedProviderAccessToken));
             }
 
             var token = new JwtSecurityToken(
@@ -960,6 +994,15 @@ namespace BiatecOIDC.BusinessLogic
             public string ShortIdentity { get; set; } = string.Empty;
             public string? CodeChallenge { get; set; }
             public string? CodeChallengeMethod { get; set; }
+
+            /// <summary>
+            /// The caller's Google/Microsoft access token, AES-256-GCM encrypted under a dedicated key (see
+            /// <c>IProviderAccessTokenProtector</c>) - never plaintext, even here. Captured at
+            /// <c>CreateAuthorizeResponseAsync</c>-time (while the ambient cookie session still has it) so
+            /// it survives to the code-exchange step, which has no cookie session of its own.
+            /// </summary>
+            public string? ProtectedProviderAccessToken { get; set; }
+
             public DateTimeOffset CreatedUtc { get; set; }
             public DateTimeOffset ExpiresUtc { get; set; }
         }
@@ -974,6 +1017,16 @@ namespace BiatecOIDC.BusinessLogic
             public string? Provider { get; set; }
             public string ShortIdentity { get; set; } = string.Empty;
             public string Scope { get; set; } = "openid profile email";
+
+            /// <summary>
+            /// Carried forward from the <see cref="AuthorizationCodeRecord"/> (or the previous
+            /// <see cref="RefreshTokenRecord"/>, on rotation) unchanged - AES-256-GCM encrypted, never
+            /// plaintext. There's no ambient cookie session at refresh-grant time to source a fresher one
+            /// from, so this naturally stops working once the underlying Google/Microsoft token itself
+            /// expires; the caller then needs a fresh interactive sign-in to re-cache one.
+            /// </summary>
+            public string? ProtectedProviderAccessToken { get; set; }
+
             public DateTimeOffset CreatedUtc { get; set; }
             public DateTimeOffset ExpiresUtc { get; set; }
         }

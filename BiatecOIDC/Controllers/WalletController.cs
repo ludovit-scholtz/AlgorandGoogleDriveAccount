@@ -20,6 +20,15 @@ namespace BiatecOIDC.Controllers
     /// <see cref="GetSupportedCurrencies"/> are read-only and only require a validly-authenticated caller
     /// (the standard <c>openid</c> scope) - no <c>manage-limits</c> claim needed.
     /// </summary>
+    /// <remarks>
+    /// Every endpoint that needs the caller's Google/Microsoft access token accepts it two ways: an
+    /// explicit <c>accessToken</c> (request body field or query parameter) always wins when supplied;
+    /// otherwise it falls back to the encrypted copy cached inside the bearer token itself (the
+    /// <c>provider_token</c> claim - see <see cref="ProviderAccessTokenProtector"/> and
+    /// <c>OIDC_INTEGRATION_GUIDE.md</c>'s "Provider access token caching" section), decrypted here,
+    /// in-memory, for the duration of this one request only - never logged, never persisted by this
+    /// controller. If neither is available, the call fails with 401 <c>storage_access_denied</c>.
+    /// </remarks>
     [ApiController]
     [Route("wallet")]
     public class WalletController : ControllerBase
@@ -28,6 +37,7 @@ namespace BiatecOIDC.Controllers
         private readonly IWalletService _walletService;
         private readonly ISpendingLimitService _spendingLimitService;
         private readonly IExchangeRateService _exchangeRateService;
+        private readonly IProviderAccessTokenProtector _providerTokenProtector;
         private readonly ILogger<WalletController> _logger;
 
         public WalletController(
@@ -35,12 +45,14 @@ namespace BiatecOIDC.Controllers
             IWalletService walletService,
             ISpendingLimitService spendingLimitService,
             IExchangeRateService exchangeRateService,
+            IProviderAccessTokenProtector providerTokenProtector,
             ILogger<WalletController> logger)
         {
             _jwtIssuerService = jwtIssuerService;
             _walletService = walletService;
             _spendingLimitService = spendingLimitService;
             _exchangeRateService = exchangeRateService;
+            _providerTokenProtector = providerTokenProtector;
             _logger = logger;
         }
 
@@ -84,10 +96,11 @@ namespace BiatecOIDC.Controllers
 
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(request.AccessToken, principal, email);
 
             try
             {
-                var signed = await _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, request.AccessToken);
+                var signed = await _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, accessToken);
                 return Ok(new SignTransactionGroupResponse
                 {
                     SignedTransactions = signed.Select(Convert.ToBase64String).ToList()
@@ -123,8 +136,8 @@ namespace BiatecOIDC.Controllers
         /// <summary>Returns the caller's current daily/weekly/monthly spending limits and their currency.</summary>
         /// <param name="accessToken">
         /// The caller's provider access token, used to read the encrypted spending-limit file from their
-        /// own Drive/OneDrive. Omit only if relying on an ambient cookie session (not applicable for
-        /// server-to-server bearer-token calls).
+        /// own Drive/OneDrive. Optional - see the class remarks for the fallback to the token cached
+        /// inside the bearer token itself.
         /// </param>
         /// <response code="200">The current limits (all-zero/unbounded, in USD, if never configured).</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
@@ -141,10 +154,11 @@ namespace BiatecOIDC.Controllers
 
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var resolvedAccessToken = ResolveProviderAccessToken(accessToken, principal, email);
 
             try
             {
-                var settings = await _spendingLimitService.GetLimitsAsync(email, provider, accessToken);
+                var settings = await _spendingLimitService.GetLimitsAsync(email, provider, resolvedAccessToken);
                 return Ok(ToResponse(settings));
             }
             catch (UnauthorizedAccessException ex)
@@ -172,6 +186,7 @@ namespace BiatecOIDC.Controllers
 
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(request.AccessToken, principal, email);
 
             var settings = new SpendingLimitSettings
             {
@@ -183,7 +198,7 @@ namespace BiatecOIDC.Controllers
 
             try
             {
-                await _spendingLimitService.SetLimitsAsync(email, provider, request.AccessToken, settings);
+                await _spendingLimitService.SetLimitsAsync(email, provider, accessToken, settings);
             }
             catch (UnsupportedCurrencyException ex)
             {
@@ -232,6 +247,23 @@ namespace BiatecOIDC.Controllers
                 _logger.LogError(ex, "Unable to fetch the supported currency list.");
                 return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "exchange_rate_unavailable", Detail = "Unable to fetch current exchange rates." });
             }
+        }
+
+        /// <summary>
+        /// The provider access token to use for this call: <paramref name="explicitAccessToken"/> if the
+        /// caller supplied one, otherwise the encrypted copy cached inside the bearer token itself (see
+        /// the class remarks), decrypted for this request only. Returns <c>null</c> if neither is
+        /// available - callers already handle a <c>null</c> token as "no storage access" (401).
+        /// </summary>
+        private string? ResolveProviderAccessToken(string? explicitAccessToken, ClaimsPrincipal principal, string email)
+        {
+            if (!string.IsNullOrWhiteSpace(explicitAccessToken))
+            {
+                return explicitAccessToken;
+            }
+
+            var cachedProtectedToken = principal.FindFirstValue(ProviderAccessTokenProtector.ClaimType);
+            return _providerTokenProtector.Unprotect(cachedProtectedToken, email);
         }
 
         private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings) => new()

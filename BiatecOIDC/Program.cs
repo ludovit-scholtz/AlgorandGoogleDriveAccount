@@ -56,6 +56,7 @@ namespace BiatecOIDC
             builder.Services.Configure<JwtIssuerConfiguration>(builder.Configuration.GetSection("JwtIssuer"));
             builder.Services.Configure<SpendingLimitsConfiguration>(builder.Configuration.GetSection("SpendingLimits"));
             builder.Services.Configure<ExchangeRateConfiguration>(builder.Configuration.GetSection("ExchangeRates"));
+            builder.Services.Configure<ProviderTokenProtectionConfiguration>(builder.Configuration.GetSection("ProviderTokenProtection"));
 
             var googleCloudConfig = new GoogleCloudServiceConfiguration();
             builder.Configuration.GetSection("CloudServices:Google").Bind(googleCloudConfig);
@@ -132,6 +133,13 @@ namespace BiatecOIDC
 
             // Add business logic services
             builder.Services.AddScoped<BiatecSelfCustodyCore.BusinessLogic.IDriveService, BiatecSelfCustodyCore.BusinessLogic.DriveService>();
+
+            // Caches the caller's Google/Microsoft access token (encrypted, under a key dedicated to this
+            // purpose - never AesOptions, the self-custody file's key) inside the Biatec access token
+            // itself, so wallet API callers don't have to separately manage/resend their own provider
+            // token - see ProviderAccessTokenProtector's remarks and OIDC_INTEGRATION_GUIDE.md's "Provider
+            // access token caching" section for the full design/threat-model writeup.
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IProviderAccessTokenProtector, BiatecOIDC.BusinessLogic.ProviderAccessTokenProtector>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IJwtIssuerService, BiatecOIDC.BusinessLogic.JwtIssuerService>();
 
             // Wallet API (WalletController): signs transaction groups gated on the "sign" claim and

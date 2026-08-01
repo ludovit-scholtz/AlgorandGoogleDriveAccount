@@ -55,7 +55,9 @@ carve out a legacy alias host. Stage has no legacy host to preserve, so it doesn
 Stage uses its own dedicated Kubernetes Secret, `biatec-stage-app-secret`, via `envFrom` — never
 `google-account-main-app-secret` (production's). Generate it once with
 [`k8s/stage/generate-stage-secret.sh`](../k8s/stage/generate-stage-secret.sh), which **always**
-mints a fresh AES key/IV and a fresh RSA JWT signing key dedicated to stage — never copied from
+mints a fresh self-custody AES key/IV, a fresh provider-access-token-protection AES key/IV
+(`ProviderTokenProtection` — see `BiatecOIDC/OIDC_INTEGRATION_GUIDE.md`'s "Provider access token
+caching" section), and a fresh RSA JWT signing key dedicated to stage — never copied from
 production — and asks you for the Google/Microsoft OAuth `ClientId`/`ClientSecret` and Redis
 connection string (fine to reuse production's OAuth app or Redis instance, or supply distinct
 ones; the script doesn't assume either way). Here's exactly what that buys you:
@@ -80,6 +82,13 @@ ones; the script doesn't assume either way). Here's exactly what that buys you:
   tokens with production's key (if production even has one configured; its ConfigMap leaves
   `SigningPrivateKeyPem` blank too, same ephemeral-key caveat as before, but that's now entirely
   production's own concern, unrelated to stage).
+- **The provider-access-token cache IS isolated.** `BiatecOIDC` caches the caller's Google/Microsoft
+  access token, AES-256-GCM encrypted, inside issued access/refresh tokens and their backing Redis
+  records (`oidc:code:*`/`oidc:refresh:*`) — see `BiatecOIDC/OIDC_INTEGRATION_GUIDE.md`'s "Provider
+  access token caching" section. `generate-stage-secret.sh` always generates a fresh, separate
+  `ProviderTokenProtection` key/IV for this, so even if stage and production share the same Redis
+  instance (see below), a cached blob from one environment's `oidc:refresh:*` record is
+  undecryptable under the other's key.
 - **Redis is NOT isolated by default**, only because the script needs a real connection string
   from you and doesn't assume you want a separate Redis instance. Device-pairing session state and
   OIDC authorization codes are keyed by high-entropy random IDs, so practical collision risk is

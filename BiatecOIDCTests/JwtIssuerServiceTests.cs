@@ -31,6 +31,7 @@ namespace BiatecOIDCTests
         protected Mock<IDatabase> MockDatabase = null!;
         protected Mock<IOptionsMonitor<JwtIssuerConfiguration>> MockConfig = null!;
         protected Mock<IDriveService> MockDriveService = null!;
+        protected Mock<IProviderAccessTokenProtector> MockProviderTokenProtector = null!;
         protected Mock<IHostEnvironment> MockEnvironment = null!;
         protected Mock<ILogger<JwtIssuerService>> MockLogger = null!;
         protected JwtIssuerService Service = null!;
@@ -50,6 +51,18 @@ namespace BiatecOIDCTests
             MockRedis.Setup(r => r.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(MockDatabase.Object);
             MockConfig = new Mock<IOptionsMonitor<JwtIssuerConfiguration>>();
             MockDriveService = new Mock<IDriveService>();
+            MockProviderTokenProtector = new Mock<IProviderAccessTokenProtector>();
+            // Simple deterministic default so tests that don't care about the encryption itself can still
+            // assert the claim/record round-trips end to end; encryption specifics are covered by
+            // ProviderAccessTokenProtectorTests.
+            MockProviderTokenProtector
+                .Setup(p => p.Protect(It.IsAny<string>(), It.IsAny<string>()))
+                .Returns((string token, string email) => $"protected:{token}");
+            MockProviderTokenProtector
+                .Setup(p => p.Unprotect(It.IsAny<string?>(), It.IsAny<string>()))
+                .Returns((string? protectedToken, string email) => protectedToken != null && protectedToken.StartsWith("protected:", StringComparison.Ordinal)
+                    ? protectedToken["protected:".Length..]
+                    : null);
             MockEnvironment = new Mock<IHostEnvironment>();
             MockEnvironment.Setup(e => e.EnvironmentName).Returns(Environments.Development);
             MockLogger = new Mock<ILogger<JwtIssuerService>>();
@@ -79,7 +92,7 @@ namespace BiatecOIDCTests
 
             MockConfig.Setup(m => m.CurrentValue).Returns(DefaultConfig);
 
-            Service = new JwtIssuerService(MockRedis.Object, MockConfig.Object, MockDriveService.Object, MockEnvironment.Object, MockLogger.Object);
+            Service = new JwtIssuerService(MockRedis.Object, MockConfig.Object, MockDriveService.Object, MockProviderTokenProtector.Object, MockEnvironment.Object, MockLogger.Object);
         }
 
         /// <summary>
@@ -114,7 +127,8 @@ namespace BiatecOIDCTests
             DateTimeOffset? expiresUtc = null,
             string? codeChallenge = null,
             string? codeChallengeMethod = null,
-            string? provider = null)
+            string? provider = null,
+            string? protectedProviderAccessToken = null)
         {
             var record = new
             {
@@ -130,6 +144,7 @@ namespace BiatecOIDCTests
                 shortIdentity = "ABCD" + algorandAddress[^4..],
                 codeChallenge,
                 codeChallengeMethod,
+                protectedProviderAccessToken,
                 createdUtc = DateTimeOffset.UtcNow,
                 expiresUtc = expiresUtc ?? DateTimeOffset.UtcNow.AddSeconds(120)
             };
@@ -144,7 +159,8 @@ namespace BiatecOIDCTests
             string email = TestEmail,
             string algorandAddress = TestAlgorandAddress,
             DateTimeOffset? expiresUtc = null,
-            string? provider = null)
+            string? provider = null,
+            string? protectedProviderAccessToken = null)
         {
             var record = new
             {
@@ -156,6 +172,7 @@ namespace BiatecOIDCTests
                 provider,
                 shortIdentity = "ABCD" + algorandAddress[^4..],
                 scope,
+                protectedProviderAccessToken,
                 createdUtc = DateTimeOffset.UtcNow,
                 expiresUtc = expiresUtc ?? DateTimeOffset.UtcNow.AddDays(30)
             };
@@ -906,7 +923,7 @@ namespace BiatecOIDCTests
             var client = DefaultConfig.Clients[0];
             var user = CreateUser();
 
-            var result = await Service.CreateAuthorizeResponseAsync(request, client, user);
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
 
             Assert.That(result.Success, Is.True);
             Assert.That(result.Response, Is.Not.Null);
@@ -922,7 +939,7 @@ namespace BiatecOIDCTests
             var client = DefaultConfig.Clients[0];
             var user = CreateUser();
 
-            var result = await Service.CreateAuthorizeResponseAsync(request, client, user);
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
 
             Assert.That(result.Success, Is.True);
             Assert.That(result.Response!["state"], Is.EqualTo("my-state"));
@@ -935,7 +952,7 @@ namespace BiatecOIDCTests
             var client = DefaultConfig.Clients[0];
             var user = CreateUser();
 
-            await Service.CreateAuthorizeResponseAsync(request, client, user);
+            await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
 
             MockDatabase.Verify(d => d.StringSetAsync(
                 It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:code:")),
@@ -970,11 +987,71 @@ namespace BiatecOIDCTests
                 .Callback<RedisKey, RedisValue, TimeSpan?, bool, When, CommandFlags>((_, value, _, _, _, _) => storedJson = value!)
                 .ReturnsAsync(true);
 
-            await Service.CreateAuthorizeResponseAsync(request, client, user);
+            await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
 
             Assert.That(storedJson, Is.Not.Null);
             using var doc = JsonDocument.Parse(storedJson!);
             Assert.That(doc.RootElement.GetProperty("provider").GetString(), Is.EqualTo("Microsoft"));
+        }
+
+        // ── provider access token caching ──────────────────────────────────────
+
+        [Test]
+        public async Task CodeFlow_ProviderAccessTokenSupplied_EncryptsItIntoCodeRecord()
+        {
+            var request = ValidCodeRequest();
+            var client = DefaultConfig.Clients[0];
+            var user = CreateUser();
+
+            string? storedJson = null;
+            MockDatabase
+                .Setup(d => d.StringSetAsync(
+                    It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:code:")),
+                    It.IsAny<RedisValue>(),
+                    It.IsAny<TimeSpan?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<When>(),
+                    It.IsAny<CommandFlags>()))
+                .Callback<RedisKey, RedisValue, TimeSpan?, bool, When, CommandFlags>((_, value, _, _, _, _) => storedJson = value!)
+                .ReturnsAsync(true);
+
+            await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: "live-google-token");
+
+            MockProviderTokenProtector.Verify(p => p.Protect("live-google-token", TestEmail), Times.Once);
+            Assert.That(storedJson, Is.Not.Null);
+            using var doc = JsonDocument.Parse(storedJson!);
+            var stored = doc.RootElement.GetProperty("protectedProviderAccessToken").GetString();
+            // Whatever IProviderAccessTokenProtector.Protect returned is what gets persisted - never the
+            // raw token computed independently of it. (That Protect's real implementation never returns
+            // the plaintext is covered by ProviderAccessTokenProtectorTests, using the real protector, not
+            // this test's simple echo-back mock.)
+            Assert.That(stored, Is.EqualTo("protected:live-google-token"));
+        }
+
+        [Test]
+        public async Task CodeFlow_NoProviderAccessTokenAvailable_CodeRecordHasNoProtectedToken()
+        {
+            var request = ValidCodeRequest();
+            var client = DefaultConfig.Clients[0];
+            var user = CreateUser();
+
+            string? storedJson = null;
+            MockDatabase
+                .Setup(d => d.StringSetAsync(
+                    It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:code:")),
+                    It.IsAny<RedisValue>(),
+                    It.IsAny<TimeSpan?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<When>(),
+                    It.IsAny<CommandFlags>()))
+                .Callback<RedisKey, RedisValue, TimeSpan?, bool, When, CommandFlags>((_, value, _, _, _, _) => storedJson = value!)
+                .ReturnsAsync(true);
+
+            await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
+
+            MockProviderTokenProtector.Verify(p => p.Protect(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+            using var doc = JsonDocument.Parse(storedJson!);
+            Assert.That(doc.RootElement.GetProperty("protectedProviderAccessToken").ValueKind, Is.EqualTo(JsonValueKind.Null));
         }
 
         [Test]
@@ -991,7 +1068,7 @@ namespace BiatecOIDCTests
             var client = DefaultConfig.Clients[0];
             var user = CreateUser();
 
-            var result = await Service.CreateAuthorizeResponseAsync(request, client, user);
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
 
             Assert.That(result.Success, Is.True);
             Assert.That(result.Response!.ContainsKey("id_token"), Is.True);
@@ -1012,7 +1089,7 @@ namespace BiatecOIDCTests
             var client = DefaultConfig.Clients[0];
             var user = CreateUser();
 
-            var result = await Service.CreateAuthorizeResponseAsync(request, client, user);
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
 
             Assert.That(result.Success, Is.True);
             var handler = new JwtSecurityTokenHandler();
@@ -1028,7 +1105,7 @@ namespace BiatecOIDCTests
             var client = DefaultConfig.Clients[0];
             var user = new ClaimsPrincipal(new ClaimsIdentity(Array.Empty<Claim>(), "test"));
 
-            var result = await Service.CreateAuthorizeResponseAsync(request, client, user);
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
 
             Assert.That(result.Success, Is.False);
             Assert.That(result.Error, Is.EqualTo("access_denied"));
@@ -1045,7 +1122,7 @@ namespace BiatecOIDCTests
             var client = DefaultConfig.Clients[0];
             var user = CreateUser();
 
-            var result = await Service.CreateAuthorizeResponseAsync(request, client, user);
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
 
             Assert.That(result.Success, Is.True);
             Assert.That(result.Response, Is.Not.Null);
@@ -1070,7 +1147,7 @@ namespace BiatecOIDCTests
             var client = DefaultConfig.Clients[0];
             var user = CreateUser();
 
-            var result = await Service.CreateAuthorizeResponseAsync(request, client, user);
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, user, providerAccessToken: null);
 
             Assert.That(result.Success, Is.True);
             var handler = new JwtSecurityTokenHandler();
@@ -1470,6 +1547,90 @@ namespace BiatecOIDCTests
             Assert.That(result.ErrorDescription, Does.Contain("expired"));
         }
 
+        // ── provider access token caching ─────────────────────────────────────
+
+        [Test]
+        public async Task AuthorizationCodeGrant_CodeRecordHasProtectedProviderToken_AccessTokenCarriesTheProviderTokenClaim()
+        {
+            var code = "provider-token-code";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri, protectedProviderAccessToken: "protected:live-google-token");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            Assert.That(result.Success, Is.True);
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
+            var claim = jwt.Claims.FirstOrDefault(c => c.Type == "provider_token");
+            Assert.That(claim, Is.Not.Null);
+            Assert.That(claim!.Value, Is.EqualTo("protected:live-google-token"));
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_CodeRecordHasProtectedProviderToken_CarriesItIntoTheNewRefreshTokenRecord()
+        {
+            var code = "provider-token-code-2";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri, protectedProviderAccessToken: "protected:live-google-token");
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            string? storedRefreshJson = null;
+            MockDatabase
+                .Setup(d => d.StringSetAsync(
+                    It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:refresh:")),
+                    It.IsAny<RedisValue>(),
+                    It.IsAny<TimeSpan?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<When>(),
+                    It.IsAny<CommandFlags>()))
+                .Callback<RedisKey, RedisValue, TimeSpan?, bool, When, CommandFlags>((_, value, _, _, _, _) => storedRefreshJson = value!)
+                .ReturnsAsync(true);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            Assert.That(storedRefreshJson, Is.Not.Null);
+            using var doc = JsonDocument.Parse(storedRefreshJson!);
+            Assert.That(doc.RootElement.GetProperty("protectedProviderAccessToken").GetString(), Is.EqualTo("protected:live-google-token"));
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_CodeRecordHasNoProviderToken_AccessTokenHasNoProviderTokenClaim()
+        {
+            var code = "no-provider-token-code";
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri);
+            SetupCacheGet("oidc:code:" + code, codeJson);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
+            Assert.That(jwt.Claims.Any(c => c.Type == "provider_token"), Is.False);
+        }
+
         // ── refresh_token grant ───────────────────────────────────────────────
 
         [Test]
@@ -1616,6 +1777,49 @@ namespace BiatecOIDCTests
             Assert.That(result.Success, Is.False);
             Assert.That(result.Error, Is.EqualTo("invalid_grant"));
             Assert.That(result.ErrorDescription, Does.Contain("expired"));
+        }
+
+        [Test]
+        public async Task RefreshTokenGrant_RecordHasProtectedProviderToken_CarriesItForwardUnchangedIntoNewAccessAndRefreshTokens()
+        {
+            var refreshToken = "provider-token-refresh";
+            var refreshJson = BuildRefreshTokenRecordJson(refreshToken, TestClientId, protectedProviderAccessToken: "protected:live-google-token");
+            SetupCacheGet("oidc:refresh:" + refreshToken, refreshJson);
+
+            string? storedNewRefreshJson = null;
+            MockDatabase
+                .Setup(d => d.StringSetAsync(
+                    It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:refresh:")),
+                    It.IsAny<RedisValue>(),
+                    It.IsAny<TimeSpan?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<When>(),
+                    It.IsAny<CommandFlags>()))
+                .Callback<RedisKey, RedisValue, TimeSpan?, bool, When, CommandFlags>((_, value, _, _, _, _) => storedNewRefreshJson = value!)
+                .ReturnsAsync(true);
+
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "refresh_token",
+                RefreshToken = refreshToken,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            };
+
+            var result = await Service.ExchangeTokenAsync(tokenRequest, null);
+
+            // No ambient session at refresh time, so Protect is never called again - the cached value is
+            // simply carried forward unchanged.
+            MockProviderTokenProtector.Verify(p => p.Protect(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.AccessToken);
+            var claim = jwt.Claims.FirstOrDefault(c => c.Type == "provider_token");
+            Assert.That(claim, Is.Not.Null);
+            Assert.That(claim!.Value, Is.EqualTo("protected:live-google-token"));
+
+            Assert.That(storedNewRefreshJson, Is.Not.Null);
+            using var doc = JsonDocument.Parse(storedNewRefreshJson!);
+            Assert.That(doc.RootElement.GetProperty("protectedProviderAccessToken").GetString(), Is.EqualTo("protected:live-google-token"));
         }
 
         // ── client authentication ─────────────────────────────────────────────
@@ -2131,6 +2335,7 @@ namespace BiatecOIDCTests
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
+                    MockProviderTokenProtector.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
                 _ = svc.GetJsonWebKeySet();
@@ -2150,6 +2355,7 @@ namespace BiatecOIDCTests
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
+                    MockProviderTokenProtector.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
                 _ = svc.GetJsonWebKeySet();
@@ -2167,6 +2373,7 @@ namespace BiatecOIDCTests
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
+                    MockProviderTokenProtector.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
                 _ = svc.GetJsonWebKeySet();
@@ -2184,6 +2391,7 @@ namespace BiatecOIDCTests
                 MockRedis.Object,
                 MockConfig.Object,
                 MockDriveService.Object,
+                MockProviderTokenProtector.Object,
                 MockEnvironment.Object,
                 MockLogger.Object);
 
@@ -2222,6 +2430,7 @@ namespace BiatecOIDCTests
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
+                    MockProviderTokenProtector.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
             });
@@ -2239,6 +2448,7 @@ namespace BiatecOIDCTests
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
+                    MockProviderTokenProtector.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
             });
@@ -2256,6 +2466,7 @@ namespace BiatecOIDCTests
                     MockRedis.Object,
                     MockConfig.Object,
                     MockDriveService.Object,
+                    MockProviderTokenProtector.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
             });
@@ -2275,7 +2486,7 @@ namespace BiatecOIDCTests
             request.ResponseType = "id_token";
             var client = DefaultConfig.Clients[0];
 
-            var result = await Service.CreateAuthorizeResponseAsync(request, client, CreateUser());
+            var result = await Service.CreateAuthorizeResponseAsync(request, client, CreateUser(), providerAccessToken: null);
             Assert.That(result.Success, Is.True);
             var idToken = result.Response!["id_token"];
 

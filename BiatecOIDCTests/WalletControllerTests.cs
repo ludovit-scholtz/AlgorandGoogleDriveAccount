@@ -19,6 +19,7 @@ namespace BiatecOIDCTests
         private Mock<IWalletService> _mockWalletService = null!;
         private Mock<ISpendingLimitService> _mockSpendingLimitService = null!;
         private Mock<IExchangeRateService> _mockExchangeRateService = null!;
+        private Mock<IProviderAccessTokenProtector> _mockProviderTokenProtector = null!;
         private WalletController _controller = null!;
 
         [SetUp]
@@ -28,11 +29,13 @@ namespace BiatecOIDCTests
             _mockWalletService = new Mock<IWalletService>();
             _mockSpendingLimitService = new Mock<ISpendingLimitService>();
             _mockExchangeRateService = new Mock<IExchangeRateService>();
+            _mockProviderTokenProtector = new Mock<IProviderAccessTokenProtector>();
             _controller = new WalletController(
                 _mockJwtIssuerService.Object,
                 _mockWalletService.Object,
                 _mockSpendingLimitService.Object,
                 _mockExchangeRateService.Object,
+                _mockProviderTokenProtector.Object,
                 new Mock<ILogger<WalletController>>().Object)
             {
                 ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
@@ -115,6 +118,95 @@ namespace BiatecOIDCTests
             Assert.That(okResult, Is.Not.Null);
             var response = okResult!.Value as SignTransactionGroupResponse;
             Assert.That(response!.SignedTransactions, Is.EqualTo(new List<string> { Convert.ToBase64String(signedBytes) }));
+        }
+
+        // ───────────────────────── Cached provider access token fallback ─────────────────────────
+
+        [Test]
+        public async Task SignTransactionGroup_NoExplicitAccessToken_FallsBackToCachedProviderTokenClaim()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("decrypted-google-token");
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "decrypted-google-token"))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
+
+            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) }
+                // No AccessToken supplied.
+            });
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "decrypted-google-token"), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_ExplicitAccessTokenSupplied_TakesPrecedenceOverCachedClaim()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "explicit-token"))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
+
+            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) },
+                AccessToken = "explicit-token"
+            });
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "explicit-token"), Times.Once);
+            // The cached claim must never even be decrypted when an explicit token was supplied.
+            _mockProviderTokenProtector.Verify(p => p.Unprotect(It.IsAny<string?>(), It.IsAny<string>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_NoExplicitTokenAndNoCachedClaim_PassesNullThrough()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), null))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
+
+            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) }
+            });
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), null), Times.Once);
+        }
+
+        [Test]
+        public async Task GetSpendingLimit_NoExplicitAccessToken_FallsBackToCachedProviderTokenClaim()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("decrypted-google-token");
+            _mockSpendingLimitService
+                .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SpendingLimitSettings());
+
+            var result = await _controller.GetSpendingLimit(accessToken: null);
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockSpendingLimitService.Verify(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task UpdateSpendingLimit_NoExplicitAccessToken_FallsBackToCachedProviderTokenClaim()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("manage-limits", "true"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("decrypted-google-token");
+
+            await _controller.UpdateSpendingLimit(new UpdateSpendingLimitRequest { DailyLimit = 1 });
+
+            _mockSpendingLimitService.Verify(s => s.SetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<SpendingLimitSettings>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
