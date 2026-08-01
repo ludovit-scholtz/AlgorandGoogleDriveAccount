@@ -51,8 +51,23 @@ namespace BiatecSelfCustodyCore.Providers
 
         public async Task<string?> GetAmbientAccessTokenAsync()
         {
-            var credential = await _googleAuth.GetCredentialAsync();
-            return await credential.UnderlyingCredential.GetAccessTokenForRequestAsync();
+            try
+            {
+                var credential = await _googleAuth.GetCredentialAsync();
+                return await credential.UnderlyingCredential.GetAccessTokenForRequestAsync();
+            }
+            catch (InvalidOperationException)
+            {
+                // GoogleAuthProvider.GetCredentialAsync throws this when there's no authenticated cookie
+                // session on the current request - expected and routine for bearer-token API callers
+                // (WalletController etc.), which have no ambient cookie session at all. The interface
+                // contract is to return null here, matching MicrosoftCloudStorageProvider's equivalent
+                // (a plain HttpContext.GetTokenAsync call, which returns null rather than throwing) - the
+                // caller is responsible for treating a null ambient token as "no token available" (see
+                // ICloudAccountRepository/SpendingLimitService, which both throw UnauthorizedAccessException
+                // - mapped to 401 - only when neither an explicit nor an ambient token is available).
+                return null;
+            }
         }
 
         public async Task<bool> HasWriteAccessAsync(string accessToken)

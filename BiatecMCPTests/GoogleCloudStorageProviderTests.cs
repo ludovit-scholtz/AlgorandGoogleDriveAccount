@@ -21,6 +21,7 @@ namespace BiatecMCPTests
     public class GoogleCloudStorageProviderTests
     {
         private Mock<HttpMessageHandler> _mockHandler = null!;
+        private Mock<IGoogleAuthProvider> _mockGoogleAuth = null!;
         private GoogleCloudStorageProvider _provider = null!;
 
         [SetUp]
@@ -28,14 +29,14 @@ namespace BiatecMCPTests
         {
             _mockHandler = new Mock<HttpMessageHandler>();
             var httpClient = new HttpClient(_mockHandler.Object);
-            var mockGoogleAuth = new Mock<IGoogleAuthProvider>();
+            _mockGoogleAuth = new Mock<IGoogleAuthProvider>();
             var mockConfig = new Mock<IOptionsMonitor<Configuration>>();
             mockConfig.Setup(c => c.CurrentValue).Returns(new Configuration());
             var mockGoogleServiceConfig = new Mock<IOptionsMonitor<GoogleCloudServiceConfiguration>>();
             mockGoogleServiceConfig.Setup(c => c.CurrentValue).Returns(new GoogleCloudServiceConfiguration { ClientId = "client-id", ClientSecret = "client-secret" });
 
             _provider = new GoogleCloudStorageProvider(
-                mockGoogleAuth.Object,
+                _mockGoogleAuth.Object,
                 mockConfig.Object,
                 mockGoogleServiceConfig.Object,
                 httpClient,
@@ -83,6 +84,23 @@ namespace BiatecMCPTests
         public void Name_IsGoogle()
         {
             Assert.That(_provider.Name, Is.EqualTo("Google"));
+        }
+
+        [Test]
+        public async Task GetAmbientAccessTokenAsync_NoAuthenticatedCookieSession_ReturnsNullInsteadOfThrowing()
+        {
+            // GoogleAuthProvider.GetCredentialAsync throws InvalidOperationException when the current
+            // request has no authenticated cookie session - always true for bearer-token API callers
+            // (e.g. WalletController), which have no ambient cookie session at all. The interface contract
+            // is to return null here (like MicrosoftCloudStorageProvider's equivalent), so callers can
+            // treat it the same as "caller didn't supply a token" rather than getting an unhandled 500.
+            _mockGoogleAuth
+                .Setup(g => g.GetCredentialAsync(It.IsAny<TimeSpan?>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("Cannot get credential when not authenticated."));
+
+            var result = await _provider.GetAmbientAccessTokenAsync();
+
+            Assert.That(result, Is.Null);
         }
     }
 }
