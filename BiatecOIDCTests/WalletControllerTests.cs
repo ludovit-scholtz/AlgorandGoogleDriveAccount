@@ -102,7 +102,8 @@ namespace BiatecOIDCTests
         public async Task SignTransactionGroup_TokenHasSignClaim_CallsWalletServiceAndReturnsOk()
         {
             SetBearerHeader("valid-token");
-            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("provider-token");
             var signedBytes = new byte[] { 1, 2, 3 };
             _mockWalletService
                 .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "provider-token"))
@@ -110,8 +111,7 @@ namespace BiatecOIDCTests
 
             var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
             {
-                Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) },
-                AccessToken = "provider-token"
+                Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) }
             });
 
             var okResult = result as OkObjectResult;
@@ -120,10 +120,12 @@ namespace BiatecOIDCTests
             Assert.That(response!.SignedTransactions, Is.EqualTo(new List<string> { Convert.ToBase64String(signedBytes) }));
         }
 
-        // ───────────────────────── Cached provider access token fallback ─────────────────────────
+        // ───────────────────────── Cached provider access token resolution ─────────────────────────
+        // No wallet endpoint accepts a caller-supplied access token - it's always resolved from the
+        // bearer token's own encrypted provider_token claim (see WalletController's remarks).
 
         [Test]
-        public async Task SignTransactionGroup_NoExplicitAccessToken_FallsBackToCachedProviderTokenClaim()
+        public async Task SignTransactionGroup_UsesCachedProviderTokenClaim()
         {
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
@@ -135,7 +137,6 @@ namespace BiatecOIDCTests
             var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
             {
                 Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) }
-                // No AccessToken supplied.
             });
 
             Assert.That(result, Is.InstanceOf<OkObjectResult>());
@@ -143,28 +144,7 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task SignTransactionGroup_ExplicitAccessTokenSupplied_TakesPrecedenceOverCachedClaim()
-        {
-            SetBearerHeader("valid-token");
-            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
-            _mockWalletService
-                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "explicit-token"))
-                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
-
-            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
-            {
-                Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) },
-                AccessToken = "explicit-token"
-            });
-
-            Assert.That(result, Is.InstanceOf<OkObjectResult>());
-            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "explicit-token"), Times.Once);
-            // The cached claim must never even be decrypted when an explicit token was supplied.
-            _mockProviderTokenProtector.Verify(p => p.Unprotect(It.IsAny<string?>(), It.IsAny<string>()), Times.Never);
-        }
-
-        [Test]
-        public async Task SignTransactionGroup_NoExplicitTokenAndNoCachedClaim_PassesNullThrough()
+        public async Task SignTransactionGroup_NoCachedClaim_PassesNullThrough()
         {
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
@@ -182,7 +162,7 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task GetSpendingLimit_NoExplicitAccessToken_FallsBackToCachedProviderTokenClaim()
+        public async Task GetSpendingLimit_UsesCachedProviderTokenClaim()
         {
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token", new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
@@ -191,14 +171,14 @@ namespace BiatecOIDCTests
                 .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new SpendingLimitSettings());
 
-            var result = await _controller.GetSpendingLimit(accessToken: null);
+            var result = await _controller.GetSpendingLimit();
 
             Assert.That(result, Is.InstanceOf<OkObjectResult>());
             _mockSpendingLimitService.Verify(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
-        public async Task UpdateSpendingLimit_NoExplicitAccessToken_FallsBackToCachedProviderTokenClaim()
+        public async Task UpdateSpendingLimit_UsesCachedProviderTokenClaim()
         {
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token", new Claim("manage-limits", "true"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
@@ -306,7 +286,7 @@ namespace BiatecOIDCTests
                 .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new SpendingLimitSettings { CurrencyCode = "EUR", DailyLimit = 42m });
 
-            var result = await _controller.GetSpendingLimit(accessToken: "provider-token");
+            var result = await _controller.GetSpendingLimit();
 
             var okResult = result as OkObjectResult;
             Assert.That(okResult, Is.Not.Null);
@@ -324,7 +304,7 @@ namespace BiatecOIDCTests
                 .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new UnauthorizedAccessException("expired"));
 
-            var result = await _controller.GetSpendingLimit(accessToken: null);
+            var result = await _controller.GetSpendingLimit();
 
             var objectResult = result as ObjectResult;
             Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));

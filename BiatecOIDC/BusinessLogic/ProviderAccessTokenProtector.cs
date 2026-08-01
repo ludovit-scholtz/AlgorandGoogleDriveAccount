@@ -23,10 +23,26 @@ namespace BiatecOIDC.BusinessLogic
         private readonly IOptionsMonitor<ProviderTokenProtectionConfiguration> _config;
         private readonly ILogger<ProviderAccessTokenProtector> _logger;
 
-        public ProviderAccessTokenProtector(IOptionsMonitor<ProviderTokenProtectionConfiguration> config, ILogger<ProviderAccessTokenProtector> logger)
+        public ProviderAccessTokenProtector(IOptionsMonitor<ProviderTokenProtectionConfiguration> config, IHostEnvironment environment, ILogger<ProviderAccessTokenProtector> logger)
         {
             _config = config;
             _logger = logger;
+
+            // No wallet endpoint accepts a caller-supplied provider access token anymore - the
+            // provider_token claim (decrypted with this key) is the *only* way any of them can be
+            // resolved. Unlike the earlier "optional override" design, a missing/invalid key here no
+            // longer degrades gracefully to "caller must pass their own token" - it means the wallet API
+            // cannot function *at all*. Fail loudly outside Development, matching
+            // JwtIssuerService.LoadOrCreateSigningKey's precedent for equally load-bearing secrets, rather
+            // than leaving every wallet call silently returning 401 with no indication why.
+            if (!environment.IsDevelopment() && !TryGetKeyMaterial(out _, out _))
+            {
+                throw new InvalidOperationException(
+                    "ProviderTokenProtection:Key/IV is missing or invalid. Refusing to start with the wallet " +
+                    "API unable to resolve any caller's provider access token. Configure a base64-encoded " +
+                    "32-byte Key and 16-byte IV (see OIDC_INTEGRATION_GUIDE.md's \"Provider access token " +
+                    "caching\" section).");
+            }
         }
 
         public string? Protect(string providerAccessToken, string email)
@@ -49,7 +65,7 @@ namespace BiatecOIDC.BusinessLogic
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unable to encrypt provider access token for caching; caller will need to supply their own token explicitly.");
+                _logger.LogError(ex, "Unable to encrypt provider access token for caching; the wallet API will be unable to resolve a provider token for this session.");
                 return null;
             }
         }
@@ -89,7 +105,7 @@ namespace BiatecOIDC.BusinessLogic
             var current = _config.CurrentValue;
             if (string.IsNullOrWhiteSpace(current.Key) || string.IsNullOrWhiteSpace(current.IV))
             {
-                _logger.LogWarning("ProviderTokenProtection:Key/IV is not configured - provider access token caching is disabled; callers must supply their own token explicitly.");
+                _logger.LogWarning("ProviderTokenProtection:Key/IV is not configured - the wallet API cannot resolve any provider access token.");
                 return false;
             }
 
@@ -100,13 +116,13 @@ namespace BiatecOIDC.BusinessLogic
             }
             catch (FormatException ex)
             {
-                _logger.LogError(ex, "ProviderTokenProtection:Key/IV is not valid base64 - provider access token caching is disabled.");
+                _logger.LogError(ex, "ProviderTokenProtection:Key/IV is not valid base64 - the wallet API cannot resolve any provider access token.");
                 return false;
             }
 
             if (key.Length != 32 || iv.Length != 16)
             {
-                _logger.LogError("ProviderTokenProtection:Key must decode to 32 bytes and IV to 16 bytes - provider access token caching is disabled.");
+                _logger.LogError("ProviderTokenProtection:Key must decode to 32 bytes and IV to 16 bytes - the wallet API cannot resolve any provider access token.");
                 return false;
             }
 

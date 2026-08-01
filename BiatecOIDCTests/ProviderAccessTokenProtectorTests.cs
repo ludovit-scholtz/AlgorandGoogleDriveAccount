@@ -1,5 +1,6 @@
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Model;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -26,7 +27,14 @@ namespace BiatecOIDCTests
             _mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
             _mockConfig.Setup(c => c.CurrentValue).Returns(() => _config);
 
-            _protector = new ProviderAccessTokenProtector(_mockConfig.Object, new Mock<ILogger<ProviderAccessTokenProtector>>().Object);
+            _protector = CreateProtector(_mockConfig.Object, Environments.Development);
+        }
+
+        private static ProviderAccessTokenProtector CreateProtector(IOptionsMonitor<ProviderTokenProtectionConfiguration> config, string environmentName)
+        {
+            var mockEnvironment = new Mock<IHostEnvironment>();
+            mockEnvironment.Setup(e => e.EnvironmentName).Returns(environmentName);
+            return new ProviderAccessTokenProtector(config, mockEnvironment.Object, new Mock<ILogger<ProviderAccessTokenProtector>>().Object);
         }
 
         [Test]
@@ -139,6 +147,55 @@ namespace BiatecOIDCTests
             var protectedWithKey2 = _protector.Protect("same-token", TestEmail);
 
             Assert.That(protectedWithKey1, Is.Not.EqualTo(protectedWithKey2));
+        }
+
+        // ───────────────────────── Fail-fast construction (production only) ─────────────────────────
+        // No wallet endpoint accepts a caller-supplied provider token anymore, so a missing/invalid key
+        // means the wallet API can't function at all - this should be surfaced loudly outside
+        // Development, not discovered one 401 at a time.
+
+        [Test]
+        public void Construction_KeyMissing_InProduction_Throws()
+        {
+            var config = new ProviderTokenProtectionConfiguration { Key = string.Empty, IV = string.Empty };
+            var mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
+            mockConfig.Setup(c => c.CurrentValue).Returns(config);
+
+            Assert.Throws<InvalidOperationException>(() => CreateProtector(mockConfig.Object, Environments.Production));
+        }
+
+        [Test]
+        public void Construction_KeyInvalid_InProduction_Throws()
+        {
+            var config = new ProviderTokenProtectionConfiguration { Key = "not-valid-base64!!!", IV = Convert.ToBase64String(new byte[16]) };
+            var mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
+            mockConfig.Setup(c => c.CurrentValue).Returns(config);
+
+            Assert.Throws<InvalidOperationException>(() => CreateProtector(mockConfig.Object, Environments.Production));
+        }
+
+        [Test]
+        public void Construction_KeyMissing_InDevelopment_DoesNotThrow()
+        {
+            var config = new ProviderTokenProtectionConfiguration { Key = string.Empty, IV = string.Empty };
+            var mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
+            mockConfig.Setup(c => c.CurrentValue).Returns(config);
+
+            Assert.DoesNotThrow(() => CreateProtector(mockConfig.Object, Environments.Development));
+        }
+
+        [Test]
+        public void Construction_KeyValid_InProduction_DoesNotThrow()
+        {
+            var config = new ProviderTokenProtectionConfiguration
+            {
+                Key = Convert.ToBase64String(new byte[32]),
+                IV = Convert.ToBase64String(new byte[16])
+            };
+            var mockConfig = new Mock<IOptionsMonitor<ProviderTokenProtectionConfiguration>>();
+            mockConfig.Setup(c => c.CurrentValue).Returns(config);
+
+            Assert.DoesNotThrow(() => CreateProtector(mockConfig.Object, Environments.Production));
         }
     }
 }

@@ -294,23 +294,26 @@ setup stage needs.
   stamped onto the access token at issuance, never caller-supplied, so it can't be spoofed to point at the wrong
   storage backend. `BiatecOIDC/wwwroot/index.html` (served at `/`, reachable on `oidc.biatec.io`'s own Ingress)
   is this API's documentation site.
-- **Provider access token caching**: the wallet API's `accessToken` (Google/Microsoft) is optional on every
-  endpoint that needs it — if omitted, `WalletController.ResolveProviderAccessToken` falls back to decrypting the
-  `provider_token` claim cached on the bearer token itself (an explicit `accessToken` always wins if supplied).
-  `ProviderAccessTokenProtector`/`IProviderAccessTokenProtector` (`BiatecOIDC/BusinessLogic`) AES-256-GCM encrypts
-  it under a **dedicated** key (`ProviderTokenProtection:Key`/`IV` — deliberately never `AesOptions`, so the two
-  secrets rotate independently), captured in `JwtIssuerController.FinalizeAuthorizeAsync` while the ambient cookie
-  session still has it and carried through `JwtIssuerService`'s issued access tokens and Redis-backed
-  authorization-code/refresh-token records so it survives the code exchange and every subsequent refresh (a
-  `refresh_token` grant has no ambient session of its own, so it just carries the cached value forward unchanged
-  until the underlying Google/Microsoft token naturally expires). This is a deliberate, security-sensitive
-  trade-off — the whole point is that a relying party only ever needs to hold a Biatec token, never the user's own
-  Google/Microsoft token, which does widen blast radius if this service is ever compromised; see
-  `OIDC_INTEGRATION_GUIDE.md`'s "Provider access token caching" section for the full threat-model writeup and why
-  a dedicated key (rather than reusing `AesOptions`) and client-embedded caching (rather than a server-side lookup
-  table) were chosen specifically to bound that risk. Fails safe: if the dedicated key is missing/invalid, no
-  `provider_token` claim gets embedded and every endpoint keeps working exactly as before this existed, requiring
-  an explicit `accessToken`.
+- **Provider access token caching**: no wallet endpoint accepts the caller's Google/Microsoft access token as a
+  parameter, ever — it's always resolved by `WalletController.ResolveProviderAccessToken` from a `provider_token`
+  claim cached on the bearer token itself, so the exact same Biatec token works from any device/backend, not just
+  the one the user originally signed in on. `ProviderAccessTokenProtector`/`IProviderAccessTokenProtector`
+  (`BiatecOIDC/BusinessLogic`) AES-256-GCM encrypts it under a **dedicated** key (`ProviderTokenProtection:Key`/`IV`
+  — deliberately never `AesOptions`, so the two secrets rotate independently), captured in
+  `JwtIssuerController.FinalizeAuthorizeAsync` while the ambient cookie session still has it and carried through
+  `JwtIssuerService`'s issued access tokens and Redis-backed authorization-code/refresh-token records so it
+  survives the code exchange and every subsequent refresh (a `refresh_token` grant has no ambient session of its
+  own, so it just carries the cached value forward unchanged until the underlying Google/Microsoft token naturally
+  expires, at which point the caller needs a fresh interactive `/authorize` sign-in — there is no parameter to work
+  around this with). This is a deliberate, security-sensitive trade-off — the whole point is that a relying party
+  only ever needs to hold a Biatec token, never the user's own Google/Microsoft token, which does widen blast
+  radius if this service is ever compromised; see `OIDC_INTEGRATION_GUIDE.md`'s "Provider access token caching"
+  section for the full threat-model writeup and why a dedicated key (rather than reusing `AesOptions`) and
+  client-embedded caching (rather than a server-side lookup table) were chosen specifically to bound that risk.
+  Because there's no caller-supplied fallback, `ProviderAccessTokenProtector`'s constructor fails fast (throws
+  `InvalidOperationException`, same precedent as `JwtIssuerService.LoadOrCreateSigningKey`) outside `Development`
+  if the dedicated key is missing/invalid — a misconfigured key means the wallet API can't function at all, so
+  that's surfaced immediately rather than as a wall of unexplained 401s.
 - **Service tiers**: `PortfolioValuationService` (`BiatecMCP`) computes a user's Algorand portfolio value to
   auto-assign Free/Professional/Enterprise tiers (device limits, support SLA) — no billing, purely value-based.
 

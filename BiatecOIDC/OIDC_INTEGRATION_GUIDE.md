@@ -99,28 +99,30 @@ what you request).
 Full request/response examples, curl snippets, and a live discovery link are on the documentation site at
 `https://oidc.biatec.io/` (the `#wallet-api` section) — this section is a summary.
 
-- **`POST /wallet/sign`** (needs `sign`) — body: `{ "transactions": ["<base64 msgpack>", ...],
-  "accessToken": "<optional: your current Google/Microsoft access token>" }`. `accessToken` is now optional — if
-  omitted, Biatec falls back to a Google/Microsoft token it cached (encrypted) at sign-in time (see "Provider
-  access token caching" below); only supply your own if you need to override that (e.g. the cached one has gone
-  stale). Every payment/asset-transfer in the group is priced in USD via the Biatec Router, and the group's
-  *total* is checked against the caller's daily (trailing 24h), weekly (trailing 7d), and monthly (trailing 30d)
-  spending limits *before* anything is signed — if the total would exceed any configured (non-zero) limit, the
-  whole request is rejected (`403 spending_limit_exceeded`) and nothing is signed. Returns
+None of these endpoints accept your Google/Microsoft access token as a parameter, ever - only the Biatec bearer
+token in the `Authorization` header. The Google/Microsoft token needed behind the scenes to read/write your
+self-custody data is resolved entirely from an encrypted copy cached inside that bearer token itself (see
+"Provider access token caching" below) - this is what lets the exact same Biatec token work from any
+device/backend, not just the one the user originally signed in on.
+
+- **`POST /wallet/sign`** (needs `sign`) — body: `{ "transactions": ["<base64 msgpack>", ...] }`. Every
+  payment/asset-transfer in the group is priced in USD via the Biatec Router, and the group's *total* is checked
+  against the caller's daily (trailing 24h), weekly (trailing 7d), and monthly (trailing 30d) spending limits
+  *before* anything is signed — if the total would exceed any configured (non-zero) limit, the whole request is
+  rejected (`403 spending_limit_exceeded`) and nothing is signed. Returns
   `{ "signedTransactions": ["<base64 msgpack>", ...] }` in the same order as the request. A `503`
   (`asset_valuation_failed` or `spending_limit_currency_unavailable`) means a spent asset couldn't be priced, or
   the caller's limit currency's exchange rate couldn't be fetched — every transaction is subject to the limit, so
   an unpriceable asset fails the request rather than being silently treated as free.
-- **`GET /wallet/limits`** (only needs to be authenticated) — read the caller's own limits:
-  `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000 }` (`0` on any of the
-  three means that window is unbounded). `?accessToken=<your provider token>` is optional, same cached-token
-  fallback as `/wallet/sign`; a first-time caller who's never configured limits gets an all-zero, USD-denominated
-  default rather than a 404.
+- **`GET /wallet/limits`** (only needs to be authenticated, no body/query parameters at all) — read the caller's
+  own limits: `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000 }` (`0` on any
+  of the three means that window is unbounded). A first-time caller who's never configured limits gets an
+  all-zero, USD-denominated default rather than a 404.
 - **`PUT /wallet/limits`** (needs `manage-limits`) — set the caller's own limits: same shape as the `GET`
-  response, plus an optional `"accessToken"` in the body (same optional/cached-fallback behavior as
-  `/wallet/sign`). `currencyCode` defaults to `"USD"` if omitted/blank; an unsupported code is rejected with
-  `400 unsupported_currency` (see `GET /wallet/limits/currencies` for the supported list). The limits belong to the wallet owner, not to your
-  application — they apply the same way across every app the owner has authorized with a `sign`-scoped token.
+  response, no other fields. `currencyCode` defaults to `"USD"` if omitted/blank; an unsupported code is rejected
+  with `400 unsupported_currency` (see `GET /wallet/limits/currencies` for the supported list). The limits belong
+  to the wallet owner, not to your application — they apply the same way across every app the owner has
+  authorized with a `sign`-scoped token.
 - **`GET /wallet/limits/currencies`** (only needs to be authenticated) — every currency `PUT /wallet/limits`
   will accept, with its current USD rate: `{ "currencies": [ { "code": "USD", "name": null, "usdPerUnit": 1.0 },
   { "code": "EUR", "name": "EMU euro", "usdPerUnit": 1.08 }, ... ] }`. Rates come from the Czech National Bank's
@@ -129,9 +131,12 @@ Full request/response examples, curl snippets, and a live discovery link are on 
   (used to compute the real trailing spend without re-querying the blockchain on every sign) — are AES-encrypted
   and stored in the wallet owner's own Google Drive/OneDrive folder, exactly like the self-custody account file
   itself. Biatec's servers never persist this data in plaintext.
-- The `accessToken` passed to these endpoints is used once, in-memory, to read and decrypt the owner's self-custody
-  file and spending-limit data, and is never persisted — same self-custody model as the rest of this service (see
-  the root `CLAUDE.md`).
+- The Google/Microsoft token resolved from your bearer token is used once, in-memory, per request, to read and
+  decrypt the owner's self-custody file and spending-limit data, and is never persisted by these endpoints
+  themselves — same self-custody model as the rest of this service (see the root `CLAUDE.md`). If no provider
+  token was ever cached for this session (or it's since gone stale - see below), the call fails with
+  `401 storage_access_denied`; there is no parameter to work around this with, the caller needs a fresh
+  interactive sign-in through `/authorize`.
 
 ## Provider access token caching
 
@@ -146,11 +151,10 @@ provider token is AES-256-GCM encrypted (`BusinessLogic/ProviderAccessTokenProte
 format `AesEncryptionHelper` uses for the self-custody file, but under a **separate, dedicated key** —
 `ProviderTokenProtection:Key`/`IV` in config, never `AesOptions`) and embedded as a private claim
 (`provider_token`) on the issued Biatec access token. `WalletController` decrypts that claim, in-memory, for the
-duration of a single request, whenever the caller doesn't supply their own `accessToken` explicitly (an explicit
-`accessToken` always takes precedence — see the Wallet API section above). Nothing about this changes what an RP
-integrating against this API needs to do differently: it already just forwards the Biatec `access_token` as a
-bearer token everywhere; it simply no longer *also* has to separately fetch/store/resend the user's Google token
-for wallet calls unless it wants to override the cached one.
+duration of a single request, on every call - there is no way to supply your own Google/Microsoft token instead;
+the Biatec bearer token is the only credential every wallet endpoint accepts. Nothing about this changes what an
+RP integrating against this API needs to do: it already just forwards the Biatec `access_token` as a bearer token
+everywhere; it never sees, stores, or forwards the user's actual Google/Microsoft token at all.
 
 **Why not a server-side cache (e.g. Redis, keyed by the Biatec token) instead?** That was the alternative
 considered here. Embedding the (encrypted) token *inside* the Biatec token the client already holds, rather than
@@ -177,9 +181,8 @@ trade-off being made, deliberately, to support the "RP only ever holds a Biatec 
   carries a live, usable Google/Microsoft token, for as long as both remain valid. This is no *new* exposure
   specific to caching, though — a stolen Biatec `sign`-scoped access token could already be replayed against
   `/wallet/sign` to move funds up to the spending limit regardless of whether a provider token happened to be
-  attached; the caching just means the attacker doesn't additionally need to have captured a separately-supplied
-  `accessToken` too. Treat a leaked access token as fully compromised either way — see "Security Recommendations"
-  below on TLS and not logging tokens.
+  attached. Treat a leaked access token as fully compromised either way — see "Security Recommendations" below on
+  TLS and not logging tokens.
 - The cached token **naturally expires** on Google/Microsoft's own schedule (their access tokens typically last
   around an hour) regardless of how long the Biatec access/refresh token chain that carries it stays alive (up to
   `RefreshTokenLifetimeDays`, 30 by default). There is no ambient cookie session at `grant_type=refresh_token` time
@@ -187,13 +190,15 @@ trade-off being made, deliberately, to support the "RP only ever holds a Biatec 
   each refresh just carries the same encrypted value forward unchanged. Once the underlying provider token
   actually expires, wallet calls relying on it start failing with `401 storage_access_denied` until the user
   completes a fresh interactive sign-in (a new `/authorize` round trip) — at which point a fresh token is
-  captured and cached again. Callers that need wallet access to outlive that window today should keep supplying
-  their own `accessToken` explicitly, exactly as before this feature existed.
+  captured and cached again. There is no parameter on any wallet endpoint to work around this - a fresh sign-in
+  through `/authorize` is the only way to refresh the cached token.
 - The key is configured the same way as `AesOptions`/`JwtIssuer:SigningPrivateKeyPem` — via a Kubernetes Secret in
   production (see `k8s/stage/generate-stage-secret.sh` for how stage mints its own, separate copy), never
-  committed as a real production secret. If `ProviderTokenProtection:Key`/`IV` is missing or invalid, the feature
-  simply doesn't activate (no `provider_token` claim gets embedded, nothing throws) — every wallet endpoint keeps
-  working exactly as it did before this feature existed, just requiring an explicit `accessToken` on every call.
+  committed as a real production secret. If `ProviderTokenProtection:Key`/`IV` is missing or invalid, no
+  `provider_token` claim ever gets embedded (nothing throws at issuance time) - but every wallet endpoint would
+  then have no way at all to resolve a provider token, so every call fails `401 storage_access_denied` until the
+  key is configured. This key is required infrastructure for the wallet API to work at all, unlike before this
+  feature existed.
 
 ## Configuration
 
@@ -275,8 +280,9 @@ Notes:
   - If `PostLogoutRedirectUris` is empty for a client, `RedirectUris` are used as fallback allowlist for logout redirects.
 
 Also configure `ProviderTokenProtection` — the dedicated key that encrypts the cached Google/Microsoft access
-token embedded in issued access tokens (see "Provider access token caching" above). **Deliberately a separate
-section from `AesOptions`**, so the two secrets can be rotated independently:
+token embedded in issued access tokens (see "Provider access token caching" above). **Required** for the wallet
+API to work at all (no wallet endpoint accepts a caller-supplied provider token as a fallback) and **deliberately
+a separate section from `AesOptions`**, so the two secrets can be rotated independently:
 
 ```json
 "ProviderTokenProtection": {
@@ -290,10 +296,11 @@ openssl rand -base64 32   # Key
 openssl rand -base64 16   # IV
 ```
 
-If left unset (or invalid), the feature simply doesn't activate — see the caveat at the end of the previous
-section. Rotating this key invalidates every *currently cached* provider token (callers just fall back to
-supplying their own `accessToken` until they complete a fresh sign-in); it does **not** affect the self-custody
-account file, which is encrypted separately under `AesOptions`.
+If left unset (or invalid) outside `Development`, the service refuses to start (same fail-fast precedent as
+`JwtIssuer:SigningPrivateKeyPem`) rather than silently leaving every wallet call failing with an unexplained 401.
+Rotating this key invalidates every *currently cached* provider token — affected users just need one fresh
+interactive sign-in through `/authorize` to re-cache one; it does **not** affect the self-custody account file,
+which is encrypted separately under `AesOptions`.
 
 ### Generate compatible signing key (recommended)
 

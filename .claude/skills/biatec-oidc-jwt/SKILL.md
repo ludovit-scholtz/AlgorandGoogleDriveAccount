@@ -58,24 +58,25 @@ Not part of the OIDC protocol itself - a Biatec-specific self-custody API layere
 way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `ValidateBearerAccessToken`, **not**
 `[Authorize]`/a JWT Bearer scheme - see "Why manual token parsing" below).
 
-- `POST /wallet/sign` — requires the `sign` claim. Body: `{ "transactions": ["<base64 msgpack>", ...],
-  "accessToken": "<optional provider access token>" }`. Every `pay`/`axfer` transaction in the group is priced in
-  USD via `IAssetValuationService` (`BiatecRouterValuationService`, quoting against the Biatec Router - see
-  below), summed, and the total is checked against the caller's daily (trailing 24h)/weekly (trailing
-  7d)/monthly (trailing 30d) spending limits (`ISpendingLimitService.EnsureWithinLimitsAsync`) *before* any
-  transaction is signed via the shared `IDriveService.SignTransactionAsync` - a group that would exceed a limit
-  never partially signs. Signed spend is then recorded to the caller's encrypted ledger
-  (`ISpendingLimitService.RecordSpendAsync`). `accessToken` is the Google/Microsoft token needed to read/decrypt
-  the self-custody file *and* the spending-limit data (never persisted server-side in plaintext) - optional,
-  since `WalletController.ResolveProviderAccessToken` falls back to decrypting the bearer token's own
-  `provider_token` claim when omitted (see "Provider access token caching" below); an explicit value always
-  wins if supplied. Throws (mapped to HTTP by `WalletController`):
+- `POST /wallet/sign` — requires the `sign` claim. Body: `{ "transactions": ["<base64 msgpack>", ...] }` - no
+  provider-token field, no wallet endpoint accepts one; the Google/Microsoft token needed to read/decrypt the
+  self-custody file *and* the spending-limit data is always resolved from the bearer token's own encrypted
+  `provider_token` claim, via `WalletController.ResolveProviderAccessToken` (see "Provider access token caching"
+  below) - never persisted server-side in plaintext, never a caller-supplied parameter. Every `pay`/`axfer`
+  transaction in the group is priced in USD via `IAssetValuationService` (`BiatecRouterValuationService`, quoting
+  against the Biatec Router - see below), summed, and the total is checked against the caller's daily (trailing
+  24h)/weekly (trailing 7d)/monthly (trailing 30d) spending limits (`ISpendingLimitService.EnsureWithinLimitsAsync`)
+  *before* any transaction is signed via the shared `IDriveService.SignTransactionAsync` - a group that would
+  exceed a limit never partially signs. Signed spend is then recorded to the caller's encrypted ledger
+  (`ISpendingLimitService.RecordSpendAsync`). Throws (mapped to HTTP by `WalletController`):
   `SpendingLimitExceededException` → 403, `FormatException` (bad transaction) → 400, `UnauthorizedAccessException`
-  (expired/invalid provider token) → 401, `AssetValuationException`/`UnsupportedCurrencyException` → 503 (a spent
-  asset couldn't be priced, or the limit currency's FX rate couldn't be fetched - every transaction is subject to
-  the limit, so this fails closed rather than treating an unpriceable asset as free).
-- `GET /wallet/limits` — only requires a valid bearer token (any authenticated caller reads their own limits, no
-  `manage-limits` claim). `PUT /wallet/limits` requires the `manage-limits` claim. Limits (`SpendingLimitSettings`:
+  (no provider token was ever cached, or it's since gone stale/expired) → 401,
+  `AssetValuationException`/`UnsupportedCurrencyException` → 503 (a spent asset couldn't be priced, or the limit
+  currency's FX rate couldn't be fetched - every transaction is subject to the limit, so this fails closed rather
+  than treating an unpriceable asset as free).
+- `GET /wallet/limits` — only requires a valid bearer token, no other parameters at all (any authenticated caller
+  reads their own limits, no `manage-limits` claim). `PUT /wallet/limits` requires the `manage-limits` claim, no
+  other parameters beyond the limit values themselves. Limits (`SpendingLimitSettings`:
   `CurrencyCode` + `DailyLimit`/`WeeklyLimit`/`MonthlyLimit`, `0` = unbounded per window) and the signed-transaction
   ledger (`SpendingLedgerEntry` list, USD-denominated, pruned to the last 30 days on every write) are **not** in
   Redis - `ISpendingLimitService`/`SpendingLimitService` stores both AES-encrypted in the wallet owner's own
@@ -129,12 +130,17 @@ caller's email (so a ciphertext for one user can never decrypt under another's).
   Once the underlying Google/Microsoft token naturally expires (their own ~1h lifetime, regardless of how long
   the Biatec refresh-token chain survives, up to `RefreshTokenLifetimeDays`), wallet calls relying on it start
   failing `401 storage_access_denied` until the user does a fresh interactive `/authorize` sign-in.
-- **Consumed** by `WalletController.ResolveProviderAccessToken`: an explicit caller-supplied `accessToken` always
-  wins; otherwise it decrypts the bearer token's `provider_token` claim (bound to the same email) in-memory, for
-  that one request only.
-- **Fails safe, never loud**: if `ProviderTokenProtection:Key`/`IV` is missing/invalid,
-  `ProviderAccessTokenProtector.Protect`/`Unprotect` return `null` (never throw) - no claim gets embedded, and
-  every wallet endpoint keeps working exactly as before this existed, just requiring an explicit `accessToken`.
+- **Consumed** by `WalletController.ResolveProviderAccessToken`: decrypts the bearer token's `provider_token`
+  claim (bound to the same email) in-memory, for that one request only. No wallet endpoint has a parameter to
+  supply a provider token instead - this is the only mechanism.
+- **`Protect`/`Unprotect` fail safe, never loud, per-call**: if the claim is missing/tampered/undecryptable for a
+  given request, they return `null` rather than throwing - the caller then sees a normal 401
+  `storage_access_denied`, same as any other "not signed in" case.
+- **Construction fails loud in production**: `ProviderAccessTokenProtector`'s constructor throws
+  `InvalidOperationException` outside `Development` if `ProviderTokenProtection:Key`/`IV` is missing or invalid
+  (same fail-fast precedent as `JwtIssuerService.LoadOrCreateSigningKey`) - since there's no caller-supplied
+  fallback anymore, a misconfigured key means the wallet API cannot function *at all*, and that should be
+  surfaced immediately rather than as a wall of unexplained 401s.
 - **Threat model** (full writeup in `OIDC_INTEGRATION_GUIDE.md`'s "Provider access token caching" section): the
   dedicated key compartmentalizes this from `AesOptions` (the self-custody file's key) and
   `JwtIssuer:SigningPrivateKeyPem`, so a leak of just this one doesn't also compromise the mnemonic file or let an

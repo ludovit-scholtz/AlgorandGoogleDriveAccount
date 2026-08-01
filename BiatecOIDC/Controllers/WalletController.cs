@@ -21,13 +21,16 @@ namespace BiatecOIDC.Controllers
     /// (the standard <c>openid</c> scope) - no <c>manage-limits</c> claim needed.
     /// </summary>
     /// <remarks>
-    /// Every endpoint that needs the caller's Google/Microsoft access token accepts it two ways: an
-    /// explicit <c>accessToken</c> (request body field or query parameter) always wins when supplied;
-    /// otherwise it falls back to the encrypted copy cached inside the bearer token itself (the
-    /// <c>provider_token</c> claim - see <see cref="ProviderAccessTokenProtector"/> and
-    /// <c>OIDC_INTEGRATION_GUIDE.md</c>'s "Provider access token caching" section), decrypted here,
-    /// in-memory, for the duration of this one request only - never logged, never persisted by this
-    /// controller. If neither is available, the call fails with 401 <c>storage_access_denied</c>.
+    /// No endpoint here ever accepts the caller's Google/Microsoft access token as a parameter - callers
+    /// authenticate with the Biatec bearer token alone. The provider token is resolved entirely from the
+    /// encrypted copy cached inside that bearer token itself (the <c>provider_token</c> claim - see
+    /// <see cref="ProviderAccessTokenProtector"/> and <c>OIDC_INTEGRATION_GUIDE.md</c>'s "Provider access
+    /// token caching" section), decrypted here, in-memory, for the duration of this one request only -
+    /// never logged, never persisted by this controller, never sent back to the caller. This is what lets
+    /// the same Biatec token be used from any device/process, not just the one the user originally signed
+    /// in on. If no provider token was ever cached (or it's since gone stale), the call fails with 401
+    /// <c>storage_access_denied</c>; the caller needs a fresh interactive sign-in through
+    /// <c>/authorize</c>, not a parameter it can pass here.
     /// </remarks>
     [ApiController]
     [Route("wallet")]
@@ -61,7 +64,7 @@ namespace BiatecOIDC.Controllers
         /// in it, priced via the Biatec Router) is checked against the caller's daily/weekly/monthly
         /// spending limits before anything is signed.
         /// </summary>
-        /// <param name="request">The transactions to sign (base64 msgpack) plus the provider access token needed to read the self-custody file.</param>
+        /// <param name="request">The transactions to sign (base64 msgpack).</param>
         /// <returns>The signed transactions (base64 msgpack), in the same order as the request.</returns>
         /// <response code="200">All transactions were within limit and signed successfully.</response>
         /// <response code="400">The request was malformed, or a transaction could not be decoded.</response>
@@ -96,7 +99,7 @@ namespace BiatecOIDC.Controllers
 
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
-            var accessToken = ResolveProviderAccessToken(request.AccessToken, principal, email);
+            var accessToken = ResolveProviderAccessToken(principal, email);
 
             try
             {
@@ -134,17 +137,13 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>Returns the caller's current daily/weekly/monthly spending limits and their currency.</summary>
-        /// <param name="accessToken">
-        /// The caller's provider access token, used to read the encrypted spending-limit file from their
-        /// own Drive/OneDrive. Optional - see the class remarks for the fallback to the token cached
-        /// inside the bearer token itself.
-        /// </param>
         /// <response code="200">The current limits (all-zero/unbounded, in USD, if never configured).</response>
-        /// <response code="401">The bearer token is missing, invalid, or expired.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider
+        /// access token is available (see the class remarks) - a fresh interactive sign-in is required.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("limits")]
-        public async Task<IActionResult> GetSpendingLimit([FromQuery] string? accessToken)
+        public async Task<IActionResult> GetSpendingLimit()
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
             if (authError != null)
@@ -154,7 +153,7 @@ namespace BiatecOIDC.Controllers
 
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
-            var resolvedAccessToken = ResolveProviderAccessToken(accessToken, principal, email);
+            var resolvedAccessToken = ResolveProviderAccessToken(principal, email);
 
             try
             {
@@ -186,7 +185,7 @@ namespace BiatecOIDC.Controllers
 
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
-            var accessToken = ResolveProviderAccessToken(request.AccessToken, principal, email);
+            var accessToken = ResolveProviderAccessToken(principal, email);
 
             var settings = new SpendingLimitSettings
             {
@@ -250,18 +249,14 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
-        /// The provider access token to use for this call: <paramref name="explicitAccessToken"/> if the
-        /// caller supplied one, otherwise the encrypted copy cached inside the bearer token itself (see
-        /// the class remarks), decrypted for this request only. Returns <c>null</c> if neither is
-        /// available - callers already handle a <c>null</c> token as "no storage access" (401).
+        /// The provider access token to use for this call, decrypted from the bearer token's own
+        /// <c>provider_token</c> claim (see the class remarks) - callers never supply this themselves.
+        /// Returns <c>null</c> if no provider token was ever cached, or it can no longer be decrypted
+        /// (protection key rotated, tampered, etc.) - already handled by every caller as "no storage
+        /// access" (401).
         /// </summary>
-        private string? ResolveProviderAccessToken(string? explicitAccessToken, ClaimsPrincipal principal, string email)
+        private string? ResolveProviderAccessToken(ClaimsPrincipal principal, string email)
         {
-            if (!string.IsNullOrWhiteSpace(explicitAccessToken))
-            {
-                return explicitAccessToken;
-            }
-
             var cachedProtectedToken = principal.FindFirstValue(ProviderAccessTokenProtector.ClaimType);
             return _providerTokenProtector.Unprotect(cachedProtectedToken, email);
         }

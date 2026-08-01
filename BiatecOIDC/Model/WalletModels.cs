@@ -10,17 +10,6 @@ namespace BiatecOIDC.Model
         /// group id across them before calling this endpoint).
         /// </summary>
         public List<string> Transactions { get; set; } = new();
-
-        /// <summary>
-        /// The caller's current Google/Microsoft access token for the signed-in provider, used to
-        /// read/decrypt the self-custody account file, and to read/write the caller's encrypted
-        /// spending-limit settings and ledger. Optional - if omitted, falls back to the encrypted copy
-        /// cached inside the bearer token itself (see <c>WalletController</c>'s remarks and
-        /// <c>OIDC_INTEGRATION_GUIDE.md</c>'s "Provider access token caching" section). Only needs to be
-        /// supplied explicitly if that cached copy is unavailable or has gone stale (e.g. it's outlived
-        /// the underlying Google/Microsoft token's own ~1 hour lifetime).
-        /// </summary>
-        public string? AccessToken { get; set; }
     }
 
     /// <summary>Response body for <c>POST /wallet/sign</c>.</summary>
@@ -48,13 +37,6 @@ namespace BiatecOIDC.Model
 
         /// <summary>Maximum total spend allowed in the trailing 30 days, in <see cref="CurrencyCode"/>. <c>0</c> means unbounded.</summary>
         public decimal MonthlyLimit { get; set; }
-
-        /// <summary>
-        /// The caller's current Google/Microsoft access token, used to read/write the encrypted
-        /// spending-limit file in their own Drive/OneDrive - same optional/fallback behavior as
-        /// <c>POST /wallet/sign</c>'s <c>AccessToken</c> (see its doc comment).
-        /// </summary>
-        public string? AccessToken { get; set; }
     }
 
     /// <summary>Response body for <c>GET /wallet/limits</c> and <c>PUT /wallet/limits</c>.</summary>
