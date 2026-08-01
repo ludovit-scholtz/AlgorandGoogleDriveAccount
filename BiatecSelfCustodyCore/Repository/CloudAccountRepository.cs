@@ -42,9 +42,14 @@ namespace BiatecSelfCustodyCore.Repository
             // JwtIssuerService.LoadOrCreateSigningKey/ProviderAccessTokenProtector's constructor for other
             // load-bearing secrets in this repo. A misconfigured active key means every self-custody
             // account load/create would fail anyway, so surface it immediately rather than per-request.
+            // Also fails fast if the resolved active key is the known placeholder value committed in
+            // k8s/main/conf-*/appsettings.json (security audit findings R-019/G-02) - closing the gap where
+            // a missing secret override would previously start up successfully and silently serve
+            // production traffic under a publicly-committed key.
             if (!environment.IsDevelopment())
             {
-                AesKeyRingResolver.GetActiveKey(aes.CurrentValue, "AesOptions");
+                var activeKey = AesKeyRingResolver.GetActiveKey(aes.CurrentValue, "AesOptions");
+                AesKeyRingResolver.EnsureActiveKeyIsNotKnownPlaceholder(activeKey, "AesOptions");
             }
         }
 
@@ -65,6 +70,10 @@ namespace BiatecSelfCustodyCore.Repository
                 throw;
             }
             catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
             {
                 throw;
             }
@@ -118,12 +127,13 @@ namespace BiatecSelfCustodyCore.Repository
                 // so it must see a genuinely empty vault as empty (to correctly make the very first seed
                 // primary), not have one silently pre-created for it first.
                 var vault = await LoadVaultOrEmptyAsync(email, storageProvider, context);
+                var baselineRawBytes = await DownloadActiveRawBytesAsync(storageProvider, context);
 
                 var newAccount = new Account();
                 var entry = BuildSeedEntry(email, newAccount.ToMnemonic(), isPrimary: vault.Seeds.Count == 0);
                 vault.Seeds.Add(entry);
 
-                await SaveVaultAsync(storageProvider, context, email, vault);
+                await SaveVaultWithConcurrencyCheckAsync(storageProvider, context, email, vault, baselineRawBytes);
 
                 _logger.LogInformation("Generated a new seed ({Address}) for {Email}.", entry.PrimaryAddress, email);
                 return new SeedSummary(entry.PrimaryAddress, entry.CreatedUtc, entry.IsPrimary);
@@ -133,6 +143,10 @@ namespace BiatecSelfCustodyCore.Repository
                 throw;
             }
             catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
             {
                 throw;
             }
@@ -151,6 +165,7 @@ namespace BiatecSelfCustodyCore.Repository
             {
                 var context = await ResolveContextAsync(storageProvider, accessToken);
                 var vault = await LoadVaultOrEmptyAsync(email, storageProvider, context);
+                var baselineRawBytes = await DownloadActiveRawBytesAsync(storageProvider, context);
 
                 var target = vault.Seeds.FirstOrDefault(s => string.Equals(s.PrimaryAddress, primaryAddress, StringComparison.Ordinal));
                 if (target == null)
@@ -163,7 +178,7 @@ namespace BiatecSelfCustodyCore.Repository
                     seed.IsPrimary = ReferenceEquals(seed, target);
                 }
 
-                await SaveVaultAsync(storageProvider, context, email, vault);
+                await SaveVaultWithConcurrencyCheckAsync(storageProvider, context, email, vault, baselineRawBytes);
                 _logger.LogInformation("Switched the primary seed to {Address} for {Email}.", primaryAddress, email);
             }
             catch (UnauthorizedAccessException)
@@ -171,6 +186,10 @@ namespace BiatecSelfCustodyCore.Repository
                 throw;
             }
             catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
             {
                 throw;
             }
@@ -209,6 +228,10 @@ namespace BiatecSelfCustodyCore.Repository
                 throw;
             }
             catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
             {
                 throw;
             }
@@ -295,9 +318,13 @@ namespace BiatecSelfCustodyCore.Repository
             var vault = await LoadVaultOrEmptyAsync(email, storageProvider, context);
             if (vault.Seeds.Count == 0)
             {
+                // Only this branch writes, so only this branch needs the concurrency check - two
+                // concurrent first-ever loads could otherwise both decide to create the first seed and
+                // race each other, silently discarding one of the two generated seeds.
+                var baselineRawBytes = await DownloadActiveRawBytesAsync(storageProvider, context);
                 var newAccount = new Account();
                 vault.Seeds.Add(BuildSeedEntry(email, newAccount.ToMnemonic(), isPrimary: true));
-                await SaveVaultAsync(storageProvider, context, email, vault);
+                await SaveVaultWithConcurrencyCheckAsync(storageProvider, context, email, vault, baselineRawBytes);
             }
 
             return vault;
@@ -340,6 +367,51 @@ namespace BiatecSelfCustodyCore.Repository
         {
             var plaintext = JsonSerializer.SerializeToUtf8Bytes(vault, JsonOptions);
             await EncryptedKeyRingFileStore.SaveAsync(storageProvider, context.Token, context.FileNameTemplate, context.ActiveKey, email, plaintext);
+        }
+
+        /// <summary>The raw (still-encrypted) bytes currently at the active generation's file name, or <c>null</c> if no file exists there yet.</summary>
+        private static Task<byte[]?> DownloadActiveRawBytesAsync(ICloudStorageProvider storageProvider, VaultContext context) =>
+            storageProvider.TryDownloadAsync(BuildActiveFileName(context), context.Token);
+
+        /// <summary>
+        /// Saves <paramref name="vault"/> only if the active file's raw bytes still match
+        /// <paramref name="baselineRawBytes"/> (captured by the caller right after its own read, including
+        /// after any read-time migration write) - i.e. nothing else wrote to this account's vault between
+        /// this call's read and this call's write. Narrows, but does not eliminate, the seed-vault race
+        /// condition described in security audit finding M-01/R-021: neither Google Drive nor OneDrive's
+        /// API is used here with a true atomic compare-and-swap (Graph's native <c>If-Match</c>/<c>eTag</c>
+        /// support would allow one; Drive's revision model is more limited), so this is a best-effort
+        /// check-then-act re-verification immediately before the write, not a provider-enforced guarantee -
+        /// but it shrinks the window in which two concurrent mutations can silently race from "the entire
+        /// request" down to "the gap between this re-check and the upload that immediately follows it".
+        /// Throws <see cref="VaultConcurrencyConflictException"/> (never overwrites silently) if the check
+        /// fails, so the caller can surface a retryable error instead of another request's change vanishing.
+        /// </summary>
+        private static async Task SaveVaultWithConcurrencyCheckAsync(
+            ICloudStorageProvider storageProvider,
+            VaultContext context,
+            string email,
+            SeedVault vault,
+            byte[]? baselineRawBytes)
+        {
+            var currentRawBytes = await DownloadActiveRawBytesAsync(storageProvider, context);
+            if (!RawBytesEqual(baselineRawBytes, currentRawBytes))
+            {
+                throw new VaultConcurrencyConflictException(
+                    "The account's seed vault was modified by another request while this one was in progress. Please retry.");
+            }
+
+            await SaveVaultAsync(storageProvider, context, email, vault);
+        }
+
+        private static bool RawBytesEqual(byte[]? a, byte[]? b)
+        {
+            if (a is null || b is null)
+            {
+                return a is null && b is null;
+            }
+
+            return a.AsSpan().SequenceEqual(b);
         }
     }
 }

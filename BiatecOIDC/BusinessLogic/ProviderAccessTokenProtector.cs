@@ -45,10 +45,12 @@ namespace BiatecOIDC.BusinessLogic
             // pass their own token" - it means the wallet API cannot function *at all*. Fail loudly outside
             // Development, matching JwtIssuerService.LoadOrCreateSigningKey's precedent for equally
             // load-bearing secrets, rather than leaving every wallet call silently returning 401 with no
-            // indication why.
+            // indication why. Also fails fast if the resolved active key is the known placeholder value
+            // committed in k8s/main/conf-oidc/appsettings.json (security audit finding R-023/P-01).
             if (!environment.IsDevelopment())
             {
-                AesKeyRingResolver.GetActiveKey(config.CurrentValue, "ProviderTokenProtection");
+                var activeKey = AesKeyRingResolver.GetActiveKey(config.CurrentValue, "ProviderTokenProtection");
+                AesKeyRingResolver.EnsureActiveKeyIsNotKnownPlaceholder(activeKey, "ProviderTokenProtection");
             }
         }
 

@@ -357,6 +357,10 @@ namespace BiatecOIDC.Controllers
                     token => _accountRepository.CreateSeedAsync(email, provider, token));
                 return Ok(new SeedResponse { Address = seed.PrimaryAddress, CreatedUtc = seed.CreatedUtc, IsPrimary = seed.IsPrimary });
             }
+            catch (VaultConcurrencyConflictException ex)
+            {
+                return StatusCode(StatusCodes.Status409Conflict, new ProblemDetails { Title = "vault_concurrency_conflict", Detail = ex.Message });
+            }
             catch (UnauthorizedAccessException ex)
             {
                 return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
@@ -399,6 +403,10 @@ namespace BiatecOIDC.Controllers
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.SwitchPrimarySeedAsync(email, provider, request.Address, token));
                 return Ok();
+            }
+            catch (VaultConcurrencyConflictException ex)
+            {
+                return StatusCode(StatusCodes.Status409Conflict, new ProblemDetails { Title = "vault_concurrency_conflict", Detail = ex.Message });
             }
             catch (InvalidOperationException ex)
             {

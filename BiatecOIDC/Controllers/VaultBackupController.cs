@@ -76,7 +76,11 @@ namespace BiatecOIDC.Controllers
             }
         }
 
-        /// <summary>Browser entry point - redirects to the target provider's own consent screen. Not an API call.</summary>
+        /// <summary>
+        /// Browser entry point - redirects to the target provider's own consent screen. Not an API call.
+        /// Requires the browser to already be signed in to Biatec (the ambient cookie session) as the exact
+        /// account the pending backup belongs to - see <see cref="EnsureBrowserOwnsBackup"/>.
+        /// </summary>
         [AllowAnonymous]
         [HttpGet("authorize")]
         public async Task<IActionResult> Authorize([FromQuery] string linkId)
@@ -87,19 +91,75 @@ namespace BiatecOIDC.Controllers
                 return BadRequest(new ProblemDetails { Title = "invalid_link", Detail = "This backup link has expired or was never started." });
             }
 
+            var ownershipError = EnsureBrowserOwnsBackup(pending);
+            if (ownershipError != null)
+            {
+                return ownershipError;
+            }
+
             var provider = _providerCatalog.Resolve(pending.TargetProvider);
             var callbackUrl = Url.Action(nameof(Callback), "VaultBackup", null, Request.Scheme)!;
             return Redirect(provider.BuildAuthorizationUrl(callbackUrl, linkId));
         }
 
-        /// <summary>Browser callback after the target provider's consent screen. Renders a plain confirmation page - not an API call.</summary>
+        /// <summary>
+        /// Browser callback after the target provider's consent screen. Renders a plain confirmation page - not
+        /// an API call. Re-checks <see cref="EnsureBrowserOwnsBackup"/> (not just <see cref="Authorize"/>) as
+        /// defense in depth, in case the ambient session changed between the two browser round trips.
+        /// </summary>
         [AllowAnonymous]
         [HttpGet("callback")]
         public async Task<IActionResult> Callback([FromQuery] string code, [FromQuery] string state)
         {
+            var pending = await _backupService.GetPendingAsync(state);
+            if (pending == null)
+            {
+                return Content(BuildResultHtml(false, "This backup link has expired or was already used. Please start again."), "text/html; charset=utf-8", Encoding.UTF8);
+            }
+
+            var ownershipError = EnsureBrowserOwnsBackup(pending);
+            if (ownershipError != null)
+            {
+                return ownershipError;
+            }
+
             var callbackUrl = Url.Action(nameof(Callback), "VaultBackup", null, Request.Scheme)!;
             var (success, error) = await _backupService.HandleCallbackAsync(state, code, callbackUrl);
             return Content(BuildResultHtml(success, error), "text/html; charset=utf-8", Encoding.UTF8);
+        }
+
+        /// <summary>
+        /// Confirms the browser completing this step of the vault-backup OAuth round trip is already signed in
+        /// to Biatec (the ambient cookie session populated by the normal Google/Microsoft sign-in used
+        /// elsewhere in this app) as the exact account <paramref name="pending"/> belongs to.
+        /// </summary>
+        /// <remarks>
+        /// Without this check, an attacker who starts a backup for their own account (<see cref="Start"/> only
+        /// requires their own valid bearer token - no relationship to any victim is needed) could send an
+        /// unrelated victim a link straight to <see cref="Authorize"/>; the victim's own, entirely genuine
+        /// consent on the target provider would then get captured under the attacker's pending backup, letting
+        /// the attacker complete the backup (<see cref="Complete"/>) using the victim's captured token to write
+        /// the attacker's own vault ciphertext into the victim's cloud storage, under the victim's own account
+        /// file name (security audit finding H-01/R-020). A same-browser anti-CSRF cookie alone would not close
+        /// this gap - the victim's browser genuinely is the one completing both <see cref="Authorize"/> and
+        /// <see cref="Callback"/>, so what must be checked is not "same browser" but "the right account". A
+        /// victim who has never signed in to Biatec as the attacker's email - which is the case for every victim
+        /// in this attack, since the whole point is that they are unrelated to the attacker's account - has no
+        /// ambient session matching <paramref name="pending"/>.Email and is refused here, before the flow ever
+        /// reaches the target provider's consent screen.
+        /// </remarks>
+        private IActionResult? EnsureBrowserOwnsBackup(PendingVaultBackup pending)
+        {
+            var sessionEmail = User.FindFirstValue(ClaimTypes.Email);
+            if (User.Identity?.IsAuthenticated != true || !string.Equals(sessionEmail, pending.Email, StringComparison.OrdinalIgnoreCase))
+            {
+                return Content(
+                    BuildResultHtml(false, "You must be signed in to Biatec as the account that started this backup to continue. Please sign in to Biatec in this browser and try again."),
+                    "text/html; charset=utf-8",
+                    Encoding.UTF8);
+            }
+
+            return null;
         }
 
         /// <summary>Finishes the backup: copies the vault from the caller's primary provider to the newly-linked target provider.</summary>

@@ -69,6 +69,52 @@ namespace BiatecSelfCustodyCore.Helper
             return historical;
         }
 
+        /// <summary>
+        /// Byte-identical to the values committed in <c>k8s/main/conf-mcp/appsettings.json</c> and
+        /// <c>k8s/main/conf-oidc/appsettings.json</c> (see security audit findings R-019/G-02 for
+        /// <c>AesOptions</c> and R-023/P-01 for <c>ProviderTokenProtection</c>), and deliberately also used
+        /// by this repository's own root <c>appsettings.json</c> files as a shared, convenience example key
+        /// for local development - so these must never be treated as acceptable *live* key material, but
+        /// also must never be rejected unconditionally (that would break local development, which uses
+        /// them by design). See <see cref="EnsureActiveKeyIsNotKnownPlaceholder"/>.
+        /// </summary>
+        private static readonly HashSet<(string Key, string IV)> KnownPlaceholderKeyMaterial = new()
+        {
+            // Current placeholder: all-zero bytes, deliberately unmistakable - used going forward in
+            // k8s/main/conf-*/appsettings.json and k8s/stage/conf-*-stage/appsettings.json.
+            ("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "AAAAAAAAAAAAAAAAAAAAAA=="),
+            // Historical: the syntactically-real-looking value those same files committed before this fix
+            // (findings R-019/G-02, R-023/P-01) - kept here too in case an older ConfigMap/Secret revision
+            // is ever rolled back to it.
+            ("dFskKJD/h4YpQWhbNOQmmvRyuJ+zMSBbg+v3Jg5LvQw=", "aNfjtgsymNYAqxhzHU30XQ=="), // AesOptions
+            ("g46fY8Nnr77edXDqCKP+d92nm8roYITklIVy4mGFE2w=", "T0Oc4SEMxUfljFeJEj8tfQ=="), // ProviderTokenProtection
+        };
+
+        /// <summary>
+        /// Fails fast (throws <see cref="InvalidOperationException"/>) if <paramref name="activeKey"/>'s
+        /// Key/IV byte-for-byte matches a known placeholder value that must never be used as live key
+        /// material (<see cref="KnownPlaceholderKeyMaterial"/>). Callers must invoke this only from the same
+        /// <c>!environment.IsDevelopment()</c> guard already used for the general <see cref="GetActiveKey"/>
+        /// startup validation - never unconditionally, and never from <see cref="GetActiveKey"/>/
+        /// <see cref="GetHistoricalKeys"/> themselves, since those run on every request (in every
+        /// environment, including Development, which uses this exact value by design for local convenience).
+        /// This closes the specific gap the second and third security audits identified: a deployment whose
+        /// secret override is missing would previously start up successfully and silently serve production
+        /// traffic under the publicly-committed key, since <see cref="GetActiveKey"/>'s existing validation
+        /// only checks that the configured value is *syntactically* well-formed, not whether it's this
+        /// specific known-bad value.
+        /// </summary>
+        public static void EnsureActiveKeyIsNotKnownPlaceholder(AesKeyRingEntry activeKey, string configSectionName)
+        {
+            if (KnownPlaceholderKeyMaterial.Contains((activeKey.Key, activeKey.IV)))
+            {
+                throw new InvalidOperationException(
+                    $"{configSectionName}:Keys entry '{activeKey.KeyId}' (the active key) is a known placeholder " +
+                    "value committed in source control and must never be used as live key material outside " +
+                    "Development. Override it with a real, freshly-generated secret before starting.");
+            }
+        }
+
         /// <summary>Base64-decodes an already-validated entry's <see cref="AesKeyRingEntry.Key"/>.</summary>
         public static byte[] KeyBytes(AesKeyRingEntry entry) => Convert.FromBase64String(entry.Key);
 

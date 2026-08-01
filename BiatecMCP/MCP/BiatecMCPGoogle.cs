@@ -17,13 +17,15 @@ namespace BiatecMCP.MCP
         private readonly IOptionsMonitor<BiatecSelfCustodyCore.Model.Configuration> _config;
         private readonly IOptionsMonitor<BiatecMCP.Model.AlgodConfiguration> _algodConfig;
         private readonly IOptionsMonitor<BiatecMCP.Model.McpTransferLimitsConfiguration> _transferLimits;
+        private readonly ILogger<BiatecMCPGoogle> _logger;
 
         public BiatecMCPGoogle(
             ICloudAccountRepository cloudAccountRepository,
             IDevicePairingService devicePairingService,
             IOptionsMonitor<BiatecSelfCustodyCore.Model.Configuration> config,
             IOptionsMonitor<BiatecMCP.Model.AlgodConfiguration> algodConfig,
-            IOptionsMonitor<BiatecMCP.Model.McpTransferLimitsConfiguration> transferLimits
+            IOptionsMonitor<BiatecMCP.Model.McpTransferLimitsConfiguration> transferLimits,
+            ILogger<BiatecMCPGoogle> logger
             )
         {
             _cloudAccountRepository = cloudAccountRepository;
@@ -31,6 +33,23 @@ namespace BiatecMCP.MCP
             _config = config;
             _algodConfig = algodConfig;
             _transferLimits = transferLimits;
+            _logger = logger;
+        }
+
+        /// <summary>
+        /// Logs the full exception server-side and returns a generic, non-identifying message for the MCP
+        /// tool response - the same log-full-detail/return-generic-message pattern R-011's fix applied to
+        /// the HTTP controllers, extended here to close the gap the second audit identified (finding
+        /// G-01/R-018): raw <see cref="Exception.Message"/> text was being returned directly to the
+        /// connected AI client, a different trust boundary than this server's own logs. Deliberately does
+        /// not touch <c>Algorand.ApiException&lt;...&gt;.Result.Message</c> passthroughs elsewhere in this
+        /// class - those are legitimate, already-user-facing Algorand node error text (e.g. "insufficient
+        /// balance"), not raw internal exception detail.
+        /// </summary>
+        private string SanitizeForToolResponse(Exception ex, string toolName)
+        {
+            _logger.LogError(ex, "Unexpected error in MCP tool {ToolName}.", toolName);
+            return "An unexpected error occurred while processing the request. It has been logged server-side.";
         }
 
         private (string apiAddress, string apiToken, string explorerBaseUrl) GetAlgodSettings(string genesisId)
@@ -96,7 +115,7 @@ namespace BiatecMCP.MCP
             }
             catch (Exception ex)
             {
-                return new GetAccountAddressResponse { Error = ex.Message };
+                return new GetAccountAddressResponse { Error = SanitizeForToolResponse(ex, nameof(GetAccountAddress)) };
             }
         }
 
@@ -212,7 +231,7 @@ namespace BiatecMCP.MCP
             {
                 return new TransferAssetResponse
                 {
-                    Error = ex.Message,
+                    Error = SanitizeForToolResponse(ex, nameof(TransferAsset)),
                     ErrorType = ex.GetType().ToString()
                 };
             }
@@ -296,7 +315,7 @@ namespace BiatecMCP.MCP
             {
                 return new TransferAssetResponse
                 {
-                    Error = ex.Message,
+                    Error = SanitizeForToolResponse(ex, nameof(OptIn)),
                     ErrorType = ex.GetType().ToString()
                 };
             }

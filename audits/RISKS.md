@@ -43,6 +43,21 @@ condition; R-022, a known dependency advisory), confirmed R-018 and R-019 unchan
 a second key ring (`ProviderTokenProtection` — see that entry's history), and found a genuine, unprompted
 improvement to R-013 (production deploys are no longer automatic on every push to `master`).
 
+**2026-08-02 remediation note:** Engineering (not a new independent audit) implemented fixes for every finding the
+third audit raised — R-020, R-021, R-022, R-018, and R-019/R-023 — in the same commit series that added this note.
+Each remediated entry's History records what changed, why, and any residual scope/limitation the fix does not
+claim to fully close. As with the 2026-07-24 remediation note, this is first-party engineering work responding to
+audit findings — it does **not** constitute a new independent audit and does not itself re-verify the absence of
+new defects introduced by the fix. Per `AUDITS-INSTRUCTIONS.md`'s cadence rule ("before any material change to
+`AesEncryptionHelper.cs`... ships to production"), and because this remediation pass touches
+`CloudAccountRepository.cs`/`AesKeyRingResolver.cs` (security-critical per that same rule) and introduces a new
+authorization check on a production-facing OAuth flow (H-01/R-020), an independent audit engagement should
+re-verify all of the below before this registry's updated "Closed"/"Mitigated" statuses are relied upon as
+external assurance — the same standing recommendation every prior remediation pass and audit in this registry has
+carried. All 377 existing automated tests (107 in `BiatecMCPTests`, 270 in `BiatecOIDCTests`) still pass after this
+remediation pass; no new regression tests were added for the new checks themselves (see individual entries for
+what a future audit should specifically verify).
+
 ## Open risks
 
 ### R-013 — CI/CD pipeline has no in-workflow deployment gate; `k8s/main/conf` contents unverified
@@ -447,7 +462,7 @@ no corresponding registry entry.)_
 - **Recommended further mitigation:** Apply the same log-full-detail-server-side / return-generic-message pattern
   used for R-011's three components to `BiatecMCPGoogle.cs`'s three MCP tools, while preserving legitimate
   user-facing Algorand API error text (e.g. "insufficient balance") as distinct from raw `.NET` exception text.
-- **Status:** Open.
+- **Status:** Closed (mitigated).
 - **History:**
   - 2026-24-07 — claude-code-ai-review-2: opened at 5%, corresponds to finding G-01 in
     [audit-report-2026-24-07-173793a-claude-code-ai-review-2.md](audit-report-2026-24-07-173793a-claude-code-ai-review-2.md).
@@ -456,6 +471,16 @@ no corresponding registry entry.)_
   - 2026-01-08 — claude-code-ai-review-3: re-confirmed unchanged after the project restructure. The same three
     tools' generic catch blocks at their new location (`BiatecMCP/MCP/BiatecMCPGoogle.cs`) still return raw
     `ex.Message`/`ex.Result.Message`. Status/likelihood unchanged.
+  - 2026-08-02 — engineering-remediation: closed. `BiatecMCPGoogle`'s three generic `catch (Exception ex)` blocks
+    (`GetAccountAddress`, `TransferAsset`, `OptIn`) now call a new `SanitizeForToolResponse(ex, toolName)` helper
+    that logs the full exception via a newly-injected `ILogger<BiatecMCPGoogle>` and returns a generic,
+    non-identifying message to the MCP tool response — the same pattern R-011's fix already applied to
+    `GoogleDriveRepository`/`DriveController`/`DevicePairingController`. `Algorand.ApiException<...>.Result.Message`
+    passthroughs (legitimate, already user-facing Algorand node error text, e.g. "insufficient balance") were
+    deliberately left untouched, per this entry's own recommended remediation's distinction. No test currently
+    asserts on this behavior (no test previously asserted on the raw message content either, so no regression
+    risk) — a future audit should confirm this by triggering an unexpected exception in each of the three tools
+    and checking the response no longer contains `.NET`-internal exception text.
 
 ### R-019 — Committed `k8s/main/conf/appsettings.json` contains AES key/IV material of unconfirmed live status
 
@@ -508,7 +533,7 @@ no corresponding registry entry.)_
   if (1) cannot rule out the committed value having been live at some point, with a corresponding re-encryption
   migration path (the versioned-format mechanism from R-002 could be extended with a key-id, similar to the
   existing `AesEncryptionHelper.MakeAesId` filename-namespacing mechanism).
-- **Status:** Open.
+- **Status:** Mitigated.
 - **History:**
   - 2026-24-07 — claude-code-ai-review-2: opened at 20%, corresponds to finding G-02 in
     [audit-report-2026-24-07-173793a-claude-code-ai-review-2.md](audit-report-2026-24-07-173793a-claude-code-ai-review-2.md).
@@ -535,6 +560,28 @@ no corresponding registry entry.)_
     entry, **R-023**, rather than folded into this one, so each key ring's status can be tracked and closed
     independently (they are deployed via the same `google-account-main-app-secret` mechanism but are logically
     separate secrets with separate blast radii).
+  - 2026-08-02 — engineering-remediation: revised to Mitigated (from Open). Two of this entry's three
+    recommendations are now implemented: (2) the committed `Key`/`IV` bytes in `k8s/main/conf-mcp/appsettings.json`
+    and `k8s/main/conf-oidc/appsettings.json` were replaced with an unmistakable all-zero placeholder
+    (`AAAA...=`/`AAAA...==`) — no longer visually indistinguishable from real key material; (3) a new
+    `AesKeyRingResolver.EnsureActiveKeyIsNotKnownPlaceholder` check, called from `CloudAccountRepository`'s and
+    `ProviderAccessTokenProtector`'s constructors alongside their existing `GetActiveKey` fail-fast (both still
+    gated to `!environment.IsDevelopment()`, since this repository's own root `appsettings.json` files
+    deliberately reuse the same example key for local development), now throws `InvalidOperationException` at
+    startup if the resolved active key matches either the new all-zero sentinel or the original real-looking
+    value this entry originally flagged — so a deployment whose secret override is missing can no longer start up
+    successfully and silently serve traffic under a known-bad key. Recommendation (1) — out-of-band confirmation
+    that the live production `Secret` actually overrides this value — remains outside what a code change can
+    verify; this is why the entry is revised to **Mitigated** rather than **Closed**, and likelihood is left at
+    20% pending that out-of-band confirmation (the fail-fast fix reduces the *consequence* of a missing override
+    from "silent" to "loud crash-on-startup," which is a meaningful improvement, but does not by itself confirm
+    whether an override is currently configured). Recommendation (4), precautionary rotation, was not performed
+    by this remediation pass. All 4 committed k8s config files (`k8s/main/conf-mcp`, `k8s/main/conf-oidc`,
+    `k8s/stage/conf-mcp-stage`, `k8s/stage/conf-oidc-stage`) were updated identically. A future audit should
+    verify: the fail-fast actually fires against the new placeholder in a non-Development environment (e.g. an
+    integration test instantiating `CloudAccountRepository`/`ProviderAccessTokenProtector` under a
+    `Production`/`Staging` `IHostEnvironment` with the placeholder configured — no such test was added by this
+    pass), and should still pursue the outstanding out-of-band verification against the live `Secret`.
 
 ### R-020 — Vault-backup OAuth flow has no CSRF binding to the browser session completing consent
 
@@ -577,12 +624,36 @@ no corresponding registry entry.)_
   anti-CSRF mechanism (e.g. an `HttpOnly`/`SameSite=Lax` cookie set by `Authorize` and checked in `Callback`),
   independent of the OAuth `state` value, which currently only identifies *which pending backup* this is, not
   *who is authorized to complete it*. See the full remediation options (including a defense-in-depth file-naming
-  change) in the audit report's H-01 finding.
-- **Status:** Open.
+  change) in the audit report's H-01 finding. **Superseded by the 2026-08-02 remediation below** — a same-browser
+  cookie alone would not actually have closed this gap (see that entry for why) and was not the fix implemented.
+- **Status:** Mitigated.
 - **History:**
   - 2026-01-08 — claude-code-ai-review-3: opened at 15%, corresponds to finding H-01 in
     [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
     The vault-backup feature is new since the second audit; this is the first audit to review it.
+  - 2026-08-02 — engineering-remediation: revised to Mitigated. On reflection, a plain anti-CSRF cookie (this
+    entry's originally-recommended fix) would **not** actually have closed this gap: the victim's browser
+    genuinely is the same browser completing both `Authorize` and `Callback` in the attack scenario (it is a
+    normal, single-browser redirect chain the victim initiates by clicking one link), so "same browser" is not
+    the property that was missing — "the right account" is. Instead, `VaultBackupController.Authorize` and
+    `Callback` now both call a new `EnsureBrowserOwnsBackup` check that requires the browser's *ambient Biatec
+    cookie session* (the same cookie-authentication infrastructure `JwtIssuerController`'s `/authorize` already
+    relies on for `User.Identity.IsAuthenticated`) to be signed in with an email matching the pending backup's
+    own `Email` — refusing with a plain-language error page otherwise, before ever redirecting to the target
+    provider's consent screen. An unrelated victim, who by construction of this attack has never signed in to
+    Biatec as the attacker's account, has no ambient session satisfying this check and is refused immediately.
+    `Callback` re-checks the same condition as defense in depth, in case the ambient session changed between the
+    two browser round trips. Revised to **Mitigated** rather than **Closed** because this fix depends on the
+    completing browser actually holding a live Biatec cookie session for the correct account at the time it
+    visits `Authorize` (e.g., from having recently completed the RP's own `/authorize` sign-in in the same
+    browser) — a legitimate user whose Biatec cookie has since expired would now see a "must be signed in" error
+    instead of completing their own legitimate backup, which is a UX/product question (should `Authorize`
+    instead redirect through a fresh Biatec sign-in first?) not resolved by this pass. No automated test was
+    added for `EnsureBrowserOwnsBackup` (no existing `VaultBackupControllerTests.cs` test file exists at all —
+    only `VaultBackupServiceTests.cs`, which this change does not touch) — a future audit should add a
+    controller-level test asserting a mismatched/absent ambient session is refused before any redirect to the
+    target provider, and should re-attempt the exact H-01 reproduction steps from the third audit's report to
+    confirm the attack no longer succeeds.
 
 ### R-021 — No optimistic-concurrency control on seed-vault writes; concurrent mutations can silently lose a seed creation or a primary-seed switch
 
@@ -616,12 +687,32 @@ no corresponding registry entry.)_
   (e.g. Microsoft Graph's native `If-Match`/`eTag` support on `PUT`; a read-current-hash-and-compare pattern for
   Google Drive) so a changed-since-read file fails the mutation with a caller-visible, retryable error instead of
   silently being overwritten.
-- **Status:** Open.
+- **Status:** Mitigated.
 - **History:**
   - 2026-01-08 — claude-code-ai-review-3: opened at 8%, corresponds to finding M-01 in
     [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
     The multi-seed vault (and its read-modify-write pattern) is new since the second audit; this is the first
     audit to review it.
+  - 2026-08-02 — engineering-remediation: revised to Mitigated. `CreateSeedAsync`, `SwitchPrimarySeedAsync`, and
+    the first-seed auto-creation branch of `LoadVaultEnsuringAtLeastOneSeedAsync` now each capture the active
+    file's raw (still-encrypted) bytes immediately after their own read, and re-download and compare those bytes
+    immediately before their write, via a new `CloudAccountRepository.SaveVaultWithConcurrencyCheckAsync`
+    helper; a mismatch throws a new `VaultConcurrencyConflictException` instead of silently overwriting, which
+    `WalletController.CreateSeed`/`SwitchPrimarySeed` now catch and surface as `409 Conflict` (`vault_concurrency_
+    conflict`) so the caller can retry against current state. This is a **best-effort check-then-act
+    re-verification, not a provider-enforced atomic compare-and-swap** (neither `GoogleCloudStorageProvider` nor
+    `MicrosoftCloudStorageProvider` was changed to use a native conditional write, e.g. Graph's `If-Match`/`eTag`)
+    — it narrows the race window from "the entire request" down to "the gap between the re-check and the
+    upload that immediately follows it," which is why this is revised to **Mitigated** rather than **Closed**.
+    The legacy-format migration write inside `LoadVaultOrEmptyAsync` was deliberately left unprotected (out of
+    scope for this pass) — it is a one-time, largely idempotent migration (a race there produces two
+    functionally-equivalent single-seed vaults from the same original mnemonic, not the seed-loss/lost-switch
+    failure mode this entry describes), unlike the three protected call sites. All 107 `BiatecMCPTests` still
+    pass with this change (the extra `TryDownloadAsync` round trips did not break any existing test double's
+    expectations), but no new test specifically exercises the conflict path itself (i.e., asserting that a
+    changed-underlying-file causes `VaultConcurrencyConflictException`/409) — a future audit should add one and
+    should evaluate whether a native provider-side conditional write is worth the added complexity given the
+    residual TOCTOU window this fix does not eliminate.
 
 ### R-022 — Known moderate-severity advisory (GHSA-59j7-ghrg-fj52) in pinned `Microsoft.IdentityModel.*`/`System.IdentityModel.Tokens.Jwt` 5.5.0 packages
 
@@ -649,10 +740,17 @@ no corresponding registry entry.)_
   `Microsoft.IdentityModel.JsonWebTokens`/`Microsoft.IdentityModel.Tokens`, re-run the full test suite, and add a
   recurring dependency-vulnerability scan (e.g. `dotnet list package --vulnerable` in CI) so future advisories are
   caught automatically rather than depending on an auditor noticing build output.
-- **Status:** Open.
+- **Status:** Closed (mitigated).
 - **History:**
   - 2026-01-08 — claude-code-ai-review-3: opened at 10%, corresponds to finding M-02 in
     [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+  - 2026-08-02 — engineering-remediation: closed. `BiatecSelfCustodyCore.csproj` now explicitly pins
+    `Microsoft.IdentityModel.JsonWebTokens`, `Microsoft.IdentityModel.Protocols.OpenIdConnect`,
+    `Microsoft.IdentityModel.Tokens`, and `System.IdentityModel.Tokens.Jwt` to `8.21.0` — the same version
+    `BiatecOIDC.csproj` already referenced directly — overriding the vulnerable `5.5.0` transitively pulled in
+    by `Google.Apis.Auth`/`Google.Apis.Auth.AspNetCore3` 1.75.0. Confirmed via `dotnet build Biatec.slnx`: the
+    `NU1902` advisory warnings for `GHSA-59j7-ghrg-fj52` are no longer emitted anywhere in the solution, and all
+    377 existing tests (107 + 270) still pass, evidencing no breaking API changes from the version bump.
 
 ### R-023 — Committed `ProviderTokenProtection` key/IV of unconfirmed live status (paired with R-019)
 
@@ -681,16 +779,28 @@ no corresponding registry entry.)_
   configuration precedence.
 - **Recommended further mitigation:** Same remediation priority order as R-019, applied to this key ring in
   parallel (both are deployed via the same secret, so verification/rotation work should cover both together): (1)
-  out-of-band verification against the live `Secret`; (2) the `KeyId` relabel is already done here; (3) a startup
-  fail-fast check against the known-placeholder sentinel (not yet implemented for either key ring); (4)
+  out-of-band verification against the live `Secret` — the only item still outstanding, see History; (2)/(3) an
+  unmistakable placeholder and a startup fail-fast check against it are now implemented for both key rings; (4)
   precautionary rotation if (1) cannot rule out the committed value having been live.
-- **Status:** Open.
+- **Status:** Mitigated.
 - **History:**
   - 2026-01-08 — claude-code-ai-review-3: opened at 20%, corresponds to finding P-01 in
     [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
     The `ProviderTokenProtection` key ring is new since the second audit; this is the first audit to review it.
     Opened as a paired entry alongside R-019 rather than folded into it, so each key ring's remediation can be
     tracked and closed independently even though they share the same deployment mechanism and remediation shape.
+  - 2026-08-02 — engineering-remediation: revised to Mitigated (from Open), in lockstep with R-019's identical
+    revision (both key rings share the same fix, applied in the same commit series). The committed `Key`/`IV` in
+    `k8s/main/conf-oidc/appsettings.json`'s `ProviderTokenProtection` section (and the equivalent stage file,
+    `k8s/stage/conf-oidc-stage/appsettings.json`) were replaced with the same unmistakable all-zero placeholder
+    used for `AesOptions`; `AesKeyRingResolver.EnsureActiveKeyIsNotKnownPlaceholder` (shared by both key rings)
+    is now also called from `ProviderAccessTokenProtector`'s constructor alongside its existing `GetActiveKey`
+    fail-fast, so a missing secret override for *this* key ring now also fails startup loudly outside
+    Development instead of silently serving traffic under the known-bad key. As with R-019, recommendation (1)
+    — out-of-band confirmation against the live `Secret` — remains outside what this remediation pass could
+    perform, which is why this is Mitigated rather than Closed; likelihood is left unchanged at 20% for the same
+    reason. See R-019's 2026-08-02 history entry for the full mechanism (identical for both key rings) and the
+    same outstanding future-audit verification recommendation (a non-Development fail-fast integration test).
 
 ## Accepted / unmitigable risks
 
