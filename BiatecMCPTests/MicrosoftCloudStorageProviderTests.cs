@@ -142,5 +142,33 @@ namespace BiatecMCPTests
         {
             Assert.That(_provider.Name, Is.EqualTo("Microsoft"));
         }
+
+        [Test]
+        public async Task RefreshAccessTokenAsync_Success_ReturnsNewAccessTokenAndRotatedRefreshToken()
+        {
+            // Entra ID always rotates the refresh token on use - the caller must re-cache the new one.
+            SetupResponse(HttpStatusCode.OK, System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+            {
+                access_token = "new-access-token",
+                refresh_token = "rotated-refresh-token",
+                expires_in = 3600
+            })));
+
+            var result = await _provider.RefreshAccessTokenAsync("some-refresh-token");
+
+            Assert.That(result, Is.Not.Null);
+            Assert.That(result!.AccessToken, Is.EqualTo("new-access-token"));
+            Assert.That(result.RefreshToken, Is.EqualTo("rotated-refresh-token"));
+        }
+
+        [Test]
+        public async Task RefreshAccessTokenAsync_RevokedRefreshToken_ReturnsNull()
+        {
+            SetupResponse(HttpStatusCode.BadRequest, System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { error = "invalid_grant" })));
+
+            var result = await _provider.RefreshAccessTokenAsync("revoked-refresh-token");
+
+            Assert.That(result, Is.Null);
+        }
     }
 }

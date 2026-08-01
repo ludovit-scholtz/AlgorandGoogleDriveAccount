@@ -4,6 +4,7 @@ using BiatecOIDC.Helper;
 using BiatecOIDC.Model;
 using BiatecOIDC.Swagger;
 using BiatecSelfCustodyCore.Model;
+using BiatecSelfCustodyCore.Providers;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -41,6 +42,7 @@ namespace BiatecOIDC.Controllers
         private readonly ISpendingLimitService _spendingLimitService;
         private readonly IExchangeRateService _exchangeRateService;
         private readonly IProviderAccessTokenProtector _providerTokenProtector;
+        private readonly ICloudStorageProviderCatalog _providerCatalog;
         private readonly ILogger<WalletController> _logger;
 
         public WalletController(
@@ -49,6 +51,7 @@ namespace BiatecOIDC.Controllers
             ISpendingLimitService spendingLimitService,
             IExchangeRateService exchangeRateService,
             IProviderAccessTokenProtector providerTokenProtector,
+            ICloudStorageProviderCatalog providerCatalog,
             ILogger<WalletController> logger)
         {
             _jwtIssuerService = jwtIssuerService;
@@ -56,6 +59,7 @@ namespace BiatecOIDC.Controllers
             _spendingLimitService = spendingLimitService;
             _exchangeRateService = exchangeRateService;
             _providerTokenProtector = providerTokenProtector;
+            _providerCatalog = providerCatalog;
             _logger = logger;
         }
 
@@ -103,7 +107,8 @@ namespace BiatecOIDC.Controllers
 
             try
             {
-                var signed = await _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, accessToken);
+                var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token));
                 return Ok(new SignTransactionGroupResponse
                 {
                     SignedTransactions = signed.Select(Convert.ToBase64String).ToList()
@@ -157,7 +162,8 @@ namespace BiatecOIDC.Controllers
 
             try
             {
-                var settings = await _spendingLimitService.GetLimitsAsync(email, provider, resolvedAccessToken);
+                var settings = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, resolvedAccessToken,
+                    token => _spendingLimitService.GetLimitsAsync(email, provider, token));
                 return Ok(ToResponse(settings));
             }
             catch (UnauthorizedAccessException ex)
@@ -197,7 +203,8 @@ namespace BiatecOIDC.Controllers
 
             try
             {
-                await _spendingLimitService.SetLimitsAsync(email, provider, accessToken, settings);
+                await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings));
             }
             catch (UnsupportedCurrencyException ex)
             {
@@ -259,6 +266,86 @@ namespace BiatecOIDC.Controllers
         {
             var cachedProtectedToken = principal.FindFirstValue(ProviderAccessTokenProtector.ClaimType);
             return _providerTokenProtector.Unprotect(cachedProtectedToken, email);
+        }
+
+        /// <summary>
+        /// Runs <paramref name="action"/> with <paramref name="accessToken"/>; if it fails because the
+        /// cached provider access token has gone stale mid-lifetime of an otherwise still-valid Biatec
+        /// token (<see cref="UnauthorizedAccessException"/>, e.g. "Google Drive access denied... may be
+        /// expired"), renews it once from the bearer token's cached <c>provider_refresh_token</c> claim
+        /// (see <see cref="ProviderAccessTokenProtector.RefreshClaimType"/>) and retries exactly once. The
+        /// renewed token is used for this request only - it can't be written back into the caller's
+        /// already-issued, signed bearer token, so the next call still resolves the original (stale)
+        /// cached access token; the durable fix is <c>JwtIssuerService.RenewProviderTokenAsync</c>, which
+        /// refreshes it every time the caller renews its Biatec refresh token. If there's no cached
+        /// provider refresh token (or renewing it fails), the original exception is rethrown unchanged -
+        /// no behavior change for callers who signed in before this existed.
+        /// </summary>
+        private async Task<T> ExecuteWithProviderTokenRefreshAsync<T>(
+            ClaimsPrincipal principal,
+            string email,
+            string provider,
+            string? accessToken,
+            Func<string?, Task<T>> action)
+        {
+            try
+            {
+                return await action(accessToken);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                var refreshedToken = await TryRefreshProviderAccessTokenAsync(principal, email, provider);
+                if (string.IsNullOrWhiteSpace(refreshedToken))
+                {
+                    throw;
+                }
+
+                return await action(refreshedToken);
+            }
+        }
+
+        /// <summary>Same retry-once behavior as the generic overload, for actions with no return value.</summary>
+        private async Task ExecuteWithProviderTokenRefreshAsync(
+            ClaimsPrincipal principal,
+            string email,
+            string provider,
+            string? accessToken,
+            Func<string?, Task> action)
+        {
+            try
+            {
+                await action(accessToken);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                var refreshedToken = await TryRefreshProviderAccessTokenAsync(principal, email, provider);
+                if (string.IsNullOrWhiteSpace(refreshedToken))
+                {
+                    throw;
+                }
+
+                await action(refreshedToken);
+            }
+        }
+
+        /// <summary>
+        /// Exchanges the bearer token's cached <c>provider_refresh_token</c> claim (if any) for a fresh
+        /// provider access token. Returns <c>null</c> - never throws - if there's no cached refresh token,
+        /// it can't be decrypted, or the provider rejects it (revoked/expired); callers treat that as "no
+        /// renewal possible" and let the original error surface.
+        /// </summary>
+        private async Task<string?> TryRefreshProviderAccessTokenAsync(ClaimsPrincipal principal, string email, string provider)
+        {
+            var cachedProtectedRefreshToken = principal.FindFirstValue(ProviderAccessTokenProtector.RefreshClaimType);
+            var providerRefreshToken = _providerTokenProtector.Unprotect(cachedProtectedRefreshToken, email);
+            if (string.IsNullOrWhiteSpace(providerRefreshToken))
+            {
+                return null;
+            }
+
+            var storageProvider = _providerCatalog.Resolve(provider);
+            var refreshed = await storageProvider.RefreshAccessTokenAsync(providerRefreshToken);
+            return refreshed?.AccessToken;
         }
 
         private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings) => new()

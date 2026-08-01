@@ -18,5 +18,7 @@ namespace BiatecMCPTests
         public Task UploadAsync(string fileName, byte[] content, string accessToken) => Task.CompletedTask;
         public Task<bool> HasWriteAccessAsync(string accessToken) => Task.FromResult(true);
         public Task<string?> GetAmbientAccessTokenAsync() => Task.FromResult<string?>(null);
+        public Task<string?> GetAmbientRefreshTokenAsync() => Task.FromResult<string?>(null);
+        public Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken) => Task.FromResult<ProviderTokenRefreshResult?>(null);
     }
 }

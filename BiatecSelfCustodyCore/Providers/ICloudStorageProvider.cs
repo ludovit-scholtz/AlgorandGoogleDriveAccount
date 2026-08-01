@@ -59,5 +59,25 @@ namespace BiatecSelfCustodyCore.Providers
         /// there isn't one.
         /// </summary>
         Task<string?> GetAmbientAccessTokenAsync();
+
+        /// <summary>
+        /// The current signed-in user's long-lived refresh token for this provider, resolved from the
+        /// ambient <c>HttpContext</c> the same way as <see cref="GetAmbientAccessTokenAsync"/>. Used by
+        /// <c>BiatecOIDC</c>'s wallet API to cache a way to renew the provider access token embedded in an
+        /// issued Biatec token (see <c>ProviderAccessTokenProtector</c>'s <c>RefreshClaimType</c> and
+        /// <c>OIDC_INTEGRATION_GUIDE.md</c>'s "Provider access token caching" section) once it expires -
+        /// without that, a caller would have to go through a fresh interactive sign-in every time the
+        /// short-lived provider access token expires, even while their Biatec token is still valid. Returns
+        /// <c>null</c> if there isn't one (no ambient session, or the provider never issued one).
+        /// </summary>
+        Task<string?> GetAmbientRefreshTokenAsync();
+
+        /// <summary>
+        /// Exchanges <paramref name="refreshToken"/> for a fresh access token via this provider's own OAuth
+        /// token endpoint. Returns <c>null</c> (never throws) if the refresh token is invalid, expired, or
+        /// revoked, or if the request otherwise fails - callers should treat that the same as "no token
+        /// available" and fall back to requiring a fresh interactive sign-in.
+        /// </summary>
+        Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken);
     }
 }

@@ -3,6 +3,7 @@ using System.Text.Json;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
 using Google.Apis.Auth.AspNetCore3;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -37,6 +38,7 @@ namespace BiatecMCPTests
 
             _provider = new GoogleCloudStorageProvider(
                 _mockGoogleAuth.Object,
+                new Mock<IHttpContextAccessor>().Object,
                 mockConfig.Object,
                 mockGoogleServiceConfig.Object,
                 httpClient,
@@ -99,6 +101,29 @@ namespace BiatecMCPTests
                 .ThrowsAsync(new InvalidOperationException("Cannot get credential when not authenticated."));
 
             var result = await _provider.GetAmbientAccessTokenAsync();
+
+            Assert.That(result, Is.Null);
+        }
+
+        [Test]
+        public async Task RefreshAccessTokenAsync_Success_ReturnsNewAccessTokenAndNullRefreshToken()
+        {
+            // Google's refresh grant normally doesn't return a new refresh_token - the original stays valid.
+            SetupResponse(HttpStatusCode.OK, JsonSerializer.Serialize(new { access_token = "new-access-token", expires_in = 3600 }));
+
+            var result = await _provider.RefreshAccessTokenAsync("some-refresh-token");
+
+            Assert.That(result, Is.Not.Null);
+            Assert.That(result!.AccessToken, Is.EqualTo("new-access-token"));
+            Assert.That(result.RefreshToken, Is.Null);
+        }
+
+        [Test]
+        public async Task RefreshAccessTokenAsync_RevokedRefreshToken_ReturnsNull()
+        {
+            SetupResponse(HttpStatusCode.BadRequest, JsonSerializer.Serialize(new { error = "invalid_grant" }));
+
+            var result = await _provider.RefreshAccessTokenAsync("revoked-refresh-token");
 
             Assert.That(result, Is.Null);
         }

@@ -11,11 +11,19 @@ namespace BiatecOIDCTests
     {
         private readonly Dictionary<string, byte[]> _files = new();
         private readonly string? _ambientAccessToken;
+        private readonly string? _ambientRefreshToken;
+        private readonly Func<string, ProviderTokenRefreshResult?>? _refreshAccessToken;
 
-        public FakeCloudStorageProvider(string name = "Fake", string? ambientAccessToken = "ambient-token")
+        public FakeCloudStorageProvider(
+            string name = "Fake",
+            string? ambientAccessToken = "ambient-token",
+            string? ambientRefreshToken = null,
+            Func<string, ProviderTokenRefreshResult?>? refreshAccessToken = null)
         {
             Name = name;
             _ambientAccessToken = ambientAccessToken;
+            _ambientRefreshToken = ambientRefreshToken;
+            _refreshAccessToken = refreshAccessToken;
         }
 
         public string Name { get; }
@@ -37,5 +45,10 @@ namespace BiatecOIDCTests
         public Task<bool> HasWriteAccessAsync(string accessToken) => Task.FromResult(true);
 
         public Task<string?> GetAmbientAccessTokenAsync() => Task.FromResult(_ambientAccessToken);
+
+        public Task<string?> GetAmbientRefreshTokenAsync() => Task.FromResult(_ambientRefreshToken);
+
+        public Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken) =>
+            Task.FromResult(_refreshAccessToken?.Invoke(refreshToken));
     }
 }

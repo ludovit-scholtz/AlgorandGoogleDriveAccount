@@ -30,7 +30,13 @@ namespace BiatecOIDC.BusinessLogic
         /// token, and callers fall back to supplying their own explicitly. See
         /// <c>OIDC_INTEGRATION_GUIDE.md</c>'s "Provider access token caching" section.
         /// </param>
-        Task<(bool Success, string? Error, string? ErrorDescription, Dictionary<string, string>? Response)> CreateAuthorizeResponseAsync(OidcAuthorizeRequest request, JwtIssuerClientConfiguration client, ClaimsPrincipal user, string? providerAccessToken);
+        /// <param name="providerRefreshToken">
+        /// The caller's current Google/Microsoft refresh token, if available (resolved from the ambient
+        /// cookie session the same way as <paramref name="providerAccessToken"/>) - encrypted and cached
+        /// the same way, so <c>providerAccessToken</c> can be renewed once it expires instead of requiring
+        /// a fresh interactive sign-in every time. Pass <c>null</c> if unavailable.
+        /// </param>
+        Task<(bool Success, string? Error, string? ErrorDescription, Dictionary<string, string>? Response)> CreateAuthorizeResponseAsync(OidcAuthorizeRequest request, JwtIssuerClientConfiguration client, ClaimsPrincipal user, string? providerAccessToken, string? providerRefreshToken);
         Task<(bool Success, int StatusCode, string? Error, string? ErrorDescription, OidcTokenResponse? Response)> ExchangeTokenAsync(OidcTokenRequest request, string? basicAuthHeader);
 
         (bool IsValid, ClaimsPrincipal? Principal, IDictionary<string, object>? Claims, string? Error) ValidateBearerAccessToken(string token);

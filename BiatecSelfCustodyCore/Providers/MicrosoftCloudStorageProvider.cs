@@ -58,6 +58,65 @@ namespace BiatecSelfCustodyCore.Providers
             return await httpContext.GetTokenAsync(ProviderName, "access_token");
         }
 
+        public async Task<string?> GetAmbientRefreshTokenAsync()
+        {
+            var httpContext = _httpContextAccessor.HttpContext;
+            if (httpContext == null)
+            {
+                return null;
+            }
+
+            return await httpContext.GetTokenAsync(ProviderName, "refresh_token");
+        }
+
+        public async Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken)
+        {
+            try
+            {
+                var tokenEndpoint = $"https://login.microsoftonline.com/{_entraConfig.CurrentValue.TenantId}/oauth2/v2.0/token";
+                using var request = new HttpRequestMessage(HttpMethod.Post, tokenEndpoint)
+                {
+                    Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                    {
+                        ["client_id"] = _entraConfig.CurrentValue.ClientId,
+                        ["client_secret"] = _entraConfig.CurrentValue.ClientSecret,
+                        ["refresh_token"] = refreshToken,
+                        ["grant_type"] = "refresh_token",
+                        ["scope"] = $"offline_access {RequiredScope}"
+                    })
+                };
+
+                using var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    // Most commonly invalid_grant - the refresh token was revoked or has expired. Treated
+                    // as "no renewal available", same as never having had one - the caller falls back to
+                    // requiring a fresh interactive sign-in.
+                    return null;
+                }
+
+                using var payload = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                if (!payload.RootElement.TryGetProperty("access_token", out var accessTokenProperty))
+                {
+                    return null;
+                }
+
+                // Entra ID rotates the refresh token on every use - the one just spent is no longer valid,
+                // so the caller must re-cache whatever comes back here (or, if absent, treat renewal as a
+                // one-time-only affair for this session).
+                var rotatedRefreshToken = payload.RootElement.TryGetProperty("refresh_token", out var refreshTokenProperty)
+                    ? refreshTokenProperty.GetString()
+                    : null;
+
+                return new ProviderTokenRefreshResult(accessTokenProperty.GetString()!, rotatedRefreshToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to refresh Microsoft access token using the cached refresh token.");
+                return null;
+            }
+        }
+
         public async Task<bool> HasWriteAccessAsync(string accessToken)
         {
             try

@@ -55,7 +55,7 @@ namespace BiatecOIDCTests
                 .Setup(service => service.StorePendingAuthorizeRequestAsync(It.IsAny<OidcAuthorizeRequest>()))
                 .ReturnsAsync("request-id");
             jwtIssuerService
-                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>()))
+                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>(), It.IsAny<string?>()))
                 .ReturnsAsync((true, null, null, new Dictionary<string, string>
                 {
                     ["code"] = "issued-code",
@@ -285,7 +285,7 @@ namespace BiatecOIDCTests
                 .Setup(service => service.GetPendingAuthorizeRequestAsync("request-id"))
                 .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, RedirectUri = RedirectUri, ResponseMode = "query", State = "state-1", Scope = "openid profile email" });
             jwtIssuerService
-                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>()))
+                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>(), It.IsAny<string?>()))
                 .ReturnsAsync((true, null, null, new Dictionary<string, string>
                 {
                     ["code"] = "issued-code",
@@ -308,14 +308,14 @@ namespace BiatecOIDCTests
                 .Setup(service => service.GetPendingAuthorizeRequestAsync("request-id"))
                 .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, RedirectUri = RedirectUri, ResponseMode = "query", State = "state-1", Scope = "openid profile email" });
             jwtIssuerService
-                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>()))
+                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>(), It.IsAny<string?>()))
                 .ReturnsAsync((true, null, null, new Dictionary<string, string> { ["code"] = "issued-code", ["state"] = "state-1" }));
             var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true, providerAccessToken: "live-google-token");
 
             await controller.AuthorizeConsentContinue("request-id");
 
             jwtIssuerService.Verify(service => service.CreateAuthorizeResponseAsync(
-                It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), "live-google-token"), Times.Once);
+                It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), "live-google-token", It.IsAny<string?>()), Times.Once);
         }
 
         [Test]
@@ -326,14 +326,14 @@ namespace BiatecOIDCTests
                 .Setup(service => service.GetPendingAuthorizeRequestAsync("request-id"))
                 .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, RedirectUri = RedirectUri, ResponseMode = "query", State = "state-1", Scope = "openid profile email" });
             jwtIssuerService
-                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>()))
+                .Setup(service => service.CreateAuthorizeResponseAsync(It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<string?>(), It.IsAny<string?>()))
                 .ReturnsAsync((true, null, null, new Dictionary<string, string> { ["code"] = "issued-code", ["state"] = "state-1" }));
             var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true);
 
             await controller.AuthorizeConsentContinue("request-id");
 
             jwtIssuerService.Verify(service => service.CreateAuthorizeResponseAsync(
-                It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), null), Times.Once);
+                It.IsAny<OidcAuthorizeRequest>(), It.IsAny<JwtIssuerClientConfiguration>(), It.IsAny<ClaimsPrincipal>(), null, It.IsAny<string?>()), Times.Once);
         }
 
         [Test]
@@ -486,10 +486,12 @@ namespace BiatecOIDCTests
         private sealed class FakeCloudStorageProvider : ICloudStorageProvider
         {
             private readonly string? _ambientAccessToken;
+            private readonly string? _ambientRefreshToken;
 
-            public FakeCloudStorageProvider(string? ambientAccessToken = null)
+            public FakeCloudStorageProvider(string? ambientAccessToken = null, string? ambientRefreshToken = null)
             {
                 _ambientAccessToken = ambientAccessToken;
+                _ambientRefreshToken = ambientRefreshToken;
             }
 
             public string Name => "Google";
@@ -500,6 +502,8 @@ namespace BiatecOIDCTests
             public Task UploadAsync(string fileName, byte[] content, string accessToken) => Task.CompletedTask;
             public Task<bool> HasWriteAccessAsync(string accessToken) => Task.FromResult(true);
             public Task<string?> GetAmbientAccessTokenAsync() => Task.FromResult(_ambientAccessToken);
+            public Task<string?> GetAmbientRefreshTokenAsync() => Task.FromResult(_ambientRefreshToken);
+            public Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken) => Task.FromResult<ProviderTokenRefreshResult?>(null);
         }
 
         private sealed class InMemoryDistributedCache : IDistributedCache

@@ -7,6 +7,7 @@ using BiatecOIDC.Helper;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
+using BiatecSelfCustodyCore.Providers;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
@@ -23,6 +24,7 @@ namespace BiatecOIDC.BusinessLogic
         private readonly IOptionsMonitor<JwtIssuerConfiguration> _config;
         private readonly IDriveService _driveService;
         private readonly IProviderAccessTokenProtector _providerTokenProtector;
+        private readonly ICloudStorageProviderCatalog _providerCatalog;
         private readonly IHostEnvironment _environment;
         private readonly ILogger<JwtIssuerService> _logger;
         private readonly RSA _rsa;
@@ -38,6 +40,7 @@ namespace BiatecOIDC.BusinessLogic
             IOptionsMonitor<JwtIssuerConfiguration> config,
             IDriveService driveService,
             IProviderAccessTokenProtector providerTokenProtector,
+            ICloudStorageProviderCatalog providerCatalog,
             IHostEnvironment environment,
             ILogger<JwtIssuerService> logger)
         {
@@ -45,6 +48,7 @@ namespace BiatecOIDC.BusinessLogic
             _config = config;
             _driveService = driveService;
             _providerTokenProtector = providerTokenProtector;
+            _providerCatalog = providerCatalog;
             _environment = environment;
             _logger = logger;
 
@@ -349,7 +353,8 @@ namespace BiatecOIDC.BusinessLogic
             OidcAuthorizeRequest request,
             JwtIssuerClientConfiguration client,
             ClaimsPrincipal user,
-            string? providerAccessToken)
+            string? providerAccessToken,
+            string? providerRefreshToken)
         {
             var email = user.FindFirst(ClaimTypes.Email)?.Value;
             if (string.IsNullOrWhiteSpace(email))
@@ -395,6 +400,13 @@ namespace BiatecOIDC.BusinessLogic
                 ? null
                 : _providerTokenProtector.Protect(providerAccessToken, email);
 
+            // Same reasoning/lifecycle as protectedProviderAccessToken above - captured now because this
+            // is the only point with an ambient cookie session to pull it from. See RefreshClaimType and
+            // OIDC_INTEGRATION_GUIDE.md's "Provider access token caching" section.
+            var protectedProviderRefreshToken = string.IsNullOrWhiteSpace(providerRefreshToken)
+                ? null
+                : _providerTokenProtector.Protect(providerRefreshToken, email);
+
             var code = GenerateOpaqueToken(48);
             var codeData = new AuthorizationCodeRecord
             {
@@ -411,6 +423,7 @@ namespace BiatecOIDC.BusinessLogic
                 CodeChallenge = request.CodeChallenge,
                 CodeChallengeMethod = request.CodeChallengeMethod,
                 ProtectedProviderAccessToken = protectedProviderAccessToken,
+                ProtectedProviderRefreshToken = protectedProviderRefreshToken,
                 CreatedUtc = DateTimeOffset.UtcNow,
                 ExpiresUtc = DateTimeOffset.UtcNow.AddSeconds(Current.AuthorizationCodeLifetimeSeconds)
             };
@@ -489,6 +502,7 @@ namespace BiatecOIDC.BusinessLogic
                     codeRecord.Nonce,
                     codeRecord.Scope,
                     codeRecord.ProtectedProviderAccessToken,
+                    codeRecord.ProtectedProviderRefreshToken,
                     includeRefreshToken: true);
 
                 return (true, 200, null, null, response);
@@ -524,6 +538,9 @@ namespace BiatecOIDC.BusinessLogic
                     return (false, 400, "invalid_grant", "Refresh token expired.", null);
                 }
 
+                var (protectedProviderAccessToken, protectedProviderRefreshToken) =
+                    await RenewProviderTokenAsync(refreshRecord.Provider, refreshRecord.Email, refreshRecord.ProtectedProviderAccessToken, refreshRecord.ProtectedProviderRefreshToken);
+
                 var response = await BuildTokenResponseAsync(
                     client.ClientId,
                     refreshRecord.Subject,
@@ -533,7 +550,8 @@ namespace BiatecOIDC.BusinessLogic
                     refreshRecord.ShortIdentity,
                     nonce: null,
                     refreshRecord.Scope,
-                    refreshRecord.ProtectedProviderAccessToken,
+                    protectedProviderAccessToken,
+                    protectedProviderRefreshToken,
                     includeRefreshToken: true);
 
                 return (true, 200, null, null, response);
@@ -638,6 +656,68 @@ namespace BiatecOIDC.BusinessLogic
             return await Task.FromResult(response);
         }
 
+        /// <summary>
+        /// Called on every <c>grant_type=refresh_token</c> exchange - a server-to-server call with no
+        /// ambient cookie session, so the only way to keep the cached provider (Google/Microsoft) access
+        /// token fresh is to spend the cached provider *refresh* token, if one was captured at sign-in
+        /// (see <see cref="ProviderAccessTokenProtector.RefreshClaimType"/>). This is what makes the
+        /// wallet API keep working indefinitely across Biatec token renewals instead of silently carrying
+        /// forward a provider access token that will eventually expire and start failing (the bug this
+        /// was added to fix - see OIDC_INTEGRATION_GUIDE.md's "Provider access token caching" section).
+        /// </summary>
+        /// <returns>
+        /// The (possibly renewed) protected access/refresh token pair to carry onto the new access/refresh
+        /// tokens. Falls back to the inputs unchanged if there's no cached provider refresh token, or the
+        /// renewal attempt fails (revoked/expired refresh token) - exactly the previous behavior, so a
+        /// caller with no provider refresh token cached (e.g. one that signed in before this existed) sees
+        /// no change: they still need a fresh interactive sign-in once the provider access token expires.
+        /// </returns>
+        private async Task<(string? ProtectedProviderAccessToken, string? ProtectedProviderRefreshToken)> RenewProviderTokenAsync(
+            string? provider,
+            string email,
+            string? protectedProviderAccessToken,
+            string? protectedProviderRefreshToken)
+        {
+            if (string.IsNullOrWhiteSpace(protectedProviderRefreshToken))
+            {
+                return (protectedProviderAccessToken, protectedProviderRefreshToken);
+            }
+
+            var providerRefreshToken = _providerTokenProtector.Unprotect(protectedProviderRefreshToken, email);
+            if (string.IsNullOrWhiteSpace(providerRefreshToken))
+            {
+                return (protectedProviderAccessToken, protectedProviderRefreshToken);
+            }
+
+            try
+            {
+                var storageProvider = _providerCatalog.Resolve(provider);
+                var renewed = await storageProvider.RefreshAccessTokenAsync(providerRefreshToken);
+                if (renewed == null)
+                {
+                    // Revoked/expired provider refresh token - fall back to carrying the old (possibly
+                    // already stale) access token forward unchanged, same as before this existed.
+                    return (protectedProviderAccessToken, protectedProviderRefreshToken);
+                }
+
+                var renewedProtectedAccessToken = _providerTokenProtector.Protect(renewed.AccessToken, email);
+
+                // Google normally doesn't rotate the refresh token on renewal; Microsoft Entra ID always
+                // does. Only replace the cached refresh token when a new one actually came back, otherwise
+                // keep the one that just proved itself valid.
+                var renewedProtectedRefreshToken = string.IsNullOrWhiteSpace(renewed.RefreshToken)
+                    ? protectedProviderRefreshToken
+                    : _providerTokenProtector.Protect(renewed.RefreshToken, email);
+
+                return (renewedProtectedAccessToken, renewedProtectedRefreshToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Unable to renew the cached provider access token during a Biatec token refresh; carrying the previous one forward unchanged.");
+                return (protectedProviderAccessToken, protectedProviderRefreshToken);
+            }
+        }
+
         private async Task<OidcTokenResponse> BuildTokenResponseAsync(
             string clientId,
             string subject,
@@ -648,9 +728,10 @@ namespace BiatecOIDC.BusinessLogic
             string? nonce,
             string scope,
             string? protectedProviderAccessToken,
+            string? protectedProviderRefreshToken,
             bool includeRefreshToken)
         {
-            var accessToken = CreateAccessToken(subject, clientId, email, algorandAddress, provider, shortIdentity, scope, protectedProviderAccessToken);
+            var accessToken = CreateAccessToken(subject, clientId, email, algorandAddress, provider, shortIdentity, scope, protectedProviderAccessToken, protectedProviderRefreshToken);
             var idToken = CreateIdToken(subject, clientId, email, algorandAddress, shortIdentity, nonce);
 
             string? refreshToken = null;
@@ -667,12 +748,14 @@ namespace BiatecOIDC.BusinessLogic
                     Provider = provider,
                     ShortIdentity = shortIdentity,
                     Scope = scope,
-                    // Carried forward unchanged - a refresh_token grant is a server-to-server call with no
-                    // ambient cookie session to pull a fresher provider token from (see
-                    // OIDC_INTEGRATION_GUIDE.md's "Provider access token caching" section). It naturally
-                    // stops working once the underlying Google/Microsoft token itself expires; the caller
-                    // then needs a fresh interactive sign-in to re-cache one.
+                    // Renewed (via RenewProviderTokenAsync) whenever a cached provider refresh token is
+                    // available - see ProtectedProviderRefreshToken below and OIDC_INTEGRATION_GUIDE.md's
+                    // "Provider access token caching" section. Falls back to being carried forward
+                    // unchanged only when there's no provider refresh token cached at all (a session
+                    // predating this feature) or the provider refresh token itself has been revoked/expired
+                    // - at that point the caller needs a fresh interactive sign-in to re-cache one.
                     ProtectedProviderAccessToken = protectedProviderAccessToken,
+                    ProtectedProviderRefreshToken = protectedProviderRefreshToken,
                     CreatedUtc = DateTimeOffset.UtcNow,
                     ExpiresUtc = DateTimeOffset.UtcNow.AddDays(Current.RefreshTokenLifetimeDays)
                 };
@@ -745,7 +828,7 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         private static readonly string[] AlwaysGrantedScopes = { "openid", "profile", "email" };
 
-        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string? provider, string shortIdentity, string scope, string? protectedProviderAccessToken)
+        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string? provider, string shortIdentity, string scope, string? protectedProviderAccessToken, string? protectedProviderRefreshToken)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.AccessTokenLifetimeMinutes);
@@ -787,6 +870,16 @@ namespace BiatecOIDC.BusinessLogic
             if (!string.IsNullOrWhiteSpace(protectedProviderAccessToken))
             {
                 claims.Add(new Claim(ProviderAccessTokenProtector.ClaimType, protectedProviderAccessToken));
+            }
+
+            // Encrypted (never plaintext) cached Google/Microsoft refresh token - lets WalletController
+            // renew the provider_token claim above on the fly, within this access token's own lifetime,
+            // if the cached provider access token goes stale before this Biatec token itself expires. Same
+            // caveats as protectedProviderAccessToken: only present when one was actually captured and
+            // successfully encrypted.
+            if (!string.IsNullOrWhiteSpace(protectedProviderRefreshToken))
+            {
+                claims.Add(new Claim(ProviderAccessTokenProtector.RefreshClaimType, protectedProviderRefreshToken));
             }
 
             var token = new JwtSecurityToken(
@@ -1036,6 +1129,14 @@ namespace BiatecOIDC.BusinessLogic
             /// </summary>
             public string? ProtectedProviderAccessToken { get; set; }
 
+            /// <summary>
+            /// The caller's Google/Microsoft refresh token, AES-256-GCM encrypted the same way as
+            /// <see cref="ProtectedProviderAccessToken"/> (see <c>ProviderAccessTokenProtector.RefreshClaimType</c>).
+            /// Carried onto the first <c>RefreshTokenRecord</c> so subsequent Biatec token renewals can keep
+            /// renewing the provider access token instead of just carrying it forward until it expires.
+            /// </summary>
+            public string? ProtectedProviderRefreshToken { get; set; }
+
             public DateTimeOffset CreatedUtc { get; set; }
             public DateTimeOffset ExpiresUtc { get; set; }
         }
@@ -1052,13 +1153,21 @@ namespace BiatecOIDC.BusinessLogic
             public string Scope { get; set; } = "openid profile email";
 
             /// <summary>
-            /// Carried forward from the <see cref="AuthorizationCodeRecord"/> (or the previous
-            /// <see cref="RefreshTokenRecord"/>, on rotation) unchanged - AES-256-GCM encrypted, never
-            /// plaintext. There's no ambient cookie session at refresh-grant time to source a fresher one
-            /// from, so this naturally stops working once the underlying Google/Microsoft token itself
-            /// expires; the caller then needs a fresh interactive sign-in to re-cache one.
+            /// Renewed on every refresh (via <see cref="RenewProviderTokenAsync"/>) whenever
+            /// <see cref="ProtectedProviderRefreshToken"/> is available - AES-256-GCM encrypted, never
+            /// plaintext. Falls back to being carried forward unchanged only when there's no provider
+            /// refresh token cached, or renewing it fails (revoked/expired) - at that point the caller
+            /// needs a fresh interactive sign-in to re-cache one.
             /// </summary>
             public string? ProtectedProviderAccessToken { get; set; }
+
+            /// <summary>
+            /// The caller's Google/Microsoft refresh token, AES-256-GCM encrypted the same way as
+            /// <see cref="ProtectedProviderAccessToken"/>. Carried forward unchanged from the previous
+            /// record unless the provider actually rotated it on the last renewal (Microsoft Entra ID
+            /// always does; Google normally doesn't) - see <see cref="RenewProviderTokenAsync"/>.
+            /// </summary>
+            public string? ProtectedProviderRefreshToken { get; set; }
 
             public DateTimeOffset CreatedUtc { get; set; }
             public DateTimeOffset ExpiresUtc { get; set; }

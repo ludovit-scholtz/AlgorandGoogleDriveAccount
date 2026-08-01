@@ -210,6 +210,14 @@ namespace BiatecOIDC
                         OnRedirectToIdentityProvider = context =>
                         {
                             OpenIdConnectIncrementalAuth.Apply(context);
+
+                            // Google only issues a refresh token (needed to renew the cached provider
+                            // access token embedded in Biatec tokens - see ProviderAccessTokenProtector's
+                            // RefreshClaimType and OIDC_INTEGRATION_GUIDE.md's "Provider access token
+                            // caching" section) when access_type=offline is explicitly requested. This is
+                            // safe to always send - unlike prompt=consent, it doesn't force a re-consent
+                            // screen on every sign-in.
+                            context.ProtocolMessage.SetParameter("access_type", "offline");
                             return Task.CompletedTask;
                         },
                         OnTokenValidated = context =>

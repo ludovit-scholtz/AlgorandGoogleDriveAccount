@@ -3,6 +3,7 @@ using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Controllers;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.Model;
+using BiatecSelfCustodyCore.Providers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -20,6 +21,8 @@ namespace BiatecOIDCTests
         private Mock<ISpendingLimitService> _mockSpendingLimitService = null!;
         private Mock<IExchangeRateService> _mockExchangeRateService = null!;
         private Mock<IProviderAccessTokenProtector> _mockProviderTokenProtector = null!;
+        private Mock<ICloudStorageProviderCatalog> _mockProviderCatalog = null!;
+        private Mock<ICloudStorageProvider> _mockCloudStorageProvider = null!;
         private WalletController _controller = null!;
 
         [SetUp]
@@ -30,12 +33,23 @@ namespace BiatecOIDCTests
             _mockSpendingLimitService = new Mock<ISpendingLimitService>();
             _mockExchangeRateService = new Mock<IExchangeRateService>();
             _mockProviderTokenProtector = new Mock<IProviderAccessTokenProtector>();
+
+            // Default: no provider-token renewal available - existing tests that don't exercise the
+            // renew-and-retry path keep observing the previous "no cached refresh token" behavior.
+            _mockCloudStorageProvider = new Mock<ICloudStorageProvider>();
+            _mockCloudStorageProvider
+                .Setup(p => p.RefreshAccessTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync((ProviderTokenRefreshResult?)null);
+            _mockProviderCatalog = new Mock<ICloudStorageProviderCatalog>();
+            _mockProviderCatalog.Setup(c => c.Resolve(It.IsAny<string?>())).Returns(_mockCloudStorageProvider.Object);
+
             _controller = new WalletController(
                 _mockJwtIssuerService.Object,
                 _mockWalletService.Object,
                 _mockSpendingLimitService.Object,
                 _mockExchangeRateService.Object,
                 _mockProviderTokenProtector.Object,
+                _mockProviderCatalog.Object,
                 new Mock<ILogger<WalletController>>().Object)
             {
                 ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
@@ -159,6 +173,71 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Is.InstanceOf<OkObjectResult>());
             _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), null), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_StaleProviderToken_RefreshesFromCachedRefreshClaimAndRetriesOnce()
+        {
+            // Reproduces the reported bug: the cached provider_token claim has gone stale (e.g. the Biatec
+            // token was renewed after the underlying Google access token itself expired). With a cached
+            // provider_refresh_token claim available, the call should transparently renew and succeed
+            // instead of surfacing the storage provider's 401 to the caller.
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token",
+                new Claim("sign", "true"),
+                new Claim(AuthSchemeNames.IdpClaimType, "Google"),
+                new Claim(ProviderAccessTokenProtector.ClaimType, "protected-access-blob"),
+                new Claim(ProviderAccessTokenProtector.RefreshClaimType, "protected-refresh-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-access-blob", TestEmail)).Returns("stale-google-token");
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-refresh-blob", TestEmail)).Returns("google-refresh-token");
+            _mockCloudStorageProvider
+                .Setup(p => p.RefreshAccessTokenAsync("google-refresh-token"))
+                .ReturnsAsync(new ProviderTokenRefreshResult("renewed-google-token", null));
+
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "stale-google-token"))
+                .ThrowsAsync(new UnauthorizedAccessException("Google Drive access denied. The access token may be expired or invalid."));
+            var signedBytes = new byte[] { 7 };
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "renewed-google-token"))
+                .ReturnsAsync(new List<byte[]> { signedBytes });
+
+            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) }
+            });
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as SignTransactionGroupResponse;
+            Assert.That(response!.SignedTransactions, Is.EqualTo(new List<string> { Convert.ToBase64String(signedBytes) }));
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "renewed-google-token"), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_StaleProviderTokenAndNoCachedRefreshClaim_Returns401Unchanged()
+        {
+            // No provider_refresh_token claim cached (e.g. a session predating this feature) - the
+            // original 401 must surface unchanged rather than retrying with nothing to refresh from.
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token",
+                new Claim("sign", "true"),
+                new Claim(AuthSchemeNames.IdpClaimType, "Google"),
+                new Claim(ProviderAccessTokenProtector.ClaimType, "protected-access-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-access-blob", TestEmail)).Returns("stale-google-token");
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "stale-google-token"))
+                .ThrowsAsync(new UnauthorizedAccessException("Google Drive access denied. The access token may be expired or invalid."));
+
+            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { Convert.ToBase64String(new byte[] { 9, 9 }) }
+            });
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
+            _mockCloudStorageProvider.Verify(p => p.RefreshAccessTokenAsync(It.IsAny<string>()), Times.Never);
         }
 
         [Test]

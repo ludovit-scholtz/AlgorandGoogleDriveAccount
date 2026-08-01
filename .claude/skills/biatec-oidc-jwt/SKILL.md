@@ -1,6 +1,8 @@
 ---
 name: biatec-oidc-jwt
-description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector) — endpoints, claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped), redirect-URI/logout allowlist rules, signing-key format, daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, and the encrypted provider-access-token caching embedded in issued tokens. Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, /wallet/limits/currencies, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
+description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector) — endpoints, claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped), redirect-URI/logout allowlist rules, signing-key format, daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, and the encrypted provider-access-token caching embedded in issued tokens, including its automatic renewal from
+a cached provider refresh token (both on Biatec token refresh and, opportunistically, mid-request in
+WalletController). Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, /wallet/limits/currencies, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
 ---
 
 # Biatec OIDC / JWT issuer
@@ -46,6 +48,9 @@ Access tokens (not ID tokens) additionally carry, when applicable:
   authenticated caller (the standard `openid` scope), no `manage-limits` needed to read.
 - `provider_token` — the caller's Google/Microsoft access token, AES-256-GCM encrypted under a key dedicated to
   this (`ProviderTokenProtectionConfiguration`, never `AesOptions`) - see "Provider access token caching" below.
+- `provider_refresh_token` — the caller's Google/Microsoft refresh token, encrypted the same way
+  (`ProviderAccessTokenProtector.RefreshClaimType`), used to renew `provider_token` once it expires without
+  requiring a fresh interactive sign-in every time - see "Provider access token caching" below.
 
 These two are deliberately explicit claims, not something callers infer by re-parsing the space-separated `scope`
 claim — see `JwtIssuerService.CreateAccessToken`'s `WalletApiScopes` array. Neither is in any client's
@@ -135,18 +140,33 @@ caller's email (so a ciphertext for one user can never decrypt under another's).
 
 - **Captured** in `JwtIssuerController.FinalizeAuthorizeAsync` via `provider.GetAmbientAccessTokenAsync()`
   (deliberately not the plain `HttpContext.GetTokenAsync` used elsewhere in that controller - Google's
-  implementation proactively refreshes a near-expired token, maximizing how long the cached copy stays valid)
-  and passed into `JwtIssuerService.CreateAuthorizeResponseAsync`'s new `providerAccessToken` parameter. Encrypted
-  there and stored on `AuthorizationCodeRecord.ProtectedProviderAccessToken` (Redis, `oidc:code:` prefix).
+  implementation proactively refreshes a near-expired token, maximizing how long the cached copy stays valid) and
+  `provider.GetAmbientRefreshTokenAsync()`, passed into `JwtIssuerService.CreateAuthorizeResponseAsync`'s
+  `providerAccessToken`/`providerRefreshToken` parameters. Both encrypted there and stored on
+  `AuthorizationCodeRecord.ProtectedProviderAccessToken`/`ProtectedProviderRefreshToken` (Redis, `oidc:code:`
+  prefix). Google's `OnRedirectToIdentityProvider` (`Program.cs`) sends `access_type=offline` so Google actually
+  issues a refresh token to capture (safe to always send - unlike `prompt=consent`, it doesn't force a re-consent
+  screen every sign-in).
 - **Propagated** through `ExchangeTokenAsync`'s `authorization_code` grant into the issued access token's
-  `provider_token` claim (via `CreateAccessToken`) and into the new `RefreshTokenRecord` (`oidc:refresh:` prefix),
-  so it survives the code exchange (which has no ambient cookie session of its own - the RP's backend calls
-  `/token` server-to-server).
-- **Carried forward unchanged** on `grant_type=refresh_token` - there's no ambient session at refresh time to
-  source a fresher provider token from, so the same encrypted value just rotates into the new refresh record.
-  Once the underlying Google/Microsoft token naturally expires (their own ~1h lifetime, regardless of how long
-  the Biatec refresh-token chain survives, up to `RefreshTokenLifetimeDays`), wallet calls relying on it start
-  failing `401 storage_access_denied` until the user does a fresh interactive `/authorize` sign-in.
+  `provider_token`/`provider_refresh_token` claims (via `CreateAccessToken`) and into the new `RefreshTokenRecord`
+  (`oidc:refresh:` prefix), so both survive the code exchange (which has no ambient cookie session of its own -
+  the RP's backend calls `/token` server-to-server).
+- **Renewed** on `grant_type=refresh_token` by `JwtIssuerService.RenewProviderTokenAsync`: there's no ambient
+  cookie session at refresh time, but if a `provider_refresh_token` was cached, it's decrypted and spent via
+  `ICloudStorageProviderCatalog.Resolve(provider).RefreshAccessTokenAsync(...)` to mint a fresh provider access
+  token onto the new access token, instead of just carrying the old one forward until it expires. Whatever
+  refresh token comes back (Microsoft Entra ID always rotates it on use; Google normally doesn't) is what gets
+  cached going forward. Falls back to carrying both forward unchanged only if there's no cached provider refresh
+  token, or the provider rejects it (revoked/expired) - at that point wallet calls relying on the (now-stale)
+  access token eventually fail `401 storage_access_denied` until the user does a fresh interactive `/authorize`
+  sign-in.
+- **Also renewed opportunistically inside `WalletController`**
+  (`ExecuteWithProviderTokenRefreshAsync`/`TryRefreshProviderAccessTokenAsync`): if a wallet call fails with
+  `UnauthorizedAccessException` (the cached provider access token went stale mid-lifetime of an otherwise
+  still-valid Biatec token), it renews once from the bearer token's own `provider_refresh_token` claim and
+  retries the same call. This renewed token is used for that one request only - it can't be written back into the
+  caller's already-issued, signed bearer token, so the next call still resolves the original cached access token
+  until the durable fix above (a Biatec refresh_token grant) happens.
 - **Consumed** by `WalletController.ResolveProviderAccessToken`: decrypts the bearer token's `provider_token`
   claim (bound to the same email) in-memory, for that one request only. No wallet endpoint has a parameter to
   supply a provider token instead - this is the only mechanism.

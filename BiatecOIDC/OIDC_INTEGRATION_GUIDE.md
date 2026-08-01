@@ -208,15 +208,27 @@ trade-off being made, deliberately, to support the "RP only ever holds a Biatec 
   `/wallet/sign` to move funds up to the spending limit regardless of whether a provider token happened to be
   attached. Treat a leaked access token as fully compromised either way — see "Security Recommendations" below on
   TLS and not logging tokens.
-- The cached token **naturally expires** on Google/Microsoft's own schedule (their access tokens typically last
-  around an hour) regardless of how long the Biatec access/refresh token chain that carries it stays alive (up to
-  `RefreshTokenLifetimeDays`, 30 by default). There is no ambient cookie session at `grant_type=refresh_token` time
-  (that's a server-to-server call from the RP, not a browser request) to fetch a *fresher* provider token from, so
-  each refresh just carries the same encrypted value forward unchanged. Once the underlying provider token
-  actually expires, wallet calls relying on it start failing with `401 storage_access_denied` until the user
-  completes a fresh interactive sign-in (a new `/authorize` round trip) — at which point a fresh token is
-  captured and cached again. There is no parameter on any wallet endpoint to work around this - a fresh sign-in
-  through `/authorize` is the only way to refresh the cached token.
+- The cached provider access token would otherwise expire on Google/Microsoft's own schedule (their access tokens
+  typically last around an hour), independently of how long the Biatec access/refresh token chain carrying it
+  stays alive (up to `RefreshTokenLifetimeDays`, 30 by default). To prevent that from surfacing as an avoidable
+  `401 storage_access_denied`, the caller's provider **refresh** token is cached the same way, under a second
+  private claim (`provider_refresh_token`, same key/format as `provider_token` - see
+  `ProviderAccessTokenProtector.RefreshClaimType`), captured at the same moment. It's spent in two places:
+  - **Every `grant_type=refresh_token` call** (`JwtIssuerService.RenewProviderTokenAsync`) - a server-to-server
+    call with no ambient cookie session, so this is the only way to get a *fresher* provider access token onto the
+    newly-issued Biatec access token rather than just carrying the old one forward unchanged. Google normally
+    doesn't rotate the refresh token on renewal; Microsoft Entra ID always does - either way, whatever refresh
+    token comes back (rotated or not) is what gets cached going forward.
+  - **Opportunistically, inside `WalletController`**, if a wallet call fails with `UnauthorizedAccessException`
+    (the cached provider access token went stale mid-lifetime of an otherwise still-valid Biatec token) - it
+    renews once and retries the same call with the fresh token. This renewed token is used for that one request
+    only; it can't be written back into the caller's already-issued, signed bearer token, so the next call still
+    resolves the original cached access token until the client either renews its Biatec refresh token (the durable
+    fix, above) or this happens again.
+  - If there's no cached provider refresh token at all (a session that predates this feature) or the provider
+    rejects it (revoked/expired), both paths fall back to the previous behavior unchanged: the caller needs a
+    fresh interactive sign-in through `/authorize` to re-cache one. There is still no parameter on any wallet
+    endpoint to work around this.
 - The key is configured the same way as `AesOptions`/`JwtIssuer:SigningPrivateKeyPem` — via a Kubernetes Secret in
   production (see `k8s/stage/generate-stage-secret.sh` for how stage mints its own, separate copy), never
   committed as a real production secret. If `ProviderTokenProtection:Key`/`IV` is missing or invalid, no

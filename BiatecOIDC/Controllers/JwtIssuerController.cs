@@ -1167,8 +1167,9 @@ namespace BiatecOIDC.Controllers
             // near-expired token, maximizing how long the cached copy stays valid from this moment on.
             var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
             var providerAccessToken = await provider.GetAmbientAccessTokenAsync();
+            var providerRefreshToken = await provider.GetAmbientRefreshTokenAsync();
 
-            var result = await _jwtIssuerService.CreateAuthorizeResponseAsync(request, client, User, providerAccessToken);
+            var result = await _jwtIssuerService.CreateAuthorizeResponseAsync(request, client, User, providerAccessToken, providerRefreshToken);
             if (!result.Success || result.Response == null)
             {
                 return BuildAuthorizeErrorResponse(request.RedirectUri, request.State, result.Error ?? "server_error", result.ErrorDescription ?? "Authorization failed.", request.ResponseMode);

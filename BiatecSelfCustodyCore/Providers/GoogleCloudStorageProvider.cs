@@ -3,6 +3,8 @@ using Google.Apis.Auth.AspNetCore3;
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
 using Google.Apis.Services;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -22,6 +24,7 @@ namespace BiatecSelfCustodyCore.Providers
         private const string DriveFileScope = "https://www.googleapis.com/auth/drive.file";
 
         private readonly IGoogleAuthProvider _googleAuth;
+        private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly IOptionsMonitor<Model.Configuration> _config;
         private readonly IOptionsMonitor<Model.GoogleCloudServiceConfiguration> _googleServiceConfig;
         private readonly HttpClient _httpClient;
@@ -29,12 +32,14 @@ namespace BiatecSelfCustodyCore.Providers
 
         public GoogleCloudStorageProvider(
             IGoogleAuthProvider googleAuth,
+            IHttpContextAccessor httpContextAccessor,
             IOptionsMonitor<Model.Configuration> config,
             IOptionsMonitor<Model.GoogleCloudServiceConfiguration> googleServiceConfig,
             HttpClient httpClient,
             ILogger<GoogleCloudStorageProvider> logger)
         {
             _googleAuth = googleAuth;
+            _httpContextAccessor = httpContextAccessor;
             _config = config;
             _googleServiceConfig = googleServiceConfig;
             _httpClient = httpClient;
@@ -66,6 +71,66 @@ namespace BiatecSelfCustodyCore.Providers
                 // caller is responsible for treating a null ambient token as "no token available" (see
                 // ICloudAccountRepository/SpendingLimitService, which both throw UnauthorizedAccessException
                 // - mapped to 401 - only when neither an explicit nor an ambient token is available).
+                return null;
+            }
+        }
+
+        public async Task<string?> GetAmbientRefreshTokenAsync()
+        {
+            var httpContext = _httpContextAccessor.HttpContext;
+            if (httpContext == null)
+            {
+                return null;
+            }
+
+            // Google.Apis.Auth.AspNetCore3's AddGoogleOpenIdConnect sets SaveTokens on the underlying
+            // OpenIdConnect handler (same as MicrosoftCloudStorageProvider's equivalent below), so the
+            // refresh token Google issued at sign-in - if any - is retrievable through the standard
+            // ASP.NET Core token store, keyed by this provider's scheme name.
+            return await httpContext.GetTokenAsync(ProviderName, "refresh_token");
+        }
+
+        public async Task<ProviderTokenRefreshResult?> RefreshAccessTokenAsync(string refreshToken)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, "https://oauth2.googleapis.com/token")
+                {
+                    Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                    {
+                        ["client_id"] = _googleServiceConfig.CurrentValue.ClientId ?? string.Empty,
+                        ["client_secret"] = _googleServiceConfig.CurrentValue.ClientSecret ?? string.Empty,
+                        ["refresh_token"] = refreshToken,
+                        ["grant_type"] = "refresh_token"
+                    })
+                };
+
+                using var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    // Most commonly invalid_grant - the refresh token was revoked or has expired. Treated
+                    // as "no renewal available", same as never having had one - the caller falls back to
+                    // requiring a fresh interactive sign-in.
+                    return null;
+                }
+
+                using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                if (!payload.RootElement.TryGetProperty("access_token", out var accessTokenProperty))
+                {
+                    return null;
+                }
+
+                // Google's refresh grant does not normally return a new refresh_token - the original one
+                // keeps working - but the field is read defensively in case that ever changes.
+                var rotatedRefreshToken = payload.RootElement.TryGetProperty("refresh_token", out var refreshTokenProperty)
+                    ? refreshTokenProperty.GetString()
+                    : null;
+
+                return new ProviderTokenRefreshResult(accessTokenProperty.GetString()!, rotatedRefreshToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to refresh Google access token using the cached refresh token.");
                 return null;
             }
         }

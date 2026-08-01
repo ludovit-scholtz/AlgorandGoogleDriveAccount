@@ -310,10 +310,16 @@ setup stage needs.
   — deliberately never `AesOptions`, so the two secrets rotate independently), captured in
   `JwtIssuerController.FinalizeAuthorizeAsync` while the ambient cookie session still has it and carried through
   `JwtIssuerService`'s issued access tokens and Redis-backed authorization-code/refresh-token records so it
-  survives the code exchange and every subsequent refresh (a `refresh_token` grant has no ambient session of its
-  own, so it just carries the cached value forward unchanged until the underlying Google/Microsoft token naturally
-  expires, at which point the caller needs a fresh interactive `/authorize` sign-in — there is no parameter to work
-  around this with). This is a deliberate, security-sensitive trade-off — the whole point is that a relying party
+  survives the code exchange and every subsequent refresh. A `refresh_token` grant has no ambient cookie session of
+  its own, so instead of just carrying the cached access token forward unchanged until it expires, the caller's
+  provider **refresh** token is cached the same way (`provider_refresh_token` claim,
+  `ProviderAccessTokenProtector.RefreshClaimType`) and spent by `JwtIssuerService.RenewProviderTokenAsync` on every
+  Biatec token refresh to mint a fresh provider access token onto the newly-issued Biatec access token —
+  `WalletController` also spends it opportunistically, mid-lifetime of a still-valid Biatec token, if a wallet call
+  hits a stale cached access token (`UnauthorizedAccessException`), retrying once. Only when there's no cached
+  provider refresh token at all, or the provider rejects it (revoked/expired), does the caller fall back to needing
+  a fresh interactive `/authorize` sign-in — there is no parameter to work around this with. This is a deliberate,
+  security-sensitive trade-off — the whole point is that a relying party
   only ever needs to hold a Biatec token, never the user's own Google/Microsoft token, which does widen blast
   radius if this service is ever compromised; see `OIDC_INTEGRATION_GUIDE.md`'s "Provider access token caching"
   section for the full threat-model writeup and why a dedicated key (rather than reusing `AesOptions`) and

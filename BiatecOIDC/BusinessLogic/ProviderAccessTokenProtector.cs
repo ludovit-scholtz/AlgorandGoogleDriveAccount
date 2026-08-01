@@ -17,8 +17,18 @@ namespace BiatecOIDC.BusinessLogic
     /// </remarks>
     public sealed class ProviderAccessTokenProtector : IProviderAccessTokenProtector
     {
-        /// <summary>The access-token claim type the encrypted provider token is stored under.</summary>
+        /// <summary>The access-token claim type the encrypted provider access token is stored under.</summary>
         public const string ClaimType = "provider_token";
+
+        /// <summary>
+        /// The access-token claim type the encrypted provider refresh token is stored under - used to
+        /// renew <see cref="ClaimType"/> once the cached provider access token expires, both when the
+        /// caller renews its own Biatec refresh token (<c>JwtIssuerService.ExchangeTokenAsync</c>'s
+        /// <c>refresh_token</c> grant) and, opportunistically, mid-lifetime of a still-valid Biatec access
+        /// token (<c>WalletController</c>). Protected/unprotected with the same key and per-email binding
+        /// as <see cref="ClaimType"/> - it's the same trust boundary, just a longer-lived credential.
+        /// </summary>
+        public const string RefreshClaimType = "provider_refresh_token";
 
         private readonly IOptionsMonitor<ProviderTokenProtectionConfiguration> _config;
         private readonly ILogger<ProviderAccessTokenProtector> _logger;
