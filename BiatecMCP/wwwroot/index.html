@@ -645,19 +645,19 @@
                 <li><a href="#pricing">Pricing</a></li>
                 <li><a href="/privacy.html">Privacy</a></li>
                 <li><a href="/terms.html">Terms</a></li>
-                <li><a href="/pair.html" class="nav-cta">Device Pairing</a></li>
+                <li><a href="https://oidc.biatec.io/select-provider" class="nav-cta">Sign in</a></li>
             </ul>
         </div>
     </nav>
 
     <div class="container">
         <section class="hero">
-            <div class="eyebrow"><span class="dot"></span> Model Context Protocol · Live on google.biatec.io</div>
+            <div class="eyebrow"><span class="dot"></span> Model Context Protocol · Live on mcp.biatec.io</div>
             <h1>Self-custody Algorand,<br><span class="glow-text">wired directly into your AI agent.</span></h1>
             <p class="subtitle">Biatec MCP Server gives Claude, VS Code, and any MCP-compatible assistant secure access to your Algorand account — while your encrypted private key stays in your own Google Drive, never on our servers.</p>
             <div class="hero-actions">
                 <a href="#setup" class="cta-button">Connect your agent →</a>
-                <a href="/pair.html" class="cta-button secondary">Pair a device</a>
+                <a href="https://oidc.biatec.io/select-provider" class="cta-button secondary">Sign in</a>
             </div>
             <div class="stat-strip">
                 <div class="stat"><div class="num">AES-256</div><div class="label">Key encryption</div></div>
@@ -687,7 +687,7 @@
                 <div class="feature-card">
                     <div class="feature-icon">🔄</div>
                     <h3>Cross-Device Sync</h3>
-                    <p>Access your self-custody Algorand accounts from any device through secure device pairing and Google authentication without compromising key ownership.</p>
+                    <p>Access your self-custody Algorand account from any MCP client through standard OAuth 2.1 sign-in - no manual pairing step, no session ID to configure.</p>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">🛡️</div>
@@ -696,8 +696,8 @@
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">📱</div>
-                    <h3>Secure Device Pairing</h3>
-                    <p>Easily pair new devices with your self-custody accounts using secure OAuth flows while maintaining exclusive control of your private keys.</p>
+                    <h3>Standard OAuth 2.1</h3>
+                    <p>Any MCP client that implements the MCP Authorization spec connects with a standard OAuth sign-in flow - no proprietary pairing UI, no session IDs.</p>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">⚡</div>
@@ -735,7 +735,7 @@
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                             Copy
                         </button>
-                        <pre>https://google.biatec.io/mcp/</pre>
+                        <pre>https://mcp.biatec.io/mcp</pre>
                     </div>
                     <p>Or configure it explicitly via JSON:</p>
                     <div class="code-block">
@@ -750,7 +750,7 @@
             "cwd": "${input:cwd}",
             "args": [
                 "mcp-remote",
-                "https://google.biatec.io/mcp/",
+                "https://mcp.biatec.io/mcp",
                 "--transport",
                 "http-first"
             ]
@@ -774,7 +774,7 @@
                 </div>
                 <div class="step">
                     <h4><span class="step-num">4</span>Use the Integration</h4>
-                    <p>When prompted to select an MCP server, choose <b>Biatec</b> or the URL above. Follow the on-screen instructions to authenticate with Google and pair your device.</p>
+                    <p>When prompted to select an MCP server, choose <b>Biatec</b> or the URL above. Claude Desktop will open a browser to sign in via BiatecOIDC (Google or Microsoft) and ask you to approve access - no separate pairing step.</p>
                 </div>
                 <div class="step">
                     <h4><span class="step-num">5</span>Run your first prompt</h4>
@@ -806,7 +806,7 @@
       "command": "npx",
       "args": [
         "mcp-remote",
-        "https://google.biatec.io/mcp/",
+        "https://mcp.biatec.io/mcp",
         "--transport",
         "http-first"
       ]
@@ -818,7 +818,7 @@
                 </div>
                 <div class="step">
                     <h4><span class="step-num">4</span>Use the Integration</h4>
-                    <p>When using MCP features in VS Code, select <b>Biatec</b> as your provider. Follow prompts to authenticate and pair your device as needed.</p>
+                    <p>When using MCP features in VS Code, select <b>Biatec</b> as your provider. VS Code will open a browser to sign in via BiatecOIDC and ask you to approve access.</p>
                 </div>
                 <div class="step">
                     <h4><span class="step-num">5</span>Run your first prompt</h4>
@@ -873,7 +873,7 @@
 
         <footer class="footer">
             <div class="footer-links">
-                <a href="/pair.html">Device Pairing</a>
+                <a href="https://oidc.biatec.io/select-provider">Sign in</a>
                 <a href="/privacy.html">Privacy Policy</a>
                 <a href="/terms.html">Terms of Service</a>
             </div>

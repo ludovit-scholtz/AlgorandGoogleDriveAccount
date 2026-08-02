@@ -30,11 +30,16 @@ for a given client (don't mix the two for the same integration).
   - Supports `response_mode=query` and `response_mode=form_post`.
   - Supports legacy `returnUrl` alias for `redirect_uri`.
   - Supports PKCE (`code_challenge`, `code_challenge_method`) per RFC 7636 — see "PKCE for Public Clients" below.
+  - Supports `resource` (RFC 8707) — see "Dynamic Client Registration and resource indicators (for MCP-class
+    clients)" below.
 - `POST /token`
   - Token exchange endpoint.
   - Supports:
-    - `grant_type=authorization_code` (accepts `code_verifier` for PKCE)
+    - `grant_type=authorization_code` (accepts `code_verifier` for PKCE, `resource` for RFC 8707)
     - `grant_type=refresh_token`
+- `POST /register`
+  - RFC 7591 Dynamic Client Registration — self-registers a new **public** client (no secret is ever issued
+    by this endpoint). See "Dynamic Client Registration and resource indicators (for MCP-class clients)" below.
 - `GET /connect/endsession`
   - RP-initiated logout endpoint.
   - Also available as `GET /logout` alias.
@@ -130,6 +135,76 @@ The scope you actually end up with (after unrecognized scopes are dropped) is al
 response's `scope` field (and, for an authorization-code exchange, the same value the `/token` response returns)
 - check that field, or `GET /userinfo`/the access token's own `sign`/`manage-limits` claims, if you're ever
 unsure what a token was actually granted.
+
+## Dynamic Client Registration and resource indicators (for MCP-class clients)
+
+Most integrating relying parties are pre-registered by an operator adding a `JwtIssuerClientConfiguration` entry
+under `JwtIssuer:Clients` in configuration - nothing in this section changes that path, and you can skip it
+entirely if that's how you're integrating. This section is for clients that can't realistically be
+pre-registered one at a time - the canonical example is an MCP (Model Context Protocol) client like Claude
+Desktop, Claude.ai, or a VS Code extension, per the
+[MCP Authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization). BiatecMCP
+(`https://mcp.biatec.io`) is this authorization server's first consumer of both mechanisms below.
+
+### `POST /register` (RFC 7591 Dynamic Client Registration)
+
+Registers a new **public** client at connect time - no client secret is ever issued by this endpoint, and
+`token_endpoint_auth_method` must be `"none"` (or omitted) in the request, or it's rejected with
+`invalid_client_metadata`.
+
+Request:
+
+```json
+{
+  "client_name": "My MCP Client",
+  "redirect_uris": ["http://127.0.0.1:33445/callback"],
+  "scope": "openid sign"
+}
+```
+
+`redirect_uris` must be non-empty; each entry must be `https://` or a loopback `http://127.0.0.1`/
+`http://localhost` URI (same policy `/authorize` itself applies via `AllowHttpForLoopbackRedirectUris`) - a
+disallowed URI is rejected with `invalid_client_metadata`.
+
+Response (`201 Created`):
+
+```json
+{
+  "client_id": "…opaque, randomly generated…",
+  "client_id_issued_at": 1735680000,
+  "redirect_uris": ["http://127.0.0.1:33445/callback"],
+  "token_endpoint_auth_method": "none",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "scope": "openid profile email sign"
+}
+```
+
+Whatever `scope` you requested, the client's actual `AllowedScopes` is always capped to
+`JwtIssuer:DynamicClientRegistrationDefaultScopes` (default: `openid profile email sign`) - a
+dynamically-registered client can **never** obtain `manage-limits` or `rekey`, the two highest-privilege wallet
+scopes, this way. If your integration genuinely needs one of those, register a static `JwtIssuer:Clients` entry
+with the same `client_id` this endpoint returned you - a static entry always takes precedence over a dynamic one
+with the same id, so this is how an operator "upgrades" a self-registered client after the fact without you
+needing to re-register.
+
+Registered clients are stored in Redis with no expiry - there is currently no way to deregister one yourself.
+
+### `resource` parameter (RFC 8707 resource indicators)
+
+If you're integrating a resource server that many different clients (not all pre-known to you) need to obtain
+tokens valid for, include a `resource` parameter - your resource server's own canonical URI (e.g.
+`https://mcp.biatec.io/mcp`) - on **both** `/authorize` and `/token`. It must be identical on both calls, and
+must be one of the URIs an operator has added to `JwtIssuer:ProtectedResources` in configuration; an
+unrecognized or omitted-on-one-side-only `resource` fails with `invalid_target`.
+
+When a valid `resource` is present, the issued access token's `aud` claim contains **both** the requesting
+`client_id` and the resource URI (a standard multi-value JWT `aud`). This is what lets your resource server
+validate tokens from *any* client (including ones registered via `POST /register` above, whose `client_id` you
+don't know in advance) against one fixed audience value, using ordinary local JWT validation against this
+server's JWKS - no per-request call back to this server needed. If you never send `resource`, `aud` is exactly
+`[client_id]`, unchanged from before this existed - this is purely additive and doesn't affect any existing
+integration that doesn't opt in.
 
 ## Wallet API (`sign` / `manage-limits` / `rekey` scopes)
 

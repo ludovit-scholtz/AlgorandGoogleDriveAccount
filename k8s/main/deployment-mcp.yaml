@@ -124,3 +124,47 @@ spec:
                 name: biatec-mcp-service
                 port:
                   number: 5443
+---
+# Dedicated host for BiatecMCP, same pattern as biatec-oidc-domain-ingress in
+# k8s/main/deployment-oidc.yaml: BiatecMCP's canonical resource identity (RFC 9728/RFC 8707 - see
+# BiatecMCP/Program.cs's OAuth resource-server wiring and Mcp:CanonicalResourceUri config) is now
+# https://mcp.biatec.io/mcp, not google.biatec.io/mcp/ - kept as a separate Ingress object (not an
+# extra host block on biatec-mcp-ingress above) for the same reason biatec-oidc-domain-ingress is
+# separate: this object's own path/host pairing is unrelated to the shared google.biatec.io catch-all,
+# so there is no rewrite-target conflict to avoid here, but keeping the two Ingress objects/hosts
+# distinct mirrors the rest of this repo's convention and keeps each host's cert/rule fully independent.
+# google.biatec.io keeps working as a legacy alias (biatec-mcp-ingress above) - nothing here removes it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: biatec-mcp-domain-ingress
+  namespace: biatec
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/rewrite-target: /$1
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.org/websocket-services: "biatec-mcp-service"
+spec:
+  ingressClassName: "nginx"
+  tls:
+    - hosts:
+        - mcp.biatec.io
+      secretName: tls-mcp.biatec.io
+  rules:
+    - host: mcp.biatec.io
+      http:
+        paths:
+          - path: /(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: biatec-mcp-service
+                port:
+                  number: 5443

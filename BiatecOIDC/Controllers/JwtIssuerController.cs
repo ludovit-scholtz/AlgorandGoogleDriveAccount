@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Distributed;
 
@@ -69,6 +70,54 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
+        /// RFC 7591 Dynamic Client Registration - public clients only (never issues a client secret). Lets
+        /// an OAuth client that has no pre-arranged relationship with this issuer (e.g. an MCP client such
+        /// as Claude Desktop, discovering this server via RFC 9728 Protected Resource Metadata) obtain a
+        /// <c>client_id</c> at connect time instead of an operator hand-adding it to
+        /// <c>JwtIssuer:Clients</c>. The registered client's scopes are always capped to
+        /// <c>JwtIssuer:DynamicClientRegistrationDefaultScopes</c> (never <c>manage-limits</c>/<c>rekey</c>),
+        /// regardless of what <paramref name="request"/> asks for - see
+        /// <c>JwtIssuerConfiguration.DynamicClientRegistrationDefaultScopes</c>'s remarks.
+        /// </summary>
+        /// <response code="201">The newly-registered public client's credentials (there is no secret).</response>
+        /// <response code="400">
+        /// <c>redirect_uris</c> was empty, contained a non-HTTPS/non-loopback URI, or
+        /// <c>token_endpoint_auth_method</c> requested anything other than <c>"none"</c>.
+        /// </response>
+        [AllowAnonymous]
+        [EnableRateLimiting("client-registration")]
+        [HttpPost("register")]
+        public async Task<IActionResult> Register([FromBody] DynamicClientRegistrationRequest request)
+        {
+            if (!string.IsNullOrWhiteSpace(request.TokenEndpointAuthMethod) &&
+                !string.Equals(request.TokenEndpointAuthMethod, "none", StringComparison.Ordinal))
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Title = "invalid_client_metadata",
+                    Detail = "Only public clients (token_endpoint_auth_method=\"none\") can be registered here - no client secret is ever issued."
+                });
+            }
+
+            try
+            {
+                var client = await _jwtIssuerService.RegisterDynamicClientAsync(request.ClientName, request.RedirectUris, request.Scope);
+                var response = new DynamicClientRegistrationResponse
+                {
+                    ClientId = client.ClientId,
+                    ClientIdIssuedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    RedirectUris = client.RedirectUris,
+                    Scope = string.Join(' ', client.AllowedScopes)
+                };
+                return StatusCode(StatusCodes.Status201Created, response);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_client_metadata", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
         /// OIDC authorization endpoint. Supports the standard <c>response_type=code</c> flow (exchange
         /// the returned code at <c>/token</c>, with optional PKCE via <paramref name="codeChallenge"/>/
         /// <paramref name="codeChallengeMethod"/> - required for public clients with no client secret),
@@ -85,6 +134,11 @@ namespace BiatecOIDC.Controllers
         /// <param name="nonce">Value round-tripped into the issued <c>id_token</c>.</param>
         /// <param name="codeChallenge">PKCE code challenge (RFC 7636); required for public clients.</param>
         /// <param name="codeChallengeMethod"><c>S256</c> (recommended) or <c>plain</c>.</param>
+        /// <param name="resource">
+        /// RFC 8707 resource indicator - the canonical URI of the resource server the requested token must
+        /// be valid for (e.g. <c>https://mcp.biatec.io/mcp</c>). Must match an entry in
+        /// <c>JwtIssuer:ProtectedResources</c>, and be repeated identically on <c>/token</c>.
+        /// </param>
         /// <param name="idp">
         /// Fast track: <c>"google"</c> or <c>"microsoft"</c> skips the provider-picker page and challenges
         /// that provider directly. Omit to show the picker.
@@ -106,6 +160,7 @@ namespace BiatecOIDC.Controllers
             [FromQuery(Name = "nonce")] string? nonce,
             [FromQuery(Name = "code_challenge")] string? codeChallenge,
             [FromQuery(Name = "code_challenge_method")] string? codeChallengeMethod,
+            [FromQuery(Name = "resource")] string? resource,
             [FromQuery(Name = "idp")] string? idp)
         {
             var authRequest = new OidcAuthorizeRequest
@@ -119,7 +174,8 @@ namespace BiatecOIDC.Controllers
                 State = state,
                 Nonce = nonce,
                 CodeChallenge = codeChallenge,
-                CodeChallengeMethod = codeChallengeMethod
+                CodeChallengeMethod = codeChallengeMethod,
+                Resource = resource
             };
 
             var validation = await _jwtIssuerService.ValidateAuthorizeRequestAsync(authRequest);
@@ -173,7 +229,7 @@ namespace BiatecOIDC.Controllers
             // after the user picks a provider. Only used here to show the user who's asking (app name)
             // and what for (requested scopes) - never to make an authorization decision.
             var pending = await _jwtIssuerService.PeekPendingAuthorizeRequestAsync(requestId);
-            var appName = ResolveAppName(pending?.ClientId, ResolveClientConfig(pending?.ClientId));
+            var appName = ResolveAppName(pending?.ClientId, await ResolveClientConfigAsync(pending?.ClientId));
             var requestedScopes = (pending?.Scope ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
             var buttonsHtml = new StringBuilder();
@@ -718,7 +774,7 @@ namespace BiatecOIDC.Controllers
 
             var continueUrl = Url.Action(nameof(AuthorizeConsentContinue), "JwtIssuer", new { requestId }, Request.Scheme)!;
             var reAuthUrl = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = provider.Name, retried = true }, Request.Scheme)!;
-            var appName = ResolveAppName(pending.ClientId, ResolveClientConfig(pending.ClientId));
+            var appName = ResolveAppName(pending.ClientId, await ResolveClientConfigAsync(pending.ClientId));
 
             return Content(
                 BuildConsentHtml(appName, wantsSign, wantsLimits, wantsRekey, hasStorageAccess, provider.DisplayName, continueUrl, reAuthUrl),
@@ -762,22 +818,13 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
-        /// Looks up <paramref name="clientId"/>'s registered configuration (<c>JwtIssuer:Clients</c>), if
-        /// any - used by <see cref="SelectProvider"/>/<see cref="AuthorizeConsent"/> to resolve a
-        /// human-friendly app name instead of showing the raw <c>client_id</c> to the user.
+        /// Looks up <paramref name="clientId"/>'s registered configuration - statically-configured
+        /// (<c>JwtIssuer:Clients</c>) or dynamically-registered (<c>POST /register</c>), via
+        /// <see cref="IJwtIssuerService.ResolveClientAsync"/> - if any. Used by
+        /// <see cref="SelectProvider"/>/<see cref="AuthorizeConsent"/> to resolve a human-friendly app name
+        /// instead of showing the raw <c>client_id</c> to the user.
         /// </summary>
-        private JwtIssuerClientConfiguration? ResolveClientConfig(string? clientId)
-        {
-            if (string.IsNullOrWhiteSpace(clientId))
-            {
-                return null;
-            }
-
-            var issuerConfig = HttpContext.RequestServices.GetRequiredService<IConfiguration>().GetSection("JwtIssuer").Get<JwtIssuerConfiguration>()
-                ?? new JwtIssuerConfiguration();
-
-            return issuerConfig.Clients.FirstOrDefault(c => string.Equals(c.ClientId, clientId, StringComparison.Ordinal));
-        }
+        private Task<JwtIssuerClientConfiguration?> ResolveClientConfigAsync(string? clientId) => _jwtIssuerService.ResolveClientAsync(clientId);
 
         /// <summary>
         /// The name shown to the user for a signing-in app: <see cref="JwtIssuerClientConfiguration.DisplayName"/>
@@ -1017,7 +1064,8 @@ namespace BiatecOIDC.Controllers
                 RefreshToken = form["refresh_token"].ToString(),
                 ClientId = form["client_id"].ToString(),
                 ClientSecret = form["client_secret"].ToString(),
-                CodeVerifier = form["code_verifier"].ToString()
+                CodeVerifier = form["code_verifier"].ToString(),
+                Resource = form["resource"].ToString()
             };
 
             var result = await _jwtIssuerService.ExchangeTokenAsync(tokenRequest, Request.Headers.Authorization.ToString());
@@ -1129,20 +1177,18 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [HttpGet("connect/endsession")]
         [HttpGet("logout")]
-        public IActionResult EndSession(
+        public async Task<IActionResult> EndSession(
             [FromQuery(Name = "id_token_hint")] string? idTokenHint,
             [FromQuery(Name = "post_logout_redirect_uri")] string? postLogoutRedirectUri,
             [FromQuery(Name = "state")] string? state,
             [FromQuery(Name = "client_id")] string? clientId)
         {
             clientId ??= string.IsNullOrWhiteSpace(idTokenHint) ? null : _jwtIssuerService.TryGetAudienceFromSelfIssuedToken(idTokenHint);
-            var issuerConfig = HttpContext.RequestServices.GetRequiredService<IConfiguration>().GetSection("JwtIssuer").Get<JwtIssuerConfiguration>()
-                ?? new JwtIssuerConfiguration();
 
             JwtIssuerClientConfiguration? client = null;
             if (!string.IsNullOrWhiteSpace(clientId))
             {
-                client = issuerConfig.Clients.FirstOrDefault(c => string.Equals(c.ClientId, clientId, StringComparison.Ordinal));
+                client = await _jwtIssuerService.ResolveClientAsync(clientId);
                 if (client == null)
                 {
                     return BadRequest(new ProblemDetails

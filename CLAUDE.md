@@ -6,29 +6,33 @@ different AI assistants (Claude Code vs. GitHub Copilot). Whenever you update on
 
 ## Project overview
 
-Biatec — two independently deployed ASP.NET Core 10 services that used to be one app and were split apart:
+Biatec — two independently deployed ASP.NET Core 10 services:
 
-- **BiatecMCP** gives AI assistants (via the Model Context Protocol) self-custody access to Algorand accounts.
-  Private keys are AES-256 encrypted, bound to the user's email address, and stored only in the user's own Google
-  Drive or OneDrive (user's choice) — never on Biatec's servers.
-- **BiatecOIDC** is an OpenID Connect identity provider (JWT issuer) so whitelisted third-party apps can
-  authenticate users via Google or Microsoft Entra ID and receive Algorand-identity claims.
+- **BiatecOIDC** is an OpenID Connect identity provider (JWT issuer) *and* a self-custody wallet API: whitelisted
+  (or, for MCP-class clients, dynamically self-registered — see below) third-party apps authenticate users via
+  Google or Microsoft Entra ID and receive Algorand-identity claims, and can sign Algorand transactions on the
+  user's behalf via `POST /wallet/sign` (spend-limit-enforced, never handing out the user's own key material).
+- **BiatecMCP** exposes that same self-custody wallet to AI assistants over the Model Context Protocol. It holds
+  **no key material and no identity/storage-provider credentials of its own** — it is a pure OAuth 2.1 *resource
+  server* that delegates all authentication and signing to BiatecOIDC (the *authorization server*), per the [MCP
+  Authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization) (RFC 9728
+  Protected Resource Metadata + RFC 8707 resource indicators). See "MCP server" under Architecture notes below.
 
-Both apps support **two identity/storage providers** — Google (Drive) and Microsoft Entra ID (OneDrive app
-folder) — presented as a picker (or skippable via `?idp=google`/`?idp=microsoft`, the "fast track") wherever a
-user signs in: `pair.html`'s two buttons in `BiatecMCP`, and `BiatecOIDC`'s `/select-provider` page. See
-`BiatecOIDC/ENTRA_SETUP_GUIDE.md` for the Entra app registration and `Microsoft Graph Files.ReadWrite.AppFolder`
-permission this depends on.
+`BiatecOIDC` supports **two identity/storage providers** — Google (Drive) and Microsoft Entra ID (OneDrive app
+folder) — presented as a picker (or skippable via `?idp=google`/`?idp=microsoft`, the "fast track") on its
+`/select-provider` page. See `BiatecOIDC/ENTRA_SETUP_GUIDE.md` for the Entra app registration and
+`Microsoft Graph Files.ReadWrite.AppFolder` permission this depends on.
 
-`BiatecMCP` is served at `https://google.biatec.io` (the MCP endpoint stays at
-`https://google.biatec.io/mcp/`). `BiatecOIDC` has its own dedicated domain, `https://oidc.biatec.io` (the
-recommended host for new integrations), and remains reachable via a carved-out set of paths on
-`https://google.biatec.io` too, as a legacy alias for existing integrations (see "Kubernetes / ingress routing"
-below) — both hosts are internally self-consistent since `JwtIssuerService.GetIssuer` derives the `iss`
-claim/discovery `issuer` from the actual request host rather than a hardcoded value. The two services share one
-piece of self-custody infrastructure, `BiatecSelfCustodyCore` (see below), because the OIDC provider embeds an
-`algorand_address` claim in issued tokens, which requires reading the same Drive/OneDrive-backed account BiatecMCP
-manages.
+`BiatecOIDC` has its own dedicated domain, `https://oidc.biatec.io` (the recommended host for new integrations),
+and remains reachable via a carved-out set of paths on `https://google.biatec.io` too, as a legacy alias for
+existing integrations (see "Kubernetes / ingress routing" below) — both hosts are internally self-consistent
+since `JwtIssuerService.GetIssuer` derives the `iss` claim/discovery `issuer` from the actual request host rather
+than a hardcoded value. `BiatecMCP` has its own dedicated domain too, `https://mcp.biatec.io` (MCP endpoint
+`https://mcp.biatec.io/mcp`) — the canonical resource URI its own tokens/PRM document use — and remains reachable
+via `https://google.biatec.io` as a legacy alias as well. `BiatecOIDC` depends on one piece of shared self-custody
+infrastructure, `BiatecSelfCustodyCore` (see below), for its own signing/identity work; `BiatecMCP` does **not** -
+it talks to BiatecOIDC over plain HTTP, forwarding the caller's own bearer token, and has zero compile-time
+dependency on `BiatecSelfCustodyCore`.
 
 ## Solution layout
 
@@ -60,20 +64,31 @@ manages.
     (Google OAuth client id/secret, bound from `CloudServices:Google`), `AesOptions.cs`, `MicrosoftEntraConfiguration.cs`
     (Entra app registration, bound from `CloudServices:Entra`), `AuthSchemeNames.cs` (just the `biatec_idp` claim type
     constant — each provider owns its own name via `ICloudStorageProvider.Name`)
-- `BiatecMCP/` — the MCP server + self-custody web/API project (net10.0, `Microsoft.NET.Sdk.Web`)
-  - `Controllers/` — `DevicePairingController` (provider-aware: `pair-device?idp=`, `GET providers` for the picker
-    UI, `RequestStorageAccess`, `StorageAccessCallback`), `DriveController`
-  - `BusinessLogic/` — `DevicePairingService`, `CrossAccountProtectionService`, `PortfolioValuationService`
-    (+ their `I*Service` interfaces)
-  - `Model/` — `DevicePairingModels` (`PairedDeviceInfo.Provider`), `McpTransferLimitsConfiguration`,
-    `AlgodConfiguration`, `CrossAccountProtectionConfiguration`, plus local `RedisConfiguration`/`CorsConfiguration`
-    copies
-  - `MCP/BiatecMCPGoogle.cs` — MCP tool definitions exposed to AI clients (e.g. `getAlgorandAddress`)
-  - `Helper/` — `SecureTokenGenerator`, `TransferPolicy`
-  - `wwwroot/` — static pages: `index.html`, `pair.html` (device pairing UI; provider buttons rendered from
-    `GET /api/device/providers`, not hardcoded), `privacy.html`, `terms.html`
+- `BiatecMCP/` — the MCP server, an OAuth 2.1 resource server with **no BiatecSelfCustodyCore project
+  reference and no Google/Microsoft/Redis dependency** (net10.0, `Microsoft.NET.Sdk.Web`)
+  - `Program.cs` — `AddAuthentication` + `AddJwtBearer` (validates bearer tokens locally against BiatecOIDC's
+    JWKS, `Authority` = `Oidc:Issuer`, `ValidAudience` = `Mcp:CanonicalResourceUri`) + `AddMcp` (serves
+    `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
+    `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
+    `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
+  - `MCP/BiatecMCP.cs` — the 3 MCP tools (`getAlgorandAddress`, `transferAsset`, `optIn`), all forwarding the
+    caller's own bearer token to BiatecOIDC rather than touching any key material - see "MCP server" under
+    Architecture notes below for the full request flow
+  - `BusinessLogic/IBiatecWalletClient.cs` + `BiatecWalletClient.cs` — typed `HttpClient` wrapping BiatecOIDC's
+    `POST /wallet/sign`/`GET /wallet/seeds`, forwarding the caller's bearer token; `WalletApiException` carries
+    BiatecOIDC's `ProblemDetails` title/detail back to the tool
+  - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in transactions
+    (Algorand4 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material ever touches this
+    project
+  - `Model/` — `AlgodConfiguration`, `CorsConfiguration`, `Configuration` (local `App:Host`),
+    `OidcConfiguration` (`Oidc:Issuer`), `McpResourceConfiguration` (`Mcp:CanonicalResourceUri`),
+    `WalletApiModels` (DTOs mirroring BiatecOIDC's `WalletModels.cs`, duplicated rather than referenced so the
+    two independently-deployed services share no compile-time coupling)
+  - `wwwroot/` — static pages: `index.html`, `privacy.html`, `terms.html`
 - `BiatecOIDC/` — the OIDC/JWT issuer web/API project (net10.0, `Microsoft.NET.Sdk.Web`)
-  - `Controllers/JwtIssuerController.cs` — `/authorize` (+ `idp` fast track), `/select-provider` (picker page,
+  - `Controllers/JwtIssuerController.cs` — `/authorize` (+ `idp` fast track, + `resource` for RFC 8707), `/token`
+    (+ `resource`), `/register` (RFC 7591 Dynamic Client Registration — public clients only, no secret ever
+    issued; see "MCP server" under Architecture notes for why this exists), `/select-provider` (picker page,
     one button per provider registered in the catalog), `/authorize/challenge`, `/authorize/callback` (verifies
     storage-write access via `catalog.Resolve(idp).HasWriteAccessAsync(...)` before finalizing)
   - `Controllers/WalletController.cs` — `/wallet/sign` (`sign` claim), `/wallet/limits` get (identity only)/put
@@ -81,7 +96,10 @@ manages.
     `JwtIssuerController`'s `/userinfo` (not `[Authorize]` — see `.claude/skills/biatec-oidc-jwt/SKILL.md`)
   - `BusinessLogic/JwtIssuerService.cs` (+ `IJwtIssuerService`) — depends on `BiatecSelfCustodyCore`'s
     `IDriveService` for the `algorand_address` claim; also stamps `biatec_idp`/`sign`/`manage-limits` claims
-    onto issued access tokens
+    onto issued access tokens. `ResolveClientAsync(clientId)` checks statically-configured `JwtIssuer:Clients`
+    first, falling back to `IDynamicClientStore` (Redis-backed, RFC 7591-registered clients) — every client
+    lookup in this file and `JwtIssuerController` goes through it, so a static entry always takes precedence
+    over a same-`ClientId` dynamic one (how an operator hand-upgrades a self-registered MCP client's scopes)
   - `BusinessLogic/WalletService.cs` (+ `IWalletService`) — signs a transaction group via `IDriveService`, first
     pricing every `pay`/`axfer` in USD (`IAssetValuationService`) and checking the group's total against
     `ISpendingLimitService`'s daily/weekly/monthly limits, then recording the spend to the ledger after signing
@@ -112,10 +130,15 @@ manages.
   - `wwwroot/index.html` — the OIDC/wallet API documentation site, served at `/` (reachable on `oidc.biatec.io`'s
     own Ingress; not reachable via the `google.biatec.io` alias, which only carves out this app's protocol paths)
   - `OIDC_INTEGRATION_GUIDE.md`, `BIATEC_OIDC_LOGOUT_REQUIREMENTS.md`, `ENTRA_SETUP_GUIDE.md`
-- `BiatecMCPTests/` — NUnit + Moq tests for `BiatecMCP` + `BiatecSelfCustodyCore` (device pairing, Drive controller,
-  AES encryption, transfer policy, `CloudStorageProviderCatalog`, `GoogleCloudStorageProvider`,
-  `MicrosoftCloudStorageProvider`, plus a shared `FakeCloudStorageProvider` test double)
-- `BiatecOIDCTests/` — NUnit + Moq tests for `BiatecOIDC` (JWT issuer service + controller)
+- `BiatecMCPTests/` — NUnit + Moq tests for `BiatecMCP` (OAuth resource-server wiring via
+  `Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory`, `AlgorandTransactionBuilder`, `BiatecWalletClient`,
+  the 3 MCP tools) **and** `BiatecSelfCustodyCore` (AES encryption, transfer policy, `CloudStorageProviderCatalog`,
+  `GoogleCloudStorageProvider`, `MicrosoftCloudStorageProvider`, plus a shared `FakeCloudStorageProvider` test
+  double) — the latter group stays here even though the `BiatecMCP` *product* project no longer references
+  `BiatecSelfCustodyCore`, since `BiatecOIDCTests` doesn't yet have its own copies and this is still the only
+  place that functionality is exercised
+- `BiatecOIDCTests/` — NUnit + Moq tests for `BiatecOIDC` (JWT issuer service + controller, including Dynamic
+  Client Registration and RFC 8707 resource-indicator handling)
 
 Historical note: this used to be one project, `AlgorandGoogleDriveAccount` (with a test project
 `AlgoranGoogleDriveAccountTests` that intentionally dropped one "d" from "Algorand"). It was split into the three
@@ -131,9 +154,12 @@ dotnet run --project BiatecMCP/BiatecMCP.csproj
 dotnet run --project BiatecOIDC/BiatecOIDC.csproj
 ```
 
-Both services require Redis (`Redis:ConnectionString` in their respective `appsettings.json`), Google OAuth 2.0
-credentials (`CloudServices:Google:ClientId`/`ClientSecret`), and Microsoft Entra ID credentials
+`BiatecOIDC` requires Redis (`Redis:ConnectionString`), Google OAuth 2.0 credentials
+(`CloudServices:Google:ClientId`/`ClientSecret`), and Microsoft Entra ID credentials
 (`CloudServices:Entra:TenantId`/`ClientId`/`ClientSecret` — see `BiatecOIDC/ENTRA_SETUP_GUIDE.md`) to run.
+`BiatecMCP` requires none of that — only `Oidc:Issuer` (which BiatecOIDC instance to delegate to) and
+`Mcp:CanonicalResourceUri` (its own resource identity); both default to production values in
+`BiatecMCP/appsettings.json` for local development against the live BiatecOIDC.
 
 CI is two separate GitHub Actions workflows, not one — nothing pushed to `master` reaches production
 automatically. `.github/workflows/deploy-stage.yml` builds/pushes both Docker images and deploys them
@@ -153,15 +179,22 @@ both should be clean.
 ## Kubernetes / ingress routing
 
 Both services run as separate Deployments/Services in the `biatec` namespace. `BiatecMCP` owns the
-`google.biatec.io` host outright; `BiatecOIDC` is reachable on its own dedicated `oidc.biatec.io` host **and** via
-a carved-out set of paths on `google.biatec.io` (a legacy alias, kept working for integrations set up before
-`oidc.biatec.io` existed) — three Ingress objects total across the two deployment manifests:
+`google.biatec.io` host as a legacy catch-all **and** has its own dedicated `mcp.biatec.io` host (its canonical
+OAuth resource URI, `Mcp:CanonicalResourceUri` = `https://mcp.biatec.io/mcp`); `BiatecOIDC` is reachable on its
+own dedicated `oidc.biatec.io` host **and** via a carved-out set of paths on `google.biatec.io` (a legacy alias,
+kept working for integrations set up before `oidc.biatec.io` existed) — four Ingress objects total across the two
+deployment manifests:
 
-- `k8s/main/deployment-mcp.yaml` — `biatec-mcp-app-deployment`/`biatec-mcp-service`/`biatec-mcp-ingress`. Catch-all
-  path (`/(.*)`, `rewrite-target: /$1`) on `google.biatec.io` — this is the default backend for the host, so
-  `/mcp`, `/api/drive`, `/api/device`, `/`, and all static `wwwroot` pages keep resolving here unchanged. Any
-  Ingress using this regex-catch-all idiom (this one, `biatec-oidc-domain-ingress`, and both `k8s/stage/*`
-  Ingresses) needs **both** `nginx.ingress.kubernetes.io/use-regex: "true"` **and**
+- `k8s/main/deployment-mcp.yaml` — `biatec-mcp-app-deployment`/`biatec-mcp-service`, plus two Ingress objects:
+  - `biatec-mcp-ingress` — catch-all path (`/(.*)`, `rewrite-target: /$1`) on `google.biatec.io` — this is the
+    default backend for the host, so `/mcp` and all static `wwwroot` pages keep resolving here unchanged (legacy
+    alias; not the canonical resource host anymore).
+  - `biatec-mcp-domain-ingress` — the dedicated `mcp.biatec.io` host, same catch-all shape, its own
+    `tls-mcp.biatec.io` TLS entry — this is BiatecMCP's canonical resource identity per `Mcp:CanonicalResourceUri`
+    and what its `/.well-known/oauth-protected-resource` document/JWT audience validation expect.
+
+  Any Ingress using this regex-catch-all idiom (both of the above, `biatec-oidc-domain-ingress`, and all
+  `k8s/stage/*` Ingresses) needs **both** `nginx.ingress.kubernetes.io/use-regex: "true"` **and**
   `pathType: ImplementationSpecific` on that path — `pathType: Prefix` means a literal path-segment match per
   the Ingress spec, so ingress-nginx's admission webhook rejects a regex path there even with `use-regex` set
   (`path /(.*) cannot be used with pathType Prefix`). The literal/`Exact`-path `biatec-oidc-ingress` below needs
@@ -197,6 +230,13 @@ a carved-out set of paths on `google.biatec.io` (a legacy alias, kept working fo
   fetched from — a mismatch strict OIDC clients reject). Do not add a static `Issuer` to that ConfigMap without
   re-checking this reasoning.
 
+  `JwtIssuer:ProtectedResources` (RFC 8707 — see `JwtIssuerConfiguration.ProtectedResources`'s remarks) must
+  include BiatecMCP's canonical resource URI (`https://mcp.biatec.io/mcp` in production,
+  `https://stage.mcp.biatec.io/mcp` in stage) for BiatecMCP's bearer-token audience validation to accept tokens
+  BiatecOIDC issues. Production's value lives in the `google-account-main-app-secret` Secret alongside the rest
+  of `JwtIssuer:*` (see the comment in `k8s/main/conf-oidc/appsettings.json`); stage sets it directly in
+  `k8s/stage/conf-oidc-stage/appsettings.json`.
+
 Both deployments reuse the same secrets (`google-account-main-app-secret` for app config,
 `csharp-cert`/`csharp-cert-password` for the internal Kestrel HTTPS cert) — there was no need to provision new
 ones. Config is split per-service: `k8s/main/conf-mcp/` / `biatec-mcp-conf` and `k8s/main/conf-oidc/` /
@@ -204,7 +244,7 @@ ones. Config is split per-service: `k8s/main/conf-mcp/` / `biatec-mcp-conf` and 
 
 ## Stage environment
 
-`k8s/stage/` mirrors `k8s/main/` for both services, at `stage.google.biatec.io` /
+`k8s/stage/` mirrors `k8s/main/` for both services, at `stage.google.biatec.io` / `stage.mcp.biatec.io` /
 `stage.oidc.biatec.io`, in the **same `biatec` namespace** with `-stage`-suffixed resource names
 (not a separate namespace — the existing namespace-scoped CI `Role` grants verbs on resource
 *types*, so stage needed no new RBAC). `deploy-stage.yml` deploys here on every push to `master`;
@@ -285,17 +325,28 @@ setup stage needs.
   `k8s/stage/generate-stage-secret.sh`'s rotation runbook comment and
   `BiatecOIDC/OIDC_INTEGRATION_GUIDE.md`'s "Key rotation" section.
 - **Pluggable cloud storage providers**: `ICloudStorageProvider` (`BiatecSelfCustodyCore/Providers/`) is the single
-  extension point for a new storage backend — implement it, register it in DI, done; `ICloudAccountRepository`,
-  `ICloudStorageProviderCatalog`, and both picker UIs (`BiatecMCP`'s `GET /api/device/providers`, `BiatecOIDC`'s
-  `/select-provider`) all resolve providers dynamically and need zero code changes for provider #3+. To add one:
+  extension point for a new storage backend — implement it, register it in DI, done; `ICloudAccountRepository`
+  and `BiatecOIDC`'s `/select-provider` picker UI resolve providers dynamically and need zero code changes for
+  provider #3+ (`BiatecMCP` has no storage providers of its own at all — see "MCP server" above). To add one:
   implement `ICloudStorageProvider` (including `DeleteAsync` — best-effort, never throws, used only to clean up
-  a file just migrated to a new AES key generation), register it in **both** `BiatecMCP/Program.cs` and
-  `BiatecOIDC/Program.cs` the same way as the existing Google/Microsoft blocks (`AddHttpClient<T>()` +
+  a file just migrated to a new AES key generation), register it in `BiatecOIDC/Program.cs` the same way as the
+  existing Google/Microsoft blocks (`AddHttpClient<T>()` +
   `AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<T>())`), then add a matching authentication scheme
   block (copy the Microsoft `AddOpenIdConnect(...)` block as a template) whose `OnTokenValidated` calls
   `CloudStorageProviderClaims.Stamp(context.Principal, YourProvider.ProviderName)`.
-- **Multi-provider auth**: both `BiatecMCP` and `BiatecOIDC` independently configure two authentication schemes —
-  Google via `Google.Apis.Auth.AspNetCore3` (`AddGoogleOpenIdConnect`) and Microsoft Entra ID via the plain
+- **Dynamic Client Registration (RFC 7591)**: `POST /register` (`BiatecOIDC`) lets any OAuth client self-register
+  a public client_id at connect time — the mechanism MCP clients use (see "MCP server" above), since an operator
+  can't hand-register every AI-assistant vendor's redirect URI in advance the way `JwtIssuer:Clients` normally
+  requires. `IJwtIssuerService.RegisterDynamicClientAsync` validates `redirect_uris` (HTTPS or allowed loopback,
+  same policy `/authorize` applies), rejects anything but `token_endpoint_auth_method: "none"` (no secret is ever
+  issued here), and caps the registered client's `AllowedScopes` to
+  `JwtIssuer:DynamicClientRegistrationDefaultScopes` regardless of what was requested — deliberately excludes
+  `manage-limits`/`rekey`, so a self-registered client can never obtain Biatec's two highest-privilege wallet
+  scopes without an operator hand-upgrading that specific `client_id` afterwards via a static `JwtIssuer:Clients`
+  entry with the same id (which always wins — see `IJwtIssuerService.ResolveClientAsync`). Persisted in Redis via
+  `IDynamicClientStore`, no expiry.
+- **Multi-provider auth**: `BiatecOIDC` independently configures two authentication schemes — Google via
+  `Google.Apis.Auth.AspNetCore3` (`AddGoogleOpenIdConnect`) and Microsoft Entra ID via the plain
   `AddOpenIdConnect(MicrosoftCloudStorageProvider.ProviderName, ...)` handler pointed at
   `https://login.microsoftonline.com/{TenantId}/v2.0` — both sign into the same cookie scheme, so `[Authorize]`
   endpoints don't care which provider was used. Google scopes: `openid profile email` +
@@ -303,22 +354,39 @@ setup stage needs.
   `https://graph.microsoft.com/Files.ReadWrite.AppFolder`. Each scheme's `OnTokenValidated` stamps a `biatec_idp`
   claim (`AuthSchemeNames.IdpClaimType`, via `CloudStorageProviderClaims.Stamp`) onto the signed-in principal so
   later code knows which storage backend to use. See `BiatecOIDC/ENTRA_SETUP_GUIDE.md` for the Entra app
-  registration this depends on. Cross-Account Protection (Google RISC) lives only in `BiatecMCP` and is supported
-  but disabled by default (`CrossAccountProtection:Enabled`).
-- **Provider picker / fast track**: a user chooses Google or Microsoft via `pair.html`'s dynamically-rendered
-  buttons (`BiatecMCP`) or `BiatecOIDC`'s `/select-provider` page (also dynamically rendered, one button per
-  provider in the catalog); either can be skipped with `?idp=google`/`?idp=microsoft` on `/api/device/pair-device`
-  or `/authorize`. Before finalizing either flow, `catalog.Resolve(idp).HasWriteAccessAsync(accessToken)` confirms
-  the fresh token actually has storage-write access (declining just that consent checkbox is possible even while
-  completing sign-in); if missing, the browser is sent through one incremental-consent round-trip (forced fresh
-  consent screen, `OpenIdConnectIncrementalAuth`) before the pairing/OIDC code is finalized, capped at one retry to
-  avoid loops.
-- **Device pairing**: `DevicePairingService`/`DevicePairingController` (`BiatecMCP`) let a session on one device
-  (e.g. Claude Desktop config) be linked to a Google Drive/OneDrive authorization completed via `pair.html` on
-  another device (browser), coordinated through Redis-backed session state. `PairedDeviceInfo.Provider` records
-  which backend that session uses (empty/missing on pre-Microsoft-support sessions, treated as Google).
-- **MCP server**: mounted at `/mcp` via `ModelContextProtocol.AspNetCore` in `BiatecMCP`, stateless HTTP transport,
-  tools discovered from the assembly (`BiatecMCPGoogle`).
+  registration this depends on. `BiatecMCP` has no identity/storage-provider auth of its own at all — see "MCP
+  server" below.
+- **Provider picker / fast track**: a user chooses Google or Microsoft via `BiatecOIDC`'s `/select-provider` page
+  (dynamically rendered, one button per provider in the catalog); can be skipped with `?idp=google`/
+  `?idp=microsoft` on `/authorize`. Before finalizing, `catalog.Resolve(idp).HasWriteAccessAsync(accessToken)`
+  confirms the fresh token actually has storage-write access (declining just that consent checkbox is possible
+  even while completing sign-in); if missing, the browser is sent through one incremental-consent round-trip
+  (forced fresh consent screen, `OpenIdConnectIncrementalAuth`) before the OIDC code is finalized, capped at one
+  retry to avoid loops.
+- **MCP server**: `BiatecMCP` is a pure OAuth 2.1 *resource server* (RFC 9728 Protected Resource Metadata + RFC
+  8707 resource indicators) that delegates all authentication and signing to `BiatecOIDC` — it holds no key
+  material, no Google/Microsoft credentials, and no session state of its own (replaced an earlier
+  home-grown "device pairing" scheme entirely). Request flow: (1) an unauthenticated `POST /mcp` gets a `401`
+  with `WWW-Authenticate: Bearer resource_metadata="https://mcp.biatec.io/.well-known/oauth-protected-resource"`
+  (`Program.cs`'s `AddMcp`/`ProtectedResourceMetadata`, `ModelContextProtocol.AspNetCore.Authentication`); (2)
+  the MCP client discovers `BiatecOIDC` as the authorization server from that document, and — since BiatecMCP
+  has no pre-registered relationship with arbitrary MCP clients — self-registers via `POST /register` (RFC 7591
+  Dynamic Client Registration, `IJwtIssuerService.RegisterDynamicClientAsync`/`IDynamicClientStore`, public
+  client only, scopes capped to `JwtIssuer:DynamicClientRegistrationDefaultScopes`); (3) the client completes
+  `/authorize` (PKCE, `resource=https://mcp.biatec.io/mcp`) + `/token`, receiving an access token whose `aud`
+  contains **both** its own `client_id` and the resource URI (`JwtIssuerService.CreateAccessToken`'s RFC 8707
+  handling) — this is what lets `BiatecMCP` validate tokens from *any* dynamically-registered client against one
+  stable audience value via local JWT validation (`AddJwtBearer`, `Authority` = `Oidc:Issuer`), with no
+  per-request network call to BiatecOIDC; (4) the 3 tools (`MCP/BiatecMCP.cs`: `getAlgorandAddress`,
+  `transferAsset`, `optIn`) forward that same bearer token to BiatecOIDC's wallet REST API
+  (`IBiatecWalletClient`/`BiatecWalletClient`) — `getAlgorandAddress` reads the token's own `algorand_address`
+  claim (falling back to `GET /wallet/seeds`'s primary seed), `transferAsset`/`optIn` build an *unsigned*
+  transaction locally (`AlgorandTransactionBuilder`, Algorand4 SDK, no key material), `POST /wallet/sign` it
+  (BiatecOIDC enforces the `sign`/`rekey` claim and the spending limit there — `McpTransferLimitsConfiguration`/
+  `TransferPolicy` were removed from `BiatecMCP` entirely, since `/wallet/sign` already does this uniformly for
+  every relying party), then broadcast the signed bytes to Algod directly. Mounted at `/mcp` via
+  `ModelContextProtocol.AspNetCore` (`AddMcpServer().WithHttpTransport().WithToolsFromAssembly().AddAuthorizationFilters()`),
+  stateless HTTP transport.
 - **JWT issuer / OIDC provider**: `JwtIssuerService` + `JwtIssuerController` (`BiatecOIDC`) implement OIDC
   discovery (`/.well-known/openid-configuration`, `/.well-known/jwks.json`), `/authorize`, `/token`, `/userinfo`,
   `/introspect`, `/verify`. Supports both standard `response_type=code` and a legacy `returnUrl` direct
@@ -396,9 +464,6 @@ setup stage needs.
   `InvalidOperationException`, same precedent as `JwtIssuerService.LoadOrCreateSigningKey`) outside `Development`
   if the dedicated key is missing/invalid — a misconfigured key means the wallet API can't function at all, so
   that's surfaced immediately rather than as a wall of unexplained 401s.
-- **Service tiers**: `PortfolioValuationService` (`BiatecMCP`) computes a user's Algorand portfolio value to
-  auto-assign Free/Professional/Enterprise tiers (device limits, support SLA) — no billing, purely value-based.
-
 ## Conventions and constraints
 
 - Interfaces are prefixed `I` and registered as `Scoped` in each project's `Program.cs`. `GoogleCloudStorageProvider`,
@@ -408,12 +473,14 @@ setup stage needs.
   do not root-resolve a `Scoped` service from `app.Services` (unsafe under `ValidateScopes`); framework
   `Singleton`s like `IActionDescriptorCollectionProvider` are the one thing safe to touch that way (see the
   startup warm-up below).
-- **Startup warm-up (do not remove on a `Program.cs` rewrite)**: both apps force ASP.NET Core to eagerly discover
-  and compile the full controller/action/endpoint model right before `app.Run()` —
-  `IActionDescriptorCollectionProvider.ActionDescriptors` plus enumerating `((IEndpointRouteBuilder)app).DataSources`
-  and touching each `.Endpoints`. This exists so a pod that just passed its Kubernetes readiness probe doesn't make
-  whichever real user request lands first pay for assembly scanning and route-table construction that has nothing
-  to do with that request.
+- **Startup warm-up (do not remove on a `Program.cs` rewrite)**: both apps force ASP.NET Core to eagerly compile
+  the full endpoint/route model right before `app.Run()`, by enumerating `((IEndpointRouteBuilder)app).DataSources`
+  and touching each `.Endpoints`. `BiatecOIDC` (which has MVC controllers) also warms up
+  `IActionDescriptorCollectionProvider.ActionDescriptors`; `BiatecMCP` does not — it has no controllers left
+  (`MapMcp`/`MapGet` are Minimal API endpoints, fully covered by the `DataSources` warm-up alone) and
+  `IActionDescriptorCollectionProvider` isn't even registered there, so calling it would throw. This exists so a
+  pod that just passed its Kubernetes readiness probe doesn't make whichever real user request lands first pay for
+  assembly scanning and route-table construction that has nothing to do with that request.
 - Configuration is strongly typed via `IOptions<T>` bound from named sections in `appsettings.json` — add new
   settings as a new `Model/*.cs` POCO + `builder.Services.Configure<T>(...)` rather than reading `IConfiguration`
   directly in business logic. Only add a type to `BiatecSelfCustodyCore` if both services genuinely need it;
@@ -439,8 +506,8 @@ setup stage needs.
   (endpoints, claims, redirect-URI/logout allowlist rules, signing-key format), the wallet API's
   daily/weekly/monthly spending-limit enforcement (Biatec Router USD valuation, Czech National Bank FX rates,
   encrypted cloud-drive storage), and its encrypted provider-access-token caching. Use this instead of reading
-  the two full guide docs above when working on `/authorize`, `/token`, `/userinfo`, `/introspect`, `/verify`,
-  `/connect/endsession`, `/logout`, `/wallet/sign`, `/wallet/limits`, `/wallet/limits/currencies`,
+  the two full guide docs above when working on `/authorize`, `/token`, `/register`, `/userinfo`, `/introspect`,
+  `/verify`, `/connect/endsession`, `/logout`, `/wallet/sign`, `/wallet/limits`, `/wallet/limits/currencies`,
   `JwtIssuerService.cs`, `JwtIssuerController.cs`, `WalletController.cs`, `WalletService.cs`,
   `SpendingLimitService.cs`, `ProviderAccessTokenProtector.cs`, `BiatecRouterValuationService.cs`,
   `CnbExchangeRateService.cs`, `RedirectUriMatcher.cs`, or

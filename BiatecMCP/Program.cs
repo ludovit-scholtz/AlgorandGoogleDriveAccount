@@ -1,14 +1,9 @@
-using System.Security.Claims;
+using BiatecMCP.BusinessLogic;
 using BiatecMCP.Model;
-using BiatecMCP.Swagger;
-using BiatecSelfCustodyCore.BusinessLogic;
-using BiatecSelfCustodyCore.Model;
-using BiatecSelfCustodyCore.Providers;
-using BiatecSelfCustodyCore.Repository;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Mvc.Infrastructure;
-using Microsoft.OpenApi;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using ModelContextProtocol.AspNetCore.Authentication;
+using ModelContextProtocol.Authentication;
 
 namespace BiatecMCP
 {
@@ -19,66 +14,18 @@ namespace BiatecMCP
             var builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.
-
-            builder.Services.AddControllers();
-            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-            builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen(c =>
-            {
-                // Login for [Authorize] endpoints is the same Google session cookie the rest of the
-                // site uses (see /api/drive/login). This definition just documents that and lets
-                // Swagger UI show a padlock; the actual "Authorize" button in Swagger UI has nowhere
-                // to send a browser-redirect OAuth login, so sign-in happens via the Login link
-                // injected into the page instead (see wwwroot/swagger/swagger-login.js).
-                c.AddSecurityDefinition("GoogleCookieAuth", new OpenApiSecurityScheme
-                {
-                    Type = SecuritySchemeType.ApiKey,
-                    In = ParameterLocation.Cookie,
-                    Name = CookieAuthenticationDefaults.CookiePrefix + CookieAuthenticationDefaults.AuthenticationScheme,
-                    Description = "Google-authenticated session cookie. Click the \"Login with Google\" link " +
-                        "above the operations list, sign in, then come back here and use \"Try it out\" - " +
-                        "the browser sends the session cookie automatically."
-                });
-
-                c.OperationFilter<AuthorizeCheckOperationFilter>();
-
-                var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
-                var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
-                if (File.Exists(xmlPath))
-                {
-                    c.IncludeXmlComments(xmlPath, includeControllerXmlComments: true);
-                }
-            });
             builder.Services.AddProblemDetails();
 
-            var config = new Configuration();
-            builder.Configuration.GetSection("App").Bind(config);
             builder.Services.Configure<Configuration>(builder.Configuration.GetSection("App"));
-            builder.Services.Configure<AesOptions>(builder.Configuration.GetSection("AesOptions"));
-            builder.Services.Configure<RedisConfiguration>(builder.Configuration.GetSection("Redis"));
             builder.Services.Configure<CorsConfiguration>(builder.Configuration.GetSection("Cors"));
-            builder.Services.Configure<CrossAccountProtectionConfiguration>(builder.Configuration.GetSection("CrossAccountProtection"));
             builder.Services.Configure<AlgodConfiguration>(builder.Configuration.GetSection("Algod"));
-            builder.Services.Configure<McpTransferLimitsConfiguration>(builder.Configuration.GetSection("McpTransferLimits"));
+            builder.Services.Configure<OidcConfiguration>(builder.Configuration.GetSection("Oidc"));
+            builder.Services.Configure<McpResourceConfiguration>(builder.Configuration.GetSection("Mcp"));
 
-            var googleCloudConfig = new GoogleCloudServiceConfiguration();
-            builder.Configuration.GetSection("CloudServices:Google").Bind(googleCloudConfig);
-            builder.Services.Configure<GoogleCloudServiceConfiguration>(builder.Configuration.GetSection("CloudServices:Google"));
-
-            var entraConfig = new MicrosoftEntraConfiguration();
-            builder.Configuration.GetSection("CloudServices:Entra").Bind(entraConfig);
-            builder.Services.Configure<MicrosoftEntraConfiguration>(builder.Configuration.GetSection("CloudServices:Entra"));
-
-            // TenantId defaults to "common" even when Entra was never set up, so ClientId/ClientSecret
-            // (both empty by default, see MicrosoftEntraConfiguration) are the actual signal that an Entra
-            // app registration has been configured. Gates both the Microsoft ICloudStorageProvider
-            // registration below and the AddOpenIdConnect scheme further down - without this, Microsoft
-            // would show up as a sign-in option on pair.html (and /select-provider) with no working app
-            // registration behind it, and CloudStorageProviderCatalog.All has no other way to know.
-            // Also rejects the checked-in appsettings.json placeholder values ("your-entra-client-id"/
-            // "your-entra-client-secret") - those are non-empty strings, so an IsNullOrWhiteSpace check
-            // alone treats an unedited template as "configured".
-            var entraConfigured = IsConfiguredValue(entraConfig.ClientId) && IsConfiguredValue(entraConfig.ClientSecret);
+            var oidcConfig = new OidcConfiguration();
+            builder.Configuration.GetSection("Oidc").Bind(oidcConfig);
+            var mcpResourceConfig = new McpResourceConfiguration();
+            builder.Configuration.GetSection("Mcp").Bind(mcpResourceConfig);
 
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
@@ -117,234 +64,65 @@ namespace BiatecMCP
                         policyBuilder.AllowCredentials();
                     }
                 });
-
-                // Add a named policy for API endpoints that might need different CORS settings
-                options.AddPolicy("ApiPolicy", policyBuilder =>
-                {
-                    var origins = corsConfig.AllowedOrigins?.Where(o => !string.IsNullOrWhiteSpace(o)).ToArray() ?? Array.Empty<string>();
-
-                    if (origins.Length > 0)
-                    {
-                        policyBuilder.SetIsOriginAllowed(origin => IsOriginAllowed(origin, origins));
-                    }
-                    else if (builder.Environment.IsDevelopment())
-                    {
-                        policyBuilder.AllowAnyOrigin();
-                    }
-
-                    policyBuilder.AllowAnyMethod()
-                               .AllowAnyHeader();
-
-                    if (origins.Length > 0)
-                    {
-                        policyBuilder.AllowCredentials();
-                    }
-                });
             });
 
-            // Self-custody storage providers (BiatecSelfCustodyCore/Providers). Each provider is a
-            // single ICloudStorageProvider implementation registered here; ICloudAccountRepository
-            // owns the shared AES/ARC76 account logic and resolves the right one via the catalog,
-            // so it never needs to change when a provider is added. To add a new provider: implement
-            // ICloudStorageProvider, register it the same way as the two below, and add a matching
-            // AddOpenIdConnect(...) scheme block further down (copy the Microsoft block as a template).
-            builder.Services.AddHttpClient<GoogleCloudStorageProvider>();
-            builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<GoogleCloudStorageProvider>());
-            if (entraConfigured)
-            {
-                builder.Services.AddHttpClient<MicrosoftCloudStorageProvider>();
-                builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<MicrosoftCloudStorageProvider>());
-            }
-            builder.Services.AddScoped<ICloudStorageProviderCatalog, CloudStorageProviderCatalog>();
-            builder.Services.AddScoped<ICloudAccountRepository, CloudAccountRepository>();
-
-            // Add business logic services
-            builder.Services.AddScoped<BiatecMCP.BusinessLogic.IDevicePairingService, BiatecMCP.BusinessLogic.DevicePairingService>();
-            builder.Services.AddScoped<BiatecSelfCustodyCore.BusinessLogic.IDriveService, BiatecSelfCustodyCore.BusinessLogic.DriveService>();
-            builder.Services.AddScoped<BiatecMCP.BusinessLogic.ICrossAccountProtectionService, BiatecMCP.BusinessLogic.CrossAccountProtectionService>();
-            builder.Services.AddScoped<BiatecMCP.BusinessLogic.IPortfolioValuationService, BiatecMCP.BusinessLogic.PortfolioValuationService>();
-
-            // Add HTTP context accessor for authorization service
-            builder.Services.AddHttpContextAccessor();
-
-            // Add HttpClient for Cross-Account Protection API calls
-            builder.Services.AddHttpClient<BiatecMCP.BusinessLogic.CrossAccountProtectionService>();
-
-            // Add Redis distributed cache
-            var redisConfig = new RedisConfiguration();
-            builder.Configuration.GetSection("Redis").Bind(redisConfig);
-            builder.Services.AddStackExchangeRedisCache(options =>
-            {
-                options.Configuration = redisConfig.ConnectionString;
-            });
-
-            // Each provider registered above gets one OIDC scheme block here, named after its
-            // ICloudStorageProvider.Name. To add provider #3: copy the Microsoft block (plain
-            // AddOpenIdConnect - Google's uses AddGoogleOpenIdConnect from Google.Apis.Auth.AspNetCore3
-            // purely because that package ships a small wrapper around the same handler), point it at
-            // the new provider's OIDC endpoint/scopes, and stamp its ProviderName via
-            // CloudStorageProviderClaims.Stamp in OnTokenValidated.
-            var authenticationBuilder = builder.Services
+            // ── OAuth 2.1 resource server ──────────────────────────────────────────────────────────
+            // BiatecMCP delegates ALL authentication (and signing) to BiatecOIDC - it holds no key
+            // material, no Google/Microsoft credentials, and no session state of its own. This wiring
+            // implements the MCP Authorization spec (RFC 9728 Protected Resource Metadata + OAuth 2.1
+            // bearer-token validation): JwtBearer validates incoming tokens locally against BiatecOIDC's
+            // published JWKS (Authority - no per-request network call once keys are cached), while
+            // AddMcp serves /.well-known/oauth-protected-resource and shapes the 401/WWW-Authenticate
+            // challenge that tells an unauthenticated MCP client where to authenticate. See
+            // CLAUDE.md's BiatecMCP architecture notes for the full request flow and the MCP C# SDK
+            // API surface this was verified against (ModelContextProtocol.AspNetCore 1.4.1).
+            builder.Services
                 .AddAuthentication(options =>
                 {
-                    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-                    options.DefaultChallengeScheme = GoogleCloudStorageProvider.ProviderName;
+                    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                    options.DefaultChallengeScheme = McpAuthenticationDefaults.AuthenticationScheme;
                 })
-                .AddCookie()
-                .AddGoogleOpenIdConnect(GoogleCloudStorageProvider.ProviderName, options =>
+                .AddJwtBearer(options =>
                 {
-                    options.ClientId = googleCloudConfig.ClientId;
-                    options.ClientSecret = googleCloudConfig.ClientSecret;
-
-                    // Basic scopes - only request what's needed initially
-                    options.Scope.Clear(); // Clear default scopes
-                    options.Scope.Add("openid");
-                    options.Scope.Add("profile");
-                    options.Scope.Add("email");
-                    options.Scope.Add(Google.Apis.Drive.v3.DriveService.Scope.DriveFile);
-
-                    // Note: Cross-Account Protection doesn't require a special scope
-                    // It works with standard OAuth scopes and proper security practices
-
-                    options.ClaimActions.MapJsonKey(ClaimTypes.Email, "email");
-                    options.ClaimActions.MapJsonKey(ClaimTypes.Name, "name");
-                    options.ClaimActions.MapJsonKey(ClaimTypes.GivenName, "given_name");
-                    options.ClaimActions.MapJsonKey(ClaimTypes.Surname, "family_name");
-
-                    options.Events = new Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectEvents
+                    options.Authority = oidcConfig.Issuer;
+                    options.TokenValidationParameters = new TokenValidationParameters
                     {
-                        OnRedirectToIdentityProvider = context =>
-                        {
-                            // Store session information in authentication properties
-                            if (context.Properties.Items.ContainsKey("sessionId"))
-                            {
-                                context.ProtocolMessage.State = context.Properties.Items["sessionId"];
-                            }
-                            OpenIdConnectIncrementalAuth.Apply(context);
-                            return Task.CompletedTask;
-                        },
-                        OnTokenValidated = context =>
-                        {
-                            // Enforce that Google actually verified the user's email, unconditionally -
-                            // independent of the optional Cross-Account Protection feature toggle - since
-                            // email is the sole tenant-isolation input for the self-custody key derivation.
-                            var emailVerifiedClaim = context.Principal?.FindFirst("email_verified")?.Value;
-                            if (string.Equals(emailVerifiedClaim, "false", StringComparison.OrdinalIgnoreCase))
-                            {
-                                context.Fail("Google account email is not verified.");
-                                return Task.CompletedTask;
-                            }
-
-                            // Record which provider signed this session in, so the right
-                            // ICloudStorageProvider can be resolved from the cookie later.
-                            CloudStorageProviderClaims.Stamp(context.Principal, GoogleCloudStorageProvider.ProviderName);
-
-                            return Task.CompletedTask;
-                        },
-                        OnAuthenticationFailed = context =>
-                        {
-                            // Log the authentication failure for debugging
-                            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
-                            logger.LogError(context.Exception, "OpenIdConnect authentication failed: {ErrorMessage}", context.Exception?.Message);
-
-                            // Handle nonce validation errors specifically
-                            if (context.Exception?.Message?.Contains("nonce") == true)
-                            {
-                                logger.LogWarning("Nonce validation failed - this may be due to device pairing flow. Continuing with authentication.");
-                                context.HandleResponse();
-                                // Redirect to an error page or handle gracefully
-                                context.Response.Redirect("/pair.html?error=nonce_validation_failed");
-                                return Task.CompletedTask;
-                            }
-
-                            return Task.CompletedTask;
-                        }
+                        // RFC 8707: this server's canonical resource URI is required in the token's `aud`
+                        // claim (alongside whichever client_id obtained it) - see BiatecOIDC's
+                        // JwtIssuerService "resource" parameter handling. This is what lets BiatecMCP
+                        // validate tokens from ANY dynamically-registered MCP client (see BiatecOIDC's
+                        // POST /register) against one stable value, instead of needing to know every
+                        // individual client_id in advance.
+                        ValidateAudience = true,
+                        ValidAudience = mcpResourceConfig.CanonicalResourceUri
                     };
-                    // Configure protocol validator to be more lenient with nonce validation for device flows
-                    options.ProtocolValidator.RequireNonce = false;
-                });
-
-            // Only register the Microsoft auth scheme when an Entra app registration is actually
-            // configured (see entraConfigured above) - otherwise it would appear as a challengeable
-            // scheme/provider with an Authority built from placeholder/empty ClientId/ClientSecret that
-            // can only ever fail sign-in.
-            if (entraConfigured)
-            {
-                authenticationBuilder.AddOpenIdConnect(MicrosoftCloudStorageProvider.ProviderName, options =>
+                })
+                .AddMcp(options =>
                 {
-                    options.Authority = $"https://login.microsoftonline.com/{entraConfig.TenantId}/v2.0";
-                    options.ClientId = entraConfig.ClientId;
-                    options.ClientSecret = entraConfig.ClientSecret;
-                    options.ResponseType = "code";
-                    options.UsePkce = true;
-                    options.SaveTokens = true;
-                    options.CallbackPath = "/signin-microsoft";
-
-                    // Basic scopes plus the OneDrive app-folder permission - see BiatecOIDC/ENTRA_SETUP_GUIDE.md
-                    options.Scope.Clear();
-                    options.Scope.Add("openid");
-                    options.Scope.Add("profile");
-                    options.Scope.Add("email");
-                    options.Scope.Add("offline_access");
-                    options.Scope.Add("https://graph.microsoft.com/Files.ReadWrite.AppFolder");
-
-                    options.ClaimActions.MapJsonKey(ClaimTypes.Email, "email");
-                    options.ClaimActions.MapJsonKey(ClaimTypes.Name, "name");
-
-                    options.Events = new Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectEvents
+                    options.ResourceMetadata = new ProtectedResourceMetadata
                     {
-                        OnRedirectToIdentityProvider = context =>
-                        {
-                            if (context.Properties.Items.ContainsKey("sessionId"))
-                            {
-                                context.ProtocolMessage.State = context.Properties.Items["sessionId"];
-                            }
-                            OpenIdConnectIncrementalAuth.Apply(context);
-                            return Task.CompletedTask;
-                        },
-                        OnTokenValidated = context =>
-                        {
-                            CloudStorageProviderClaims.Stamp(context.Principal, MicrosoftCloudStorageProvider.ProviderName);
-                            return Task.CompletedTask;
-                        },
-                        OnAuthenticationFailed = context =>
-                        {
-                            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
-                            logger.LogError(context.Exception, "Microsoft OpenIdConnect authentication failed: {ErrorMessage}", context.Exception?.Message);
-
-                            if (context.Exception?.Message?.Contains("nonce") == true)
-                            {
-                                logger.LogWarning("Nonce validation failed - this may be due to device pairing flow. Continuing with authentication.");
-                                context.HandleResponse();
-                                context.Response.Redirect("/pair.html?error=nonce_validation_failed");
-                                return Task.CompletedTask;
-                            }
-
-                            return Task.CompletedTask;
-                        }
+                        Resource = mcpResourceConfig.CanonicalResourceUri,
+                        AuthorizationServers = { oidcConfig.Issuer },
+                        BearerMethodsSupported = { "header" },
+                        // Deliberately just "openid sign" - the minimal scope set the 3 tools here need.
+                        // A client wanting a different wallet-API scope (e.g. a future tool needing
+                        // manage-limits/rekey) requests it explicitly; BiatecOIDC's own consent screen is
+                        // what actually shows the user what's being granted either way.
+                        ScopesSupported = { "openid", "sign" }
                     };
-                    options.ProtocolValidator.RequireNonce = false;
                 });
-            }
 
-            builder.Services.AddControllersWithViews();
+            builder.Services.AddAuthorizationBuilder()
+                .AddPolicy("sign", policy => policy.RequireClaim("sign", "true"));
 
-            // Rate limit the device-pairing session-keyed endpoints (defense-in-depth against brute-force /
-            // abuse even once the session ID itself is a high-entropy CSPRNG value).
-            builder.Services.AddRateLimiter(options =>
+            builder.Services.AddHttpContextAccessor();
+
+            // Thin HTTP wrapper over BiatecOIDC's wallet REST API (/wallet/sign, /wallet/seeds) - forwards
+            // the caller's own bearer token, never holds one of its own. Same typed-HttpClient idiom
+            // BiatecOIDC's own BiatecRouterQuoteClient uses for its outbound HTTP dependency.
+            builder.Services.AddHttpClient<IBiatecWalletClient, BiatecWalletClient>((sp, client) =>
             {
-                options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-                options.AddPolicy("device-session", httpContext =>
-                {
-                    var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown-ip";
-                    return System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ =>
-                        new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
-                        {
-                            PermitLimit = 20,
-                            Window = TimeSpan.FromMinutes(1),
-                            QueueLimit = 0
-                        });
-                });
+                client.BaseAddress = new Uri(oidcConfig.Issuer.TrimEnd('/') + "/");
             });
 
             // Configure MCP Server
@@ -353,8 +131,8 @@ namespace BiatecMCP
                 {
                     options.Stateless = true;
                 })
-                .WithToolsFromAssembly();
-
+                .WithToolsFromAssembly()
+                .AddAuthorizationFilters();
 
             var app = builder.Build();
 
@@ -373,16 +151,7 @@ namespace BiatecMCP
                 logger.LogWarning("No CORS origins configured. Using default policy based on environment.");
             }
 
-            app.UseSwagger(options =>
-            {
-                options.OpenApiVersion = OpenApiSpecVersion.OpenApi3_1;
-            });
-            app.UseSwaggerUI(options =>
-            {
-                options.InjectJavascript("/swagger/swagger-login.js");
-            });
-
-            // Enable static files with proper content types
+            // Enable static files with proper content types (serves wwwroot/index.html and legal pages)
             app.UseStaticFiles(new StaticFileOptions
             {
                 OnPrepareResponse = context =>
@@ -400,10 +169,8 @@ namespace BiatecMCP
 
             app.UseAuthentication();
             app.UseAuthorization();
-            app.UseRateLimiter();
 
-            app.MapControllers();
-            app.MapMcp("/mcp");
+            app.MapMcp("/mcp").RequireAuthorization();
 
             // Map default route to index.html
             app.MapGet("/", async context =>
@@ -413,10 +180,11 @@ namespace BiatecMCP
             });
 
             // Startup warm-up (do not remove, see CLAUDE.md "Startup warm-up" convention): force
-            // controller/action discovery and endpoint/route-table compilation to happen now, during
-            // startup, instead of lazily on whichever request Kubernetes routes here first once the
-            // pod's readiness probe passes.
-            _ = app.Services.GetRequiredService<IActionDescriptorCollectionProvider>().ActionDescriptors;
+            // endpoint/route-table compilation to happen now, during startup, instead of lazily on
+            // whichever request Kubernetes routes here first once the pod's readiness probe passes. No
+            // IActionDescriptorCollectionProvider warm-up here (unlike BiatecMCP/BiatecOIDC's other
+            // Program.cs files) - this service has no MVC controllers left; MapMcp/MapGet are Minimal API
+            // endpoints, fully covered by the DataSources warm-up below.
             foreach (var dataSource in ((Microsoft.AspNetCore.Routing.IEndpointRouteBuilder)app).DataSources)
             {
                 _ = dataSource.Endpoints;
@@ -456,18 +224,6 @@ namespace BiatecMCP
             }
 
             return false;
-        }
-
-        /// <summary>
-        /// True when <paramref name="value"/> looks like a real configured secret/id rather than an unedited
-        /// checked-in appsettings.json placeholder (the repo's convention for those is a <c>"your-..."</c>
-        /// literal, e.g. <c>"your-entra-client-id"</c>) or empty/whitespace.
-        /// </summary>
-        private static bool IsConfiguredValue(string? value)
-        {
-            return !string.IsNullOrWhiteSpace(value) 
-            && !value.StartsWith("your-", StringComparison.OrdinalIgnoreCase)
-            && value != "ClientId";
         }
     }
 }

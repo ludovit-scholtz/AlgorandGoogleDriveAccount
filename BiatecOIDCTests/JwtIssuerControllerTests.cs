@@ -33,11 +33,11 @@ namespace BiatecOIDCTests
 
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                var result = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
+                var result = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, null, "google");
                 Assert.That(result, Is.TypeOf<ChallengeResult>());
             }
 
-            var blockedResult = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
+            var blockedResult = await controller.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, null, "google");
 
             Assert.That(blockedResult, Is.TypeOf<RedirectResult>());
             var redirect = (RedirectResult)blockedResult;
@@ -65,32 +65,32 @@ namespace BiatecOIDCTests
             var unauthenticatedController = CreateController(jwtIssuerService.Object, cache, authenticated: false);
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                var result = await unauthenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
+                var result = await unauthenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, null, "google");
                 Assert.That(result, Is.TypeOf<ChallengeResult>());
             }
 
             var authenticatedController = CreateController(jwtIssuerService.Object, cache, authenticated: true);
-            var successResult = await authenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
+            var successResult = await authenticatedController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, null, "google");
             Assert.That(successResult, Is.TypeOf<RedirectToActionResult>());
             Assert.That(((RedirectToActionResult)successResult).ActionName, Is.EqualTo(nameof(JwtIssuerController.AuthorizeConsent)));
 
             var nextAttemptController = CreateController(jwtIssuerService.Object, cache, authenticated: false);
-            var nextAttemptResult = await nextAttemptController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, "google");
+            var nextAttemptResult = await nextAttemptController.Authorize(ClientId, RedirectUri, null, "code", "query", "openid profile email", "state-1", null, null, null, null, "google");
             Assert.That(nextAttemptResult, Is.TypeOf<ChallengeResult>());
         }
 
         [Test]
-        public void EndSession_WhenWildcardPostLogoutRedirectMatches_ReturnsSignOut()
+        public async Task EndSession_WhenWildcardPostLogoutRedirectMatches_ReturnsSignOut()
         {
             var cache = new InMemoryDistributedCache();
-            var jwtIssuerService = CreateJwtIssuerServiceMock();
             var configuration = BuildJwtIssuerConfiguration(
                 new[] { RedirectUri },
                 new[] { "https://*.example.com/login" });
+            var jwtIssuerService = CreateJwtIssuerServiceMock(configuration);
 
             var controller = CreateController(jwtIssuerService.Object, cache, authenticated: true, configuration);
 
-            var result = controller.EndSession(null, "https://tenant-a.example.com/login?redirect=%2F", "state-1", ClientId);
+            var result = await controller.EndSession(null, "https://tenant-a.example.com/login?redirect=%2F", "state-1", ClientId);
 
             Assert.That(result, Is.TypeOf<SignOutResult>());
             var signOut = (SignOutResult)result;
@@ -99,23 +99,81 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void EndSession_WhenWildcardPostLogoutRedirectDoesNotMatchRootDomain_ReturnsBadRequest()
+        public async Task EndSession_WhenWildcardPostLogoutRedirectDoesNotMatchRootDomain_ReturnsBadRequest()
         {
             var cache = new InMemoryDistributedCache();
-            var jwtIssuerService = CreateJwtIssuerServiceMock();
             var configuration = BuildJwtIssuerConfiguration(
                 new[] { RedirectUri },
                 new[] { "https://*.example.com/login" });
+            var jwtIssuerService = CreateJwtIssuerServiceMock(configuration);
 
             var controller = CreateController(jwtIssuerService.Object, cache, authenticated: true, configuration);
 
-            var result = controller.EndSession(null, "https://example.com/login", null, ClientId);
+            var result = await controller.EndSession(null, "https://example.com/login", null, ClientId);
 
             Assert.That(result, Is.TypeOf<BadRequestObjectResult>());
             var badRequest = (BadRequestObjectResult)result;
             Assert.That(badRequest.Value, Is.TypeOf<ProblemDetails>());
             var problem = (ProblemDetails)badRequest.Value!;
             Assert.That(problem.Detail, Does.Contain("not allowlisted"));
+        }
+
+        [Test]
+        public async Task Register_ValidRequest_Returns201WithPublicClient()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var newClient = new JwtIssuerClientConfiguration { ClientId = "new-dyn-client", RedirectUris = { "http://127.0.0.1:5000/cb" }, AllowedScopes = { "openid", "sign" } };
+            jwtIssuerService
+                .Setup(s => s.RegisterDynamicClientAsync("My MCP Client", It.Is<List<string>>(l => l.Contains("http://127.0.0.1:5000/cb")), "openid sign"))
+                .ReturnsAsync(newClient);
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = await controller.Register(new DynamicClientRegistrationRequest
+            {
+                ClientName = "My MCP Client",
+                RedirectUris = new List<string> { "http://127.0.0.1:5000/cb" },
+                Scope = "openid sign"
+            });
+
+            Assert.That(result, Is.TypeOf<ObjectResult>());
+            var objectResult = (ObjectResult)result;
+            Assert.That(objectResult.StatusCode, Is.EqualTo(201));
+            var response = (DynamicClientRegistrationResponse)objectResult.Value!;
+            Assert.That(response.ClientId, Is.EqualTo("new-dyn-client"));
+            Assert.That(response.TokenEndpointAuthMethod, Is.EqualTo("none"));
+        }
+
+        [Test]
+        public async Task Register_RequestsConfidentialAuthMethod_ReturnsBadRequest()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = await controller.Register(new DynamicClientRegistrationRequest
+            {
+                RedirectUris = new List<string> { "https://app.example.com/cb" },
+                TokenEndpointAuthMethod = "client_secret_post"
+            });
+
+            Assert.That(result, Is.TypeOf<BadRequestObjectResult>());
+            jwtIssuerService.Verify(s => s.RegisterDynamicClientAsync(It.IsAny<string?>(), It.IsAny<List<string>>(), It.IsAny<string?>()), Times.Never);
+        }
+
+        [Test]
+        public async Task Register_InvalidRedirectUri_ReturnsBadRequest()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(s => s.RegisterDynamicClientAsync(It.IsAny<string?>(), It.IsAny<List<string>>(), It.IsAny<string?>()))
+                .ThrowsAsync(new ArgumentException("redirect_uri 'http://evil.example.com' must be HTTPS, or a loopback HTTP URI if allowed."));
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = await controller.Register(new DynamicClientRegistrationRequest
+            {
+                RedirectUris = new List<string> { "http://evil.example.com" }
+            });
+
+            Assert.That(result, Is.TypeOf<BadRequestObjectResult>());
         }
 
         [Test]
@@ -212,11 +270,11 @@ namespace BiatecOIDCTests
         [Test]
         public async Task AuthorizeConsent_ClientHasDisplayName_ShowsDisplayNameInsteadOfClientId()
         {
-            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var configuration = BuildJwtIssuerConfigurationWithDisplayName("Capitalism 5");
+            var jwtIssuerService = CreateJwtIssuerServiceMock(configuration);
             jwtIssuerService
                 .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
                 .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid profile email" });
-            var configuration = BuildJwtIssuerConfigurationWithDisplayName("Capitalism 5");
             var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: true, configuration, providerAccessToken: "google-access-token");
 
             var result = await controller.AuthorizeConsent("request-id");
@@ -245,11 +303,11 @@ namespace BiatecOIDCTests
         [Test]
         public async Task SelectProvider_ClientHasDisplayName_ShowsDisplayNameAndRequestedScopes()
         {
-            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var configuration = BuildJwtIssuerConfigurationWithDisplayName("Capitalism 5");
+            var jwtIssuerService = CreateJwtIssuerServiceMock(configuration);
             jwtIssuerService
                 .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
                 .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid sign manage-limits" });
-            var configuration = BuildJwtIssuerConfigurationWithDisplayName("Capitalism 5");
             var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false, configuration);
 
             var result = await controller.SelectProvider("request-id");
@@ -362,7 +420,7 @@ namespace BiatecOIDCTests
             return count;
         }
 
-        private static Mock<IJwtIssuerService> CreateJwtIssuerServiceMock()
+        private static Mock<IJwtIssuerService> CreateJwtIssuerServiceMock(IConfiguration? configuration = null)
         {
             var mock = new Mock<IJwtIssuerService>();
             mock
@@ -389,6 +447,36 @@ namespace BiatecOIDCTests
                     };
 
                     return (true, null, null, normalizedRequest, client);
+                });
+
+            // Mirrors JwtIssuerService.ResolveClientAsync (real implementation, tested separately in
+            // JwtIssuerServiceTests) for controller-level tests: resolves from the optional configuration
+            // (built by BuildJwtIssuerConfiguration[WithDisplayName], same "JwtIssuer:Clients:0:..." shape
+            // the real config-bound JwtIssuerConfiguration uses) when the id matches, else falls back to a
+            // default client synthesized from the id - so tests that never configure a client explicitly
+            // (e.g. AuthorizeConsent_ClientHasNoDisplayName_FallsBackToClientId) still get a resolvable
+            // client with no DisplayName, exactly like an unconfigured real client would.
+            var configuredClient = configuration?.GetSection("JwtIssuer:Clients:0").Get<JwtIssuerClientConfiguration>();
+            mock
+                .Setup(service => service.ResolveClientAsync(It.IsAny<string?>()))
+                .ReturnsAsync((string? clientId) =>
+                {
+                    if (string.IsNullOrWhiteSpace(clientId))
+                    {
+                        return null;
+                    }
+
+                    if (configuredClient != null && string.Equals(configuredClient.ClientId, clientId, StringComparison.Ordinal))
+                    {
+                        return configuredClient;
+                    }
+
+                    return new JwtIssuerClientConfiguration
+                    {
+                        ClientId = clientId,
+                        RedirectUris = new List<string> { RedirectUri },
+                        AllowedScopes = new List<string> { "openid", "profile", "email" }
+                    };
                 });
 
             return mock;

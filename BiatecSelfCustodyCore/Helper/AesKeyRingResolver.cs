@@ -17,6 +17,7 @@ namespace BiatecSelfCustodyCore.Helper
         /// Key/IV isn't valid base64 of the required length - callers use this at construction time so a
         /// misconfigured active key is caught at startup, not as a wall of unexplained runtime failures.
         /// </summary>
+        /// <param name="config">The key ring configuration (e.g. <c>AesOptions</c> or <c>ProviderTokenProtectionConfiguration</c>) to resolve the active key from.</param>
         /// <param name="configSectionName">Used only to make the exception message actionable (e.g. "AesOptions").</param>
         public static AesKeyRingEntry GetActiveKey(IAesKeyRingConfiguration config, string configSectionName)
         {

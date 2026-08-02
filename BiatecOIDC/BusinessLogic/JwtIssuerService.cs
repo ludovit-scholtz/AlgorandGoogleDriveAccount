@@ -25,6 +25,7 @@ namespace BiatecOIDC.BusinessLogic
         private readonly IDriveService _driveService;
         private readonly IProviderAccessTokenProtector _providerTokenProtector;
         private readonly ICloudStorageProviderCatalog _providerCatalog;
+        private readonly IDynamicClientStore _dynamicClientStore;
         private readonly IHostEnvironment _environment;
         private readonly ILogger<JwtIssuerService> _logger;
         private readonly RSA _rsa;
@@ -41,6 +42,7 @@ namespace BiatecOIDC.BusinessLogic
             IDriveService driveService,
             IProviderAccessTokenProtector providerTokenProtector,
             ICloudStorageProviderCatalog providerCatalog,
+            IDynamicClientStore dynamicClientStore,
             IHostEnvironment environment,
             ILogger<JwtIssuerService> logger)
         {
@@ -49,6 +51,7 @@ namespace BiatecOIDC.BusinessLogic
             _driveService = driveService;
             _providerTokenProtector = providerTokenProtector;
             _providerCatalog = providerCatalog;
+            _dynamicClientStore = dynamicClientStore;
             _environment = environment;
             _logger = logger;
 
@@ -83,6 +86,7 @@ namespace BiatecOIDC.BusinessLogic
                 end_session_endpoint = $"{issuer}/connect/endsession",
                 userinfo_endpoint = $"{issuer}/userinfo",
                 introspection_endpoint = $"{issuer}/introspect",
+                registration_endpoint = $"{issuer}/register",
                 jwks_uri = $"{issuer}/.well-known/jwks.json",
                 response_types_supported = new[] { "code", "id_token" },
                 response_modes_supported = new[] { "query", "form_post" },
@@ -134,7 +138,8 @@ namespace BiatecOIDC.BusinessLogic
                 State = request.State,
                 Nonce = request.Nonce,
                 CodeChallenge = request.CodeChallenge,
-                CodeChallengeMethod = string.IsNullOrWhiteSpace(request.CodeChallengeMethod) ? "plain" : request.CodeChallengeMethod
+                CodeChallengeMethod = string.IsNullOrWhiteSpace(request.CodeChallengeMethod) ? "plain" : request.CodeChallengeMethod,
+                Resource = request.Resource
             };
 
             if (normalized.ReturnUrl != null && string.IsNullOrWhiteSpace(request.ClientId) && string.IsNullOrWhiteSpace(request.ResponseType))
@@ -200,7 +205,7 @@ namespace BiatecOIDC.BusinessLogic
 
             if (!string.IsNullOrWhiteSpace(normalized.ClientId))
             {
-                client = Current.Clients.FirstOrDefault(c => string.Equals(c.ClientId, normalized.ClientId, StringComparison.Ordinal));
+                client = await ResolveClientAsync(normalized.ClientId);
                 if (client == null)
                 {
                     return (false, "invalid_client", "Unknown client_id.", null, null);
@@ -208,6 +213,10 @@ namespace BiatecOIDC.BusinessLogic
             }
             else
             {
+                // client_id-less discovery (matching solely by redirect_uri) only ever considers
+                // statically-configured clients - enumerating every dynamically-registered client in Redis
+                // to support this legacy/implicit flow isn't worth the cost, and every MCP-class client
+                // that goes through DCR always has its client_id in hand from the registration response.
                 var matchingClients = Current.Clients
                     .Where(c => c.RedirectUris.Any(r => RedirectUriMatcher.MatchesAuthorizeRedirect(r, normalized.RedirectUri)))
                     .ToList();
@@ -294,7 +303,80 @@ namespace BiatecOIDC.BusinessLogic
                 }
             }
 
+            // RFC 8707 resource indicator - see JwtIssuerConfiguration.ProtectedResources' remarks. A
+            // resource not on the allowlist is rejected outright (invalid_target) rather than silently
+            // dropped, same "loud, not silent" philosophy as the disallowed-known-scope check above.
+            if (!string.IsNullOrWhiteSpace(normalized.Resource) && !Current.ProtectedResources.Contains(normalized.Resource, StringComparer.Ordinal))
+            {
+                return (false, "invalid_target", $"'{normalized.Resource}' is not a resource registered with this authorization server.", null, null);
+            }
+
             return (true, null, null, normalized, client);
+        }
+
+        public async Task<JwtIssuerClientConfiguration?> ResolveClientAsync(string? clientId)
+        {
+            if (string.IsNullOrWhiteSpace(clientId))
+            {
+                return null;
+            }
+
+            var staticClient = Current.Clients.FirstOrDefault(c => string.Equals(c.ClientId, clientId, StringComparison.Ordinal));
+            if (staticClient != null)
+            {
+                return staticClient;
+            }
+
+            return await _dynamicClientStore.GetAsync(clientId);
+        }
+
+        public async Task<JwtIssuerClientConfiguration> RegisterDynamicClientAsync(string? clientName, List<string> redirectUris, string? requestedScope)
+        {
+            if (redirectUris.Count == 0)
+            {
+                throw new ArgumentException("At least one redirect_uris entry is required.", nameof(redirectUris));
+            }
+
+            foreach (var redirectUri in redirectUris)
+            {
+                if (!IsAllowedRedirectUri(redirectUri))
+                {
+                    throw new ArgumentException($"redirect_uri '{redirectUri}' must be HTTPS, or a loopback HTTP URI if allowed.", nameof(redirectUris));
+                }
+            }
+
+            var client = new JwtIssuerClientConfiguration
+            {
+                ClientId = GenerateOpaqueToken(24),
+                DisplayName = string.IsNullOrWhiteSpace(clientName) ? null : clientName,
+                ClientSecret = null, // DCR here only ever registers public clients - PKCE is mandatory for them.
+                RedirectUris = redirectUris,
+                // Capped regardless of `requestedScope` - see DynamicClientRegistrationDefaultScopes' remarks.
+                AllowedScopes = Current.DynamicClientRegistrationDefaultScopes.ToList()
+            };
+
+            await _dynamicClientStore.SaveAsync(client);
+            _logger.LogInformation("Registered a new dynamic OIDC client {ClientId} ({ClientName}).", client.ClientId, clientName ?? "(unnamed)");
+            return client;
+        }
+
+        /// <summary>Same HTTPS-or-allowed-loopback policy <see cref="ValidateAuthorizeRequestAsync"/> applies to <c>redirect_uri</c>.</summary>
+        private bool IsAllowedRedirectUri(string redirectUri)
+        {
+            if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri) || !string.IsNullOrEmpty(uri.Fragment))
+            {
+                return false;
+            }
+
+            if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+            }
+
+            var isLoopback = string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase)
+                              || string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                              || string.Equals(uri.Host, "::1", StringComparison.OrdinalIgnoreCase);
+            return Current.AllowHttpForLoopbackRedirectUris && isLoopback;
         }
 
         public async Task<string> StorePendingAuthorizeRequestAsync(OidcAuthorizeRequest request)
@@ -422,6 +504,7 @@ namespace BiatecOIDC.BusinessLogic
                 ShortIdentity = shortIdentity,
                 CodeChallenge = request.CodeChallenge,
                 CodeChallengeMethod = request.CodeChallengeMethod,
+                Resource = request.Resource,
                 ProtectedProviderAccessToken = protectedProviderAccessToken,
                 ProtectedProviderRefreshToken = protectedProviderRefreshToken,
                 CreatedUtc = DateTimeOffset.UtcNow,
@@ -443,7 +526,7 @@ namespace BiatecOIDC.BusinessLogic
 
         public async Task<(bool Success, int StatusCode, string? Error, string? ErrorDescription, OidcTokenResponse? Response)> ExchangeTokenAsync(OidcTokenRequest request, string? basicAuthHeader)
         {
-            var clientValidation = ValidateClientAuthentication(request.ClientId, request.ClientSecret, basicAuthHeader);
+            var clientValidation = await ValidateClientAuthenticationAsync(request.ClientId, request.ClientSecret, basicAuthHeader);
             if (!clientValidation.Success)
             {
                 return (false, clientValidation.StatusCode, clientValidation.Error, clientValidation.ErrorDescription, null);
@@ -492,6 +575,16 @@ namespace BiatecOIDC.BusinessLogic
                     return (false, 400, "invalid_grant", "Authorization code expired.", null);
                 }
 
+                // RFC 8707: the resource parameter on /token must match what was authorized at /authorize -
+                // it isn't re-validated against ProtectedResources here (already validated once, and the
+                // code itself is proof the resource was legitimately requested), just checked for
+                // consistency so a token can't be requested against a different resource than the user
+                // actually consented to.
+                if (!string.Equals(codeRecord.Resource ?? string.Empty, request.Resource ?? string.Empty, StringComparison.Ordinal))
+                {
+                    return (false, 400, "invalid_target", "resource does not match the authorization request.", null);
+                }
+
                 var response = await BuildTokenResponseAsync(
                     client.ClientId,
                     codeRecord.Subject,
@@ -501,6 +594,7 @@ namespace BiatecOIDC.BusinessLogic
                     codeRecord.ShortIdentity,
                     codeRecord.Nonce,
                     codeRecord.Scope,
+                    codeRecord.Resource,
                     codeRecord.ProtectedProviderAccessToken,
                     codeRecord.ProtectedProviderRefreshToken,
                     includeRefreshToken: true);
@@ -550,6 +644,7 @@ namespace BiatecOIDC.BusinessLogic
                     refreshRecord.ShortIdentity,
                     nonce: null,
                     refreshRecord.Scope,
+                    refreshRecord.Resource,
                     protectedProviderAccessToken,
                     protectedProviderRefreshToken,
                     includeRefreshToken: true);
@@ -594,7 +689,14 @@ namespace BiatecOIDC.BusinessLogic
                     return (false, null, null, "Provided token is not an access token.");
                 }
 
-                var claims = jwt.Claims.ToDictionary(c => c.Type, c => (object)c.Value, StringComparer.Ordinal);
+                // GroupBy+first, not a direct ToDictionary: an access token issued with a validated RFC
+                // 8707 resource (see CreateAccessToken) carries two "aud" claims (client_id and the
+                // resource URI), and ToDictionary throws ArgumentException on a duplicate key. Callers of
+                // this claims dictionary (IntrospectAsync) only ever want a single representative value per
+                // claim type, same as before this existed for every other (single-valued) claim type.
+                var claims = jwt.Claims
+                    .GroupBy(c => c.Type, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => (object)g.First().Value, StringComparer.Ordinal);
                 return (true, principal, claims, null);
             }
             catch (Exception ex)
@@ -727,11 +829,12 @@ namespace BiatecOIDC.BusinessLogic
             string shortIdentity,
             string? nonce,
             string scope,
+            string? resource,
             string? protectedProviderAccessToken,
             string? protectedProviderRefreshToken,
             bool includeRefreshToken)
         {
-            var accessToken = CreateAccessToken(subject, clientId, email, algorandAddress, provider, shortIdentity, scope, protectedProviderAccessToken, protectedProviderRefreshToken);
+            var accessToken = CreateAccessToken(subject, clientId, email, algorandAddress, provider, shortIdentity, scope, resource, protectedProviderAccessToken, protectedProviderRefreshToken);
             var idToken = CreateIdToken(subject, clientId, email, algorandAddress, shortIdentity, nonce);
 
             string? refreshToken = null;
@@ -748,6 +851,7 @@ namespace BiatecOIDC.BusinessLogic
                     Provider = provider,
                     ShortIdentity = shortIdentity,
                     Scope = scope,
+                    Resource = resource,
                     // Renewed (via RenewProviderTokenAsync) whenever a cached provider refresh token is
                     // available - see ProtectedProviderRefreshToken below and OIDC_INTEGRATION_GUIDE.md's
                     // "Provider access token caching" section. Falls back to being carried forward
@@ -831,7 +935,7 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         private static readonly string[] AlwaysGrantedScopes = { "openid", "profile", "email" };
 
-        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string? provider, string shortIdentity, string scope, string? protectedProviderAccessToken, string? protectedProviderRefreshToken)
+        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string? provider, string shortIdentity, string scope, string? resource, string? protectedProviderAccessToken, string? protectedProviderRefreshToken)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.AccessTokenLifetimeMinutes);
@@ -885,6 +989,18 @@ namespace BiatecOIDC.BusinessLogic
                 claims.Add(new Claim(ProviderAccessTokenProtector.RefreshClaimType, protectedProviderRefreshToken));
             }
 
+            // RFC 8707: when a validated resource indicator was requested, add it to `aud` alongside the
+            // client_id - JwtPayload merges the `audience` constructor parameter with any explicit "aud"
+            // claims already present into a single multi-value `aud` array, so a resource server (like
+            // BiatecMCP) can validate against its own stable resource URI regardless of which client_id
+            // obtained the token, while every existing single-aud-client_id consumer of this token
+            // (ValidateBearerAccessToken's ValidAudiences check) keeps working unchanged since it still
+            // matches on client_id being present in `aud`.
+            if (!string.IsNullOrWhiteSpace(resource))
+            {
+                claims.Add(new Claim(JwtRegisteredClaimNames.Aud, resource));
+            }
+
             var token = new JwtSecurityToken(
                 issuer: Current.Issuer,
                 audience: clientId,
@@ -897,7 +1013,7 @@ namespace BiatecOIDC.BusinessLogic
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
-        private (bool Success, int StatusCode, string? Error, string? ErrorDescription, JwtIssuerClientConfiguration? Client) ValidateClientAuthentication(
+        private async Task<(bool Success, int StatusCode, string? Error, string? ErrorDescription, JwtIssuerClientConfiguration? Client)> ValidateClientAuthenticationAsync(
             string? bodyClientId,
             string? bodyClientSecret,
             string? basicAuthHeader)
@@ -912,7 +1028,7 @@ namespace BiatecOIDC.BusinessLogic
                 return (false, 401, "invalid_client", "Missing client_id.", null);
             }
 
-            var client = Current.Clients.FirstOrDefault(c => string.Equals(c.ClientId, clientId, StringComparison.Ordinal));
+            var client = await ResolveClientAsync(clientId);
             if (client == null)
             {
                 return (false, 401, "invalid_client", "Unknown client_id.", null);
@@ -1124,6 +1240,9 @@ namespace BiatecOIDC.BusinessLogic
             public string? CodeChallenge { get; set; }
             public string? CodeChallengeMethod { get; set; }
 
+            /// <summary>RFC 8707 resource indicator validated at <c>/authorize</c> time - see <see cref="JwtIssuerConfiguration.ProtectedResources"/>.</summary>
+            public string? Resource { get; set; }
+
             /// <summary>
             /// The caller's Google/Microsoft access token, AES-256-GCM encrypted under a dedicated key (see
             /// <c>IProviderAccessTokenProtector</c>) - never plaintext, even here. Captured at
@@ -1154,6 +1273,9 @@ namespace BiatecOIDC.BusinessLogic
             public string? Provider { get; set; }
             public string ShortIdentity { get; set; } = string.Empty;
             public string Scope { get; set; } = "openid profile email";
+
+            /// <summary>RFC 8707 resource indicator carried forward from the original authorization code - see <see cref="JwtIssuerConfiguration.ProtectedResources"/>.</summary>
+            public string? Resource { get; set; }
 
             /// <summary>
             /// Renewed on every refresh (via <see cref="RenewProviderTokenAsync"/>) whenever

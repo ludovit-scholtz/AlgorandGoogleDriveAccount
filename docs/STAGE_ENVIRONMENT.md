@@ -18,13 +18,17 @@ byte-identical to what was already tested in stage (not a fresh rebuild that cou
 
 | Environment | BiatecMCP | BiatecOIDC |
 |---|---|---|
-| Production | `https://google.biatec.io` | `https://oidc.biatec.io` (+ legacy alias paths on `google.biatec.io`, see `CICD_GITHUB_ACTIONS.md`) |
-| Stage | `https://stage.google.biatec.io` | `https://stage.oidc.biatec.io` |
+| Production | `https://mcp.biatec.io` (+ legacy alias `google.biatec.io`) | `https://oidc.biatec.io` (+ legacy alias paths on `google.biatec.io`, see `CICD_GITHUB_ACTIONS.md`) |
+| Stage | `https://stage.mcp.biatec.io` (+ legacy alias `stage.google.biatec.io`) | `https://stage.oidc.biatec.io` |
 
-You need to create the `stage.google.biatec.io` and `stage.oidc.biatec.io` DNS records yourself
-(same as you did for `oidc.biatec.io`) — this repo has no way to do that for you. Once DNS resolves
-and the ingress is applied, `cert-manager` issues TLS certificates for both automatically via the
-same `letsencrypt` `ClusterIssuer` already used in production.
+You need to create the `stage.mcp.biatec.io`, `stage.google.biatec.io`, and `stage.oidc.biatec.io` DNS
+records yourself (same as you did for `oidc.biatec.io`/`mcp.biatec.io`) — this repo has no way to do that
+for you. Once DNS resolves and the ingress is applied, `cert-manager` issues TLS certificates for all of
+them automatically via the same `letsencrypt` `ClusterIssuer` already used in production. BiatecMCP's
+`mcp.biatec.io`/`stage.mcp.biatec.io` hosts are also its canonical OAuth resource identity
+(`Mcp:CanonicalResourceUri`) — BiatecOIDC's `JwtIssuer:ProtectedResources` must list the matching URI
+(`https://mcp.biatec.io/mcp` / `https://stage.mcp.biatec.io/mcp`) for BiatecMCP to accept tokens BiatecOIDC
+issues; see the repo root `CLAUDE.md`'s "Kubernetes / ingress routing" section.
 
 ## Kubernetes resources
 
@@ -36,7 +40,7 @@ for a production resource:
 |---|---|---|
 | Deployment | `biatec-mcp-app-deployment` / `biatec-oidc-app-deployment` | `biatec-mcp-stage-app-deployment` / `biatec-oidc-stage-app-deployment` |
 | Service | `biatec-mcp-service` / `biatec-oidc-service` | `biatec-mcp-stage-service` / `biatec-oidc-stage-service` |
-| Ingress | `biatec-mcp-ingress`, `biatec-oidc-ingress` + `biatec-oidc-domain-ingress` | `biatec-mcp-stage-ingress`, `biatec-oidc-stage-ingress` |
+| Ingress | `biatec-mcp-ingress` + `biatec-mcp-domain-ingress`, `biatec-oidc-ingress` + `biatec-oidc-domain-ingress` | `biatec-mcp-stage-ingress` + `biatec-mcp-stage-domain-ingress`, `biatec-oidc-stage-ingress` |
 | ConfigMap | `biatec-mcp-conf` / `biatec-oidc-conf` | `biatec-mcp-stage-conf` / `biatec-oidc-stage-conf` |
 | Manifest files | `k8s/main/deployment-mcp.yaml`, `k8s/main/deployment-oidc.yaml`, `k8s/main/conf-mcp/`, `k8s/main/conf-oidc/` | `k8s/stage/deployment-mcp-stage.yaml`, `k8s/stage/deployment-oidc-stage.yaml`, `k8s/stage/conf-mcp-stage/`, `k8s/stage/conf-oidc-stage/` |
 
@@ -46,9 +50,13 @@ Because the existing CI `Role` (see `KUBE_CONFIG_SECURITY.md`) grants verbs on r
 **no new secret, Role, or RoleBinding was needed** to add stage. This is the main practical benefit
 of the "same namespace" choice over a fully separate namespace.
 
-Stage's Ingress objects are each a single full catch-all (`/(.*)` + `rewrite-target: /$1`) straight
-to their own service — unlike production's `BiatecOIDC`, which needs a second Ingress object to
-carve out a legacy alias host. Stage has no legacy host to preserve, so it doesn't need that split.
+`BiatecOIDC` needs a second Ingress object (`biatec-oidc-domain-ingress`/`-stage`) to carve out its
+dedicated host alongside a legacy alias on the shared `google.biatec.io` host it doesn't own outright.
+`BiatecMCP` needs the same split for the same reason: `biatec-mcp-ingress`/`-stage` is a legacy
+catch-all on the shared `google.biatec.io`/`stage.google.biatec.io` host, and
+`biatec-mcp-domain-ingress`/`-stage` is its own dedicated `mcp.biatec.io`/`stage.mcp.biatec.io` host —
+its canonical OAuth resource identity. Both dedicated-host Ingress objects are each a single full
+catch-all (`/(.*)` + `rewrite-target: /$1`) straight to their own service.
 
 ## What is (and isn't) isolated from production
 

@@ -35,6 +35,7 @@ namespace BiatecOIDCTests
         protected Mock<IProviderAccessTokenProtector> MockProviderTokenProtector = null!;
         protected Mock<ICloudStorageProviderCatalog> MockProviderCatalog = null!;
         protected Mock<ICloudStorageProvider> MockCloudStorageProvider = null!;
+        protected Mock<IDynamicClientStore> MockDynamicClientStore = null!;
         protected Mock<IHostEnvironment> MockEnvironment = null!;
         protected Mock<ILogger<JwtIssuerService>> MockLogger = null!;
         protected JwtIssuerService Service = null!;
@@ -76,6 +77,11 @@ namespace BiatecOIDCTests
             MockProviderCatalog = new Mock<ICloudStorageProviderCatalog>();
             MockProviderCatalog.Setup(c => c.Resolve(It.IsAny<string?>())).Returns(MockCloudStorageProvider.Object);
 
+            // Default: no dynamically-registered clients exist - tests exercising DCR resolution override
+            // this per-test (see DynamicClientRegistrationTests).
+            MockDynamicClientStore = new Mock<IDynamicClientStore>();
+            MockDynamicClientStore.Setup(s => s.GetAsync(It.IsAny<string>())).ReturnsAsync((JwtIssuerClientConfiguration?)null);
+
             MockEnvironment = new Mock<IHostEnvironment>();
             MockEnvironment.Setup(e => e.EnvironmentName).Returns(Environments.Development);
             MockLogger = new Mock<ILogger<JwtIssuerService>>();
@@ -105,7 +111,7 @@ namespace BiatecOIDCTests
 
             MockConfig.Setup(m => m.CurrentValue).Returns(DefaultConfig);
 
-            Service = new JwtIssuerService(MockRedis.Object, MockConfig.Object, MockDriveService.Object, MockProviderTokenProtector.Object, MockProviderCatalog.Object, MockEnvironment.Object, MockLogger.Object);
+            Service = new JwtIssuerService(MockRedis.Object, MockConfig.Object, MockDriveService.Object, MockProviderTokenProtector.Object, MockProviderCatalog.Object, MockDynamicClientStore.Object, MockEnvironment.Object, MockLogger.Object);
         }
 
         /// <summary>
@@ -141,7 +147,8 @@ namespace BiatecOIDCTests
             string? codeChallenge = null,
             string? codeChallengeMethod = null,
             string? provider = null,
-            string? protectedProviderAccessToken = null)
+            string? protectedProviderAccessToken = null,
+            string? resource = null)
         {
             var record = new
             {
@@ -157,6 +164,7 @@ namespace BiatecOIDCTests
                 shortIdentity = "ABCD" + algorandAddress[^4..],
                 codeChallenge,
                 codeChallengeMethod,
+                resource,
                 protectedProviderAccessToken,
                 createdUtc = DateTimeOffset.UtcNow,
                 expiresUtc = expiresUtc ?? DateTimeOffset.UtcNow.AddSeconds(120)
@@ -2580,6 +2588,7 @@ namespace BiatecOIDCTests
                     MockDriveService.Object,
                     MockProviderTokenProtector.Object,
                     MockProviderCatalog.Object,
+                    MockDynamicClientStore.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
                 _ = svc.GetJsonWebKeySet();
@@ -2601,6 +2610,7 @@ namespace BiatecOIDCTests
                     MockDriveService.Object,
                     MockProviderTokenProtector.Object,
                     MockProviderCatalog.Object,
+                    MockDynamicClientStore.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
                 _ = svc.GetJsonWebKeySet();
@@ -2620,6 +2630,7 @@ namespace BiatecOIDCTests
                     MockDriveService.Object,
                     MockProviderTokenProtector.Object,
                     MockProviderCatalog.Object,
+                    MockDynamicClientStore.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
                 _ = svc.GetJsonWebKeySet();
@@ -2639,6 +2650,7 @@ namespace BiatecOIDCTests
                 MockDriveService.Object,
                 MockProviderTokenProtector.Object,
                 MockProviderCatalog.Object,
+                MockDynamicClientStore.Object,
                 MockEnvironment.Object,
                 MockLogger.Object);
 
@@ -2679,6 +2691,7 @@ namespace BiatecOIDCTests
                     MockDriveService.Object,
                     MockProviderTokenProtector.Object,
                     MockProviderCatalog.Object,
+                    MockDynamicClientStore.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
             });
@@ -2698,6 +2711,7 @@ namespace BiatecOIDCTests
                     MockDriveService.Object,
                     MockProviderTokenProtector.Object,
                     MockProviderCatalog.Object,
+                    MockDynamicClientStore.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
             });
@@ -2717,6 +2731,7 @@ namespace BiatecOIDCTests
                     MockDriveService.Object,
                     MockProviderTokenProtector.Object,
                     MockProviderCatalog.Object,
+                    MockDynamicClientStore.Object,
                     MockEnvironment.Object,
                     MockLogger.Object);
             });

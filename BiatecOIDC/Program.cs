@@ -140,6 +140,13 @@ namespace BiatecOIDC
             // token - see ProviderAccessTokenProtector's remarks and OIDC_INTEGRATION_GUIDE.md's "Provider
             // access token caching" section for the full design/threat-model writeup.
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IProviderAccessTokenProtector, BiatecOIDC.BusinessLogic.ProviderAccessTokenProtector>();
+
+            // Backs POST /register (RFC 7591 Dynamic Client Registration) - lets any OAuth client (e.g. an
+            // MCP client such as Claude Desktop) self-register a public client_id at connect time instead
+            // of an operator hand-adding every vendor's redirect URI to JwtIssuer:Clients. See
+            // IJwtIssuerService.ResolveClientAsync for how statically- and dynamically-registered clients
+            // are merged (static config always wins on a matching id).
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IDynamicClientStore, BiatecOIDC.BusinessLogic.DynamicClientStore>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IJwtIssuerService, BiatecOIDC.BusinessLogic.JwtIssuerService>();
 
             // Wallet API (WalletController): signs transaction groups gated on the "sign" claim and
@@ -300,6 +307,25 @@ namespace BiatecOIDC
                 });
             }
 
+            // Rate limit POST /register (RFC 7591 Dynamic Client Registration) - an anonymous, unauthenticated
+            // endpoint that mints new OIDC clients, so it needs its own abuse control (same fixed-window-
+            // per-IP idiom BiatecMCP's device-pairing endpoints already use).
+            builder.Services.AddRateLimiter(options =>
+            {
+                options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+                options.AddPolicy("client-registration", httpContext =>
+                {
+                    var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown-ip";
+                    return System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ =>
+                        new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = 10,
+                            Window = TimeSpan.FromMinutes(1),
+                            QueueLimit = 0
+                        });
+                });
+            });
+
             var app = builder.Build();
 
             // Log CORS configuration for debugging
@@ -342,6 +368,7 @@ namespace BiatecOIDC
 
             app.UseAuthentication();
             app.UseAuthorization();
+            app.UseRateLimiter();
 
             app.MapControllers();
 

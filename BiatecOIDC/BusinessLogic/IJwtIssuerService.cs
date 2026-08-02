@@ -10,6 +10,23 @@ namespace BiatecOIDC.BusinessLogic
         object GetJsonWebKeySet();
 
         Task<(bool IsValid, string? Error, string? ErrorDescription, OidcAuthorizeRequest? NormalizedRequest, JwtIssuerClientConfiguration? Client)> ValidateAuthorizeRequestAsync(OidcAuthorizeRequest request);
+
+        /// <summary>
+        /// Resolves a client by id, checking statically-configured <c>JwtIssuer:Clients</c> first (always
+        /// wins on a matching id, so an operator can hand-upgrade a dynamically-registered client) and
+        /// falling back to <c>IDynamicClientStore</c> (RFC 7591-registered clients - see
+        /// <c>POST /register</c>). Returns <c>null</c> if neither has a matching entry.
+        /// </summary>
+        Task<JwtIssuerClientConfiguration?> ResolveClientAsync(string? clientId);
+
+        /// <summary>
+        /// Registers a new public client (RFC 7591 Dynamic Client Registration). Throws
+        /// <see cref="ArgumentException"/> if <paramref name="redirectUris"/> is empty or contains a URI
+        /// that isn't HTTPS or an allowed loopback HTTP URI (same policy <c>/authorize</c> already applies).
+        /// The returned client's <c>AllowedScopes</c> is always
+        /// <c>JwtIssuer:DynamicClientRegistrationDefaultScopes</c>, regardless of <paramref name="requestedScope"/>.
+        /// </summary>
+        Task<JwtIssuerClientConfiguration> RegisterDynamicClientAsync(string? clientName, List<string> redirectUris, string? requestedScope);
         Task<string> StorePendingAuthorizeRequestAsync(OidcAuthorizeRequest request);
         Task<OidcAuthorizeRequest?> GetPendingAuthorizeRequestAsync(string requestId);
         Task RemovePendingAuthorizeRequestAsync(string requestId);
@@ -22,6 +39,9 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         Task<OidcAuthorizeRequest?> PeekPendingAuthorizeRequestAsync(string requestId);
 
+        /// <param name="request">The normalized, already-validated <c>/authorize</c> request.</param>
+        /// <param name="client">The resolved client the request is for.</param>
+        /// <param name="user">The authenticated user's principal.</param>
         /// <param name="providerAccessToken">
         /// The caller's current live Google/Microsoft access token, if available (resolved from the
         /// ambient cookie session at the call site) - encrypted and cached inside the issued access token

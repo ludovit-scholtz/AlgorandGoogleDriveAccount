@@ -106,6 +106,7 @@ namespace BiatecSelfCustodyCore.Providers
         /// endpoint. Returns <c>null</c> (never throws) if the code is invalid/expired/already used, or the
         /// request otherwise fails.
         /// </summary>
+        /// <param name="code">The authorization code returned in the OAuth callback.</param>
         /// <param name="redirectUri">Must exactly match the redirect URI used in <see cref="BuildAuthorizationUrl"/>.</param>
         Task<string?> ExchangeAuthorizationCodeAsync(string code, string redirectUri);
     }
