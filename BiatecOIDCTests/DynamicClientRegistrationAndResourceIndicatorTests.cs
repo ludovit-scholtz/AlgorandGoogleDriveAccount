@@ -234,6 +234,42 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task ValidateBearerAccessToken_DynamicallyRegisteredClientTokenWithResourceAudience_IsValid()
+        {
+            // Real-world MCP scenario: a self-registered (RFC 7591) client's client_id is never in the
+            // static JwtIssuer:Clients allowlist ValidateBearerAccessToken checks - but its token still
+            // carries the RFC 8707 resource URI in `aud`. That must be enough to validate, or every
+            // dynamically-registered MCP client's calls into BiatecOIDC's own wallet REST API (which
+            // forwards this exact bearer token - see WalletController) fail with invalid_token even though
+            // the token is entirely legitimate (correct signature, issuer, not expired).
+            const string dynamicClientId = "dyn-client-not-in-static-config";
+            var dynamicClient = new JwtIssuerClientConfiguration
+            {
+                ClientId = dynamicClientId,
+                RedirectUris = { "http://127.0.0.1:33445/callback" },
+                AllowedScopes = { "openid", "sign" }
+            };
+            MockDynamicClientStore.Setup(s => s.GetAsync(dynamicClientId)).ReturnsAsync(dynamicClient);
+
+            var code = "dynamic-client-resource-code";
+            SetupCacheGet("oidc:code:" + code, BuildCodeRecordJson(code, dynamicClientId, "http://127.0.0.1:33445/callback", resource: McpResource));
+            var tokenRequest = new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = "http://127.0.0.1:33445/callback",
+                ClientId = dynamicClientId,
+                Resource = McpResource
+            };
+            var tokenResult = await Service.ExchangeTokenAsync(tokenRequest, null);
+            Assert.That(tokenResult.Success, Is.True, "Pre-condition: token issuance must succeed");
+
+            var validation = Service.ValidateBearerAccessToken(tokenResult.Response!.AccessToken);
+
+            Assert.That(validation.IsValid, Is.True, validation.Error);
+        }
+
+        [Test]
         public async Task ValidateBearerAccessToken_TokenWithResourceInAudience_StillValidatesAgainstClientIdAllowlist()
         {
             // Existing endpoints (/userinfo, /introspect, /verify) validate ValidAudiences = registered

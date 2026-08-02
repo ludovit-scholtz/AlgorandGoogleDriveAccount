@@ -664,13 +664,22 @@ namespace BiatecOIDC.BusinessLogic
                 IssuerSigningKey = new RsaSecurityKey(_rsa.ExportParameters(false)),
                 ValidateIssuer = true,
                 ValidIssuer = Current.Issuer,
-                // Access tokens' aud is always the requesting client_id (see CreateAccessToken). These three
-                // endpoints (/userinfo, /introspect, /verify) are shared by every registered client, so we
-                // validate the aud is still one of our currently-registered clients rather than a single fixed
-                // value - this rejects tokens whose client has since been deregistered and defends against any
-                // aud tampering, without breaking any legitimate client's token.
+                // Access tokens' aud is always the requesting client_id (see CreateAccessToken), plus the RFC
+                // 8707 resource URI when one was validated at issuance. This endpoint (and /userinfo,
+                // /introspect, /verify, and every WalletController endpoint - all of which use this same
+                // manual-token-parsing path, see "Why manual token parsing") is shared by every registered
+                // client, so we validate aud against either the statically-configured client allowlist OR the
+                // configured protected-resource allowlist (JwtIssuer:ProtectedResources) - the former for
+                // ordinary relying parties, the latter for MCP-class clients that self-register dynamically
+                // (RFC 7591, see IDynamicClientStore/ResolveClientAsync): those clients' ids are never in
+                // Current.Clients, so without this a dynamically-registered client's otherwise-legitimate
+                // token (correct signature, issuer, not expired) would always fail here the moment it's
+                // forwarded to any of BiatecOIDC's own endpoints - e.g. BiatecMCP forwarding it to
+                // GET /wallet/address/{primaryAddress}/{slot}. The resource URI is only ever added to `aud`
+                // by this server itself at issuance (see CreateAccessToken), so trusting it here doesn't
+                // weaken the "reject a deregistered/tampered client" property this check exists for.
                 ValidateAudience = true,
-                ValidAudiences = Current.Clients.Select(c => c.ClientId),
+                ValidAudiences = Current.Clients.Select(c => c.ClientId).Concat(Current.ProtectedResources),
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.FromMinutes(1)
             };

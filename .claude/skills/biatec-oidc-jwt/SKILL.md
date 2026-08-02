@@ -314,8 +314,21 @@ Same reasoning as `/userinfo`/`/introspect`/`/verify` in `JwtIssuerController`: 
 Google OIDC (browser redirect), so a declarative `[Authorize]` would redirect an API caller instead of returning
 401/403 JSON. `WalletController` mirrors the existing pattern (`[AllowAnonymous]` + `BearerTokenHelper.ExtractBearerToken`
 + `IJwtIssuerService.ValidateBearerAccessToken`) rather than introducing a second, parallel `AddJwtBearer` scheme
-that would have to reimplement the same dynamic per-client audience validation `ValidateBearerAccessToken`
-already does.
+that would have to reimplement the same audience validation `ValidateBearerAccessToken` already does.
+
+`ValidateBearerAccessToken`'s `ValidAudiences` is `Current.Clients.Select(c => c.ClientId)` **concatenated with**
+`Current.ProtectedResources` (`JwtIssuer:ProtectedResources`) - not just the static client list. This matters for
+every dynamically-registered (RFC 7591) client, e.g. an MCP client that self-registered via `POST /register`: its
+`client_id` is never in `Current.Clients`, only in `IDynamicClientStore` (Redis) - which this synchronous
+validation path deliberately does not query. Without the `ProtectedResources` half, a dynamically-registered
+client's otherwise-legitimate token (correct signature, issuer, not expired) would fail here the instant it's
+forwarded to *any* BiatecOIDC endpoint - the real-world symptom was BiatecMCP's `getAlgorandAddress`/`listAlgorandAddresses`
+working (they read the `algorand_address` claim locally, no call to BiatecOIDC) while anything that actually had
+to call `GET /wallet/address/{primaryAddress}/{slot}`, `GET /wallet/seeds`, or `POST /wallet/sign` failed with
+`invalid_token` for VS Code's MCP client specifically (self-registered, not statically configured). The resource
+URI is only ever added to a token's `aud` by this server itself, at issuance, when `CreateAccessToken` validates
+an RFC 8707 `resource` parameter against that same `ProtectedResources` allowlist - so trusting it here doesn't
+weaken the "reject a token whose client was deregistered/tampered" property this check exists for.
 
 ## Client registration (`JwtIssuer:Clients` in appsettings.json)
 
