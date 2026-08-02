@@ -177,6 +177,27 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public void OAuthAuthorizationServerMetadata_ReturnsSameDocumentAsOpenIdConfiguration()
+        {
+            // RFC 8414 OAuth 2.0 Authorization Server Metadata - some OAuth/MCP clients (e.g. VS Code's MCP
+            // client) probe this URL before falling back to OIDC Discovery
+            // (.well-known/openid-configuration). The MCP Authorization spec only requires an authorization
+            // server to implement *one* of the two discovery mechanisms, and a spec-compliant client falls
+            // back to OIDC discovery if this 404s - but serving both removes the "Failed to fetch
+            // authorization server metadata... 404" warning entirely and is more broadly compatible with
+            // pure-OAuth (non-OIDC-aware) clients that only ever try this one.
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var expectedDocument = new { issuer = "https://stage.oidc.biatec.io" };
+            jwtIssuerService.Setup(s => s.GetDiscoveryDocument(It.IsAny<HttpRequest>())).Returns(expectedDocument);
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = controller.OAuthAuthorizationServerMetadata();
+
+            Assert.That(result, Is.TypeOf<OkObjectResult>());
+            Assert.That(((OkObjectResult)result).Value, Is.SameAs(expectedDocument));
+        }
+
+        [Test]
         public async Task AuthorizeConsent_MissingRequestId_ReturnsBadRequest()
         {
             var jwtIssuerService = CreateJwtIssuerServiceMock();

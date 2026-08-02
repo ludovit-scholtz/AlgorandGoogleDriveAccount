@@ -17,6 +17,9 @@ external integration doc — for implementation work, this file plus the source 
 
 - `GET /.well-known/openid-configuration` — discovery metadata (includes `end_session_endpoint`,
   `frontchannel_logout_supported: false`, `backchannel_logout_supported: false`)
+- `GET /.well-known/oauth-authorization-server` — RFC 8414 metadata, identical document to the OIDC
+  discovery endpoint above; served for OAuth/MCP clients that probe this URL before falling back to OIDC
+  discovery
 - `GET /.well-known/jwks.json` — public signing keys
 - `GET /authorize` — standard `response_type=code` (exchange at `/token`), plus a legacy `returnUrl` alias that
   POSTs `id_token` directly to the return URL. Accepts PKCE `code_challenge`/`code_challenge_method` (RFC 7636).

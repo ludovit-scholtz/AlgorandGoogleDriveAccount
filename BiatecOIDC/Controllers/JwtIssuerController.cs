@@ -59,6 +59,24 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
+        /// RFC 8414 OAuth 2.0 Authorization Server Metadata - identical content to
+        /// <see cref="OpenIdConfiguration"/> (OIDC Discovery is a superset of RFC 8414's required fields, and
+        /// extra fields are harmless per both specs). Exists because the MCP Authorization spec's
+        /// "Authorization Server Metadata Discovery" only requires an authorization server to implement *one*
+        /// of the two discovery mechanisms, but real-world MCP clients (e.g. VS Code's MCP client) probe this
+        /// specific well-known URL first and only fall back to OIDC Discovery if it 404s - serving both here
+        /// removes that warning entirely and is more broadly compatible with pure-OAuth (non-OIDC-aware)
+        /// clients that only ever check this one.
+        /// </summary>
+        /// <returns>The same provider metadata document as <see cref="OpenIdConfiguration"/>.</returns>
+        [AllowAnonymous]
+        [HttpGet(".well-known/oauth-authorization-server")]
+        public IActionResult OAuthAuthorizationServerMetadata()
+        {
+            return Ok(_jwtIssuerService.GetDiscoveryDocument(Request));
+        }
+
+        /// <summary>
         /// The RS256 public signing key(s) used to verify tokens issued by this provider.
         /// </summary>
         /// <returns>A JSON Web Key Set (JWKS).</returns>

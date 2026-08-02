@@ -19,7 +19,13 @@ for a given client (don't mix the two for the same integration).
 ## Implemented Endpoints
 
 - `GET /.well-known/openid-configuration`
-  - Discovery document for clients.
+  - OIDC Discovery document for clients.
+- `GET /.well-known/oauth-authorization-server`
+  - RFC 8414 OAuth 2.0 Authorization Server Metadata - identical content to the OIDC discovery document
+    above. Served alongside it because some OAuth/MCP clients (e.g. VS Code's MCP client) probe this URL
+    first and only fall back to OIDC discovery on a 404; a spec-compliant client falls back correctly
+    either way, but serving both avoids that round trip and is more broadly compatible with pure-OAuth
+    (non-OIDC-aware) clients.
 - `GET /.well-known/jwks.json`
   - Public signing keys for JWT validation.
 - `GET /authorize`
