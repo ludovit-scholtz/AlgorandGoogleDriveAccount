@@ -56,9 +56,14 @@ request is handled as three chained tool calls automatically.
   the best price. Only builds a real unsigned transaction for Biatec Router's own route today — if a competing
   aggregator quotes better, the comparison is still returned but no transaction is attached for that route yet
   (see the note below).
-- **`createBridgeTransaction`** — **architecture placeholder** for a future Aramid Finance bridge integration (a
-  plain payment/ASA transfer with a specific note field indicating the destination chain/address). Always
-  returns a clear "not implemented" error today — do not rely on it to move funds.
+- **`createBridgeTransaction`** — builds an unsigned [Aramid Finance](https://aramid.finance) bridge transaction:
+  a pay/axfer sent to Aramid's bridge deposit address (fetched live from Aramid's own on-chain + IPFS-hosted
+  configuration — never hardcoded) with a note field encoding the destination chain/address/amounts per Aramid's
+  `aramid-transfer/v1:j` format. Validates the route and Aramid's configured min/max amount bounds before
+  building. **Does not verify destination-chain bridge liquidity** — Aramid's own integration guide flags this
+  as essential to avoid a stranded transfer; the response always carries a `Warning` about this, and you should
+  confirm it independently (e.g. via Aramid's own tooling) before bridging anything but a small amount. Only
+  bridging *from* Algorand mainnet is supported today.
 - **`createMultisigTransaction`** — builds an unsigned payment/ASA transfer proposal from a `(version, threshold,
   participantAddresses)` multisig account. Each participant independently signs the returned envelope with their
   own `signTransaction` call (in their own wallet/MCP session — not necessarily this one), then the signed copies
@@ -95,6 +100,9 @@ request is handled as three chained tool calls automatically.
   SEED3...ADDR"* → `createMultisigTransaction(version=1, threshold=2, participantAddresses=[...], ...)`, then
   each participant runs `signTransaction` on the returned envelope in their own session, and any one party runs
   `mergeMultisigTransactions` on the collected signed copies followed by `executeAlgorandTransaction`.
+- *"bridge 1 algo to my address VOI...ADDR on Voi"* → `createBridgeTransaction(assetId=0, amount=1000000,
+  destinationNetwork=416101, destinationAddress="VOI...ADDR", destinationToken="<Voi ALGO token id>")` → review
+  the returned fee/amount breakdown and liquidity warning → `signTransaction` → `executeAlgorandTransaction`.
 
 Spending limits (`PUT /wallet/limits` on BiatecOIDC) can be configured globally (apply to every address) and/or
 per address (`?primaryAddress=...&slot=...`) — a transaction is blocked if it would exceed either, enforced by

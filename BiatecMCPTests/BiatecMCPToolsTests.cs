@@ -25,6 +25,7 @@ namespace BiatecMCPTests
         private DefaultHttpContext _httpContext = null!;
         private IOptionsMonitor<AlgodConfiguration> _algodConfig = null!;
         private Mock<IDexQuoteProvider> _biatecRouterQuoteProvider = null!;
+        private Mock<IAramidBridgeConfigProvider> _aramidBridgeConfigProvider = null!;
 
         [SetUp]
         public void SetUp()
@@ -35,11 +36,13 @@ namespace BiatecMCPTests
             _algodConfig = Mock.Of<IOptionsMonitor<AlgodConfiguration>>(m => m.CurrentValue == new AlgodConfiguration());
             _biatecRouterQuoteProvider = new Mock<IDexQuoteProvider>();
             _biatecRouterQuoteProvider.Setup(p => p.ProviderName).Returns("BiatecRouter");
+            _aramidBridgeConfigProvider = new Mock<IAramidBridgeConfigProvider>();
         }
 
         private BiatecMCP.MCP.BiatecMCP CreateTool(DexSwapAggregatorService? aggregator = null) =>
             new(_walletClient.Object, _httpContextAccessor, _algodConfig,
                 aggregator ?? new DexSwapAggregatorService(new[] { _biatecRouterQuoteProvider.Object }),
+                _aramidBridgeConfigProvider.Object,
                 NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
 
         private void SetBearerToken(string token) =>
@@ -380,15 +383,90 @@ namespace BiatecMCPTests
             Assert.That(result.ErrorType, Is.EqualTo("NoQuoteAvailable"));
         }
 
-        // ───────────────────────── createBridgeTransaction (architecture placeholder) ─────────────────────────
+        // ───────────────────────── createBridgeTransaction (Aramid Finance) ─────────────────────────
+
+        private static AramidConfigRoot ValidAramidConfig() => new()
+        {
+            Chains = new Dictionary<string, AramidChainItem>
+            {
+                ["416001"] = new AramidChainItem { ChainId = 416001, Type = "algo", Address = "BRIDGEDEPOSITADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", Tokens = { ["0"] = new AramidTokenItem { Decimals = 6 } } },
+                ["416101"] = new AramidChainItem { ChainId = 416101, Type = "algo", Address = "VOIBRIDGEXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", Tokens = { ["302189"] = new AramidTokenItem { Decimals = 6 } } }
+            },
+            Chains2Tokens = new Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, AramidMappingItem>>>>
+            {
+                ["416001"] = new()
+                {
+                    ["416101"] = new()
+                    {
+                        ["0"] = new()
+                        {
+                            ["302189"] = new AramidMappingItem
+                            {
+                                FeeAlternatives = { new AramidFeeAlternative { MinimumAmount = 1000, MaximumAmount = 1_000_000_000, SourcePercent = 0.001m, SourceConst = 0 } }
+                            }
+                        }
+                    }
+                }
+            }
+        };
 
         [Test]
-        public async Task CreateBridgeTransaction_ReturnsNotImplementedError()
+        public async Task CreateBridgeTransaction_NoBearerTokenAndNoClaim_ReturnsUnauthorized()
         {
-            var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, "ethereum", "0xabc");
+            SetClaims();
 
-            Assert.That(result.ErrorType, Is.EqualTo("NotImplemented"));
-            Assert.That(result.Error, Does.Contain("Aramid"));
+            var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 416101, "VOIRECIPIENT", "302189");
+
+            Assert.That(result.Error, Does.Contain("bearer token"));
+            _aramidBridgeConfigProvider.Verify(p => p.GetConfigAsync(It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task CreateBridgeTransaction_UnsupportedGenesisId_ReturnsInvalidRequest()
+        {
+            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+
+            var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 416101, "VOIRECIPIENT", "302189", genesisId: "testnet-v1.0");
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+            _aramidBridgeConfigProvider.Verify(p => p.GetConfigAsync(It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task CreateBridgeTransaction_UnknownDestinationChain_ReturnsError()
+        {
+            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ValidAramidConfig());
+
+            var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 999999, "SOMEADDR", "0");
+
+            Assert.That(result.ErrorType, Is.EqualTo("UnknownDestinationChain"));
+        }
+
+        [Test]
+        public async Task CreateBridgeTransaction_RouteNotFound_ReturnsError()
+        {
+            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ValidAramidConfig());
+
+            // Asset 12345 has no configured route to Voi in ValidAramidConfig().
+            var result = await CreateTool().CreateBridgeTransaction(12345, 1_000_000, 416101, "VOIRECIPIENT", "302189");
+
+            Assert.That(result.ErrorType, Is.EqualTo("RouteNotFound"));
+        }
+
+        [Test]
+        public async Task CreateBridgeTransaction_ValidRoute_ReachesAlgodStage()
+        {
+            // No Algod network is configured for "mainnet-v1.0" in this test's AlgodConfiguration, so the
+            // call fails deterministically once it reaches that stage (ArgumentException) - proving config
+            // fetch + route/chain resolution all succeeded first.
+            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ValidAramidConfig());
+
+            var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 416101, "VOIRECIPIENT", "302189");
+
+            Assert.That(result.ErrorType, Does.Contain("ArgumentException"));
         }
 
         // ───────────────────────── createMultisigTransaction / mergeMultisigTransactions ─────────────────────────

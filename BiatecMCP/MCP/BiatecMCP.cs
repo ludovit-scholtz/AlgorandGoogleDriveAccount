@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Security.Claims;
 using Algorand;
 using Algorand.Algod;
@@ -33,6 +34,7 @@ namespace BiatecMCP.MCP
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly IOptionsMonitor<Model.AlgodConfiguration> _algodConfig;
         private readonly DexSwapAggregatorService _dexSwapAggregator;
+        private readonly IAramidBridgeConfigProvider _aramidBridgeConfigProvider;
         private readonly ILogger<BiatecMCP> _logger;
 
         public BiatecMCP(
@@ -40,12 +42,14 @@ namespace BiatecMCP.MCP
             IHttpContextAccessor httpContextAccessor,
             IOptionsMonitor<Model.AlgodConfiguration> algodConfig,
             DexSwapAggregatorService dexSwapAggregator,
+            IAramidBridgeConfigProvider aramidBridgeConfigProvider,
             ILogger<BiatecMCP> logger)
         {
             _walletClient = walletClient;
             _httpContextAccessor = httpContextAccessor;
             _algodConfig = algodConfig;
             _dexSwapAggregator = dexSwapAggregator;
+            _aramidBridgeConfigProvider = aramidBridgeConfigProvider;
             _logger = logger;
         }
 
@@ -369,25 +373,133 @@ namespace BiatecMCP.MCP
 
         public class CreateBridgeTransactionResponse
         {
+            public string UnsignedTransaction { get; set; } = string.Empty;
+            public string BridgeDepositAddress { get; set; } = string.Empty;
+            public ulong SourceAmount { get; set; }
+            public ulong FeeAmount { get; set; }
+            public ulong DestinationAmount { get; set; }
+            public string? Warning { get; set; }
             public string Error { get; set; } = string.Empty;
             public string ErrorType { get; set; } = string.Empty;
         }
 
+        /// <summary>Aramid chain id per source genesisId - see https://github.com/AramidFinance/docs. Only Algorand mainnet is supported today.</summary>
+        private static readonly Dictionary<string, long> AramidSourceChainIdsByGenesisId = new()
+        {
+            ["mainnet-v1.0"] = 416001
+        };
+
         [McpServerTool(Name = "createBridgeTransaction"),
-         Description("PLACEHOLDER for a future Aramid Finance bridge integration (a plain payment/ASA transfer with a specific note field indicating the destination chain/address) - not implemented yet. Always returns a clear error; do not rely on this tool to actually bridge funds.")]
-        public Task<CreateBridgeTransactionResponse> CreateBridgeTransaction(
-            [Description("Asset id to bridge. 0 = native ALGO.")] ulong assetId,
-            [Description("Amount to bridge, in the asset's base units.")] ulong amount,
-            [Description("Destination chain identifier (e.g. an EVM chain id or name).")] string destinationChain,
-            [Description("Destination address on the target chain.")] string destinationAddress,
+         Description("Builds an unsigned Aramid Finance bridge transaction (a pay/axfer sent to Aramid's bridge deposit address, with a note field encoding the destination chain/address/amounts) - does NOT sign or broadcast it. Fetches Aramid's live bridge configuration first and validates the route and amount bounds against it. Does NOT verify destination-chain bridge liquidity - Aramid's own integration guide flags this as essential to avoid a stranded transfer, so confirm it independently before broadcasting anything but a small amount. Pass the result's UnsignedTransaction to signTransaction next, then executeAlgorandTransaction to broadcast.")]
+        public async Task<CreateBridgeTransactionResponse> CreateBridgeTransaction(
+            [Description("ASA id to bridge from Algorand. 0 = native ALGO.")] ulong assetId,
+            [Description("Total amount to bridge, in the source asset's base units, INCLUDING Aramid's bridge fee - the fee is deducted from this amount, never added on top.")] ulong amount,
+            [Description("Aramid destination chain id, e.g. 416101 for Voi, 8453 for Base - see Aramid's published chain configuration.")] long destinationNetwork,
+            [Description("Recipient address on the destination chain.")] string destinationAddress,
+            [Description("Destination token identifier, as defined in Aramid's bridge configuration for this route.")] string destinationToken,
+            [Description("Optional memo forwarded to the destination chain, max 50 characters, letters/numbers/whitespace/./,/-/_//,@,*,+,$,% only.")] string? note = null,
+            [Description("Blockchain genesis id to bridge from. Only mainnet-v1.0 is supported today.")] string genesisId = "mainnet-v1.0",
             [Description("A specific seed's identifying address to bridge from instead of the primary seed.")] string? primaryAddress = null,
             [Description("ARC-76 derivation slot to bridge from. Defaults to 0.")] int slot = 0)
         {
-            return Task.FromResult(new CreateBridgeTransactionResponse
+            if (!AramidSourceChainIdsByGenesisId.TryGetValue(genesisId, out var sourceChainId))
             {
-                Error = "Aramid Finance bridge integration is not implemented yet. This tool is a placeholder for the intended architecture (a plain payment/asset-transfer with a bridge-specific note field) - do not use it to move funds.",
-                ErrorType = "NotImplemented"
-            });
+                return new CreateBridgeTransactionResponse { Error = $"Aramid bridging is only supported from genesisId 'mainnet-v1.0' today (got '{genesisId}').", ErrorType = "InvalidRequest" };
+            }
+
+            try
+            {
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                if (string.IsNullOrWhiteSpace(senderAddress))
+                {
+                    return new CreateBridgeTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
+                }
+
+                var config = await _aramidBridgeConfigProvider.GetConfigAsync();
+
+                var destinationChainKey = destinationNetwork.ToString(CultureInfo.InvariantCulture);
+                if (!config.Chains.TryGetValue(destinationChainKey, out var destinationChain))
+                {
+                    return new CreateBridgeTransactionResponse { Error = $"Aramid does not currently list a destination chain with id {destinationNetwork}.", ErrorType = "UnknownDestinationChain" };
+                }
+
+                var sourceChainKey = sourceChainId.ToString(CultureInfo.InvariantCulture);
+                if (!config.Chains.TryGetValue(sourceChainKey, out var sourceChain))
+                {
+                    return new CreateBridgeTransactionResponse { Error = "Aramid does not currently list Algorand mainnet as a source chain.", ErrorType = "UnknownSourceChain" };
+                }
+
+                var sourceTokenKey = assetId.ToString(CultureInfo.InvariantCulture);
+                if (!config.Chains2Tokens.TryGetValue(sourceChainKey, out var byDestinationChain) ||
+                    !byDestinationChain.TryGetValue(destinationChainKey, out var bySourceToken) ||
+                    !bySourceToken.TryGetValue(sourceTokenKey, out var byDestinationToken) ||
+                    !byDestinationToken.TryGetValue(destinationToken, out var mapping) ||
+                    mapping.FeeAlternatives.Count == 0)
+                {
+                    return new CreateBridgeTransactionResponse { Error = $"Aramid does not currently offer a route from asset {assetId} on Algorand to token '{destinationToken}' on chain {destinationNetwork}.", ErrorType = "RouteNotFound" };
+                }
+
+                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var feeAlternative = AramidBridgeCalculator.ResolveFeeAlternative(mapping.FeeAlternatives, suggestedParams.LastRound);
+
+                var feeAmount = AramidBridgeCalculator.ComputeFeeAmount(amount, feeAlternative);
+                if (feeAmount >= amount)
+                {
+                    return new CreateBridgeTransactionResponse { Error = "Aramid's bridge fee would consume the entire amount - increase the amount to bridge.", ErrorType = "AmountTooSmall" };
+                }
+
+                var sourceAmount = amount - feeAmount;
+                if (sourceAmount < (ulong)feeAlternative.MinimumAmount || sourceAmount > (ulong)feeAlternative.MaximumAmount)
+                {
+                    return new CreateBridgeTransactionResponse
+                    {
+                        Error = $"After the bridge fee, {sourceAmount} base units is outside Aramid's allowed range for this route ({feeAlternative.MinimumAmount}-{feeAlternative.MaximumAmount}).",
+                        ErrorType = "AmountOutOfRange"
+                    };
+                }
+
+                var sourceDecimals = sourceChain.Tokens.TryGetValue(sourceTokenKey, out var sourceTokenInfo) ? sourceTokenInfo.Decimals ?? 6 : 6;
+                var destinationDecimals = destinationChain.Tokens.TryGetValue(destinationToken, out var destinationTokenInfo) ? destinationTokenInfo.Decimals ?? sourceDecimals : sourceDecimals;
+                var destinationAmount = AramidBridgeCalculator.ComputeDestinationAmount(sourceAmount, sourceDecimals, destinationDecimals);
+
+                string transferNote;
+                try
+                {
+                    transferNote = AramidBridgeCalculator.BuildTransferNote(destinationNetwork, destinationAddress, destinationToken, feeAmount, sourceAmount, destinationAmount, note);
+                }
+                catch (ArgumentException ex)
+                {
+                    return new CreateBridgeTransactionResponse { Error = ex.Message, ErrorType = "InvalidRequest" };
+                }
+
+                var sender = new Address(senderAddress);
+                var bridgeDepositAddress = new Address(sourceChain.Address);
+                var unsignedTransaction = assetId == 0
+                    ? AlgorandTransactionBuilder.BuildPayment(sender, bridgeDepositAddress, amount, transferNote, suggestedParams)
+                    : AlgorandTransactionBuilder.BuildAssetTransfer(sender, bridgeDepositAddress, assetId, amount, transferNote, suggestedParams);
+
+                return new CreateBridgeTransactionResponse
+                {
+                    UnsignedTransaction = Convert.ToBase64String(unsignedTransaction),
+                    BridgeDepositAddress = sourceChain.Address,
+                    SourceAmount = sourceAmount,
+                    FeeAmount = feeAmount,
+                    DestinationAmount = destinationAmount,
+                    Warning = "Destination-chain bridge liquidity was not verified - Aramid's integration guide flags this as essential to avoid a stranded transfer. Confirm independently before broadcasting anything but a small amount."
+                };
+            }
+            catch (WalletApiException ex)
+            {
+                return new CreateBridgeTransactionResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new CreateBridgeTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (Exception ex)
+            {
+                return new CreateBridgeTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateBridgeTransaction)), ErrorType = ex.GetType().ToString() };
+            }
         }
 
         public class CreateMultisigTransactionResponse

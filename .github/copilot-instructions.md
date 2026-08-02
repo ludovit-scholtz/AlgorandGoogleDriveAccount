@@ -75,8 +75,8 @@ dependency on `BiatecSelfCustodyCore`.
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast: `getAlgorandAddress`,
     `listAlgorandAddresses` (read-only); `createPaymentTransaction`, `createOptInTransaction`,
-    `createAssetCreateTransaction`, `createSwapTransaction`, `createBridgeTransaction` (**architecture
-    placeholder** for a future Aramid Finance bridge - always returns a "not implemented" error today),
+    `createAssetCreateTransaction`, `createSwapTransaction`, `createBridgeTransaction` (a real
+    [Aramid Finance](https://aramid.finance) bridge integration - see "Aramid bridge integration" below),
     `createMultisigTransaction` (build-only, no `sign` claim needed - see "Multisig transactions" below);
     `signTransaction` (new, standalone - forwards to BiatecOIDC's `POST /wallet/sign`, requires `sign`),
     `mergeMultisigTransactions` (combines independently-signed multisig copies, no BiatecOIDC/Algod call);
@@ -416,8 +416,8 @@ setup stage needs.
   `executeAlgorandTransaction` broadcasts the signed bytes to Algod via a shared private
   `SubmitSignedTransactionsAsync` helper, also requiring `sign`. `mergeMultisigTransactions` combines
   independently-signed copies of a `createMultisigTransaction` envelope (no BiatecOIDC/Algod call - pure
-  local combination via the Algorand4 SDK). `createBridgeTransaction` is an architecture placeholder for a
-  future Aramid Finance bridge integration, always returning a "not implemented" error today. Every tool's
+  local combination via the Algorand4 SDK). `createBridgeTransaction` builds a real Aramid Finance bridge
+  transaction (see "Aramid bridge integration" below). Every tool's
   `[Description]` names the next tool in the intended chain, since MCP has no other side-channel for this.
   Mounted at `/mcp` via `ModelContextProtocol.AspNetCore`
   (`AddMcpServer().WithHttpTransport().WithToolsFromAssembly().AddAuthorizationFilters()`), stateless HTTP
@@ -448,6 +448,26 @@ setup stage needs.
   merge" - so no BiatecOIDC-side change was needed for this. `mergeMultisigTransactions` combines the
   collected copies via the Algorand4 SDK's `SignedTransaction.MergeMultisigTransactionBytes` once at least
   `threshold` of them are present, ready for `executeAlgorandTransaction`.
+- **Aramid bridge integration**: `createBridgeTransaction` bridges assets off Algorand via
+  [Aramid Finance](https://aramid.finance), per its published AI-agent integration guide
+  (`https://raw.githubusercontent.com/AramidFinance/docs/refs/heads/main/docs/developers/ai-agent-integration.md`).
+  `IAramidBridgeConfigProvider`/`AramidBridgeConfigProvider` (`BiatecMCP/BusinessLogic/`) fetches Aramid's live
+  bridge configuration fresh on every call (per Aramid's own "do not cache indefinitely" guidance) by finding
+  the most recent Algorand mainnet transaction on Aramid's config account
+  (`ARAMICOCHLHSX3G5KCKK23M72ETI537GK5VGLOVHXAGPIELWYJKIMGKK6I`) whose note starts with `aramid-config/v1:j`
+  (via the Algorand4 SDK's `Algorand.Indexer.LookupApi` against a public Algonode indexer - no dedicated
+  Indexer infrastructure needed), then fetching that note's IPFS hash from a public gateway. `createBridgeTransaction`
+  looks up the requested route in the fetched config's `Chains`/`Chains2Tokens`, resolves the fee schedule
+  active at the current round, and hands the arithmetic to `AramidBridgeCalculator` (`BiatecMCP/Helper/`,
+  pure/static/fully TDD-covered) - fee amount (max of Aramid's "network floor" and "route minimum" formulas,
+  always rounded up so an approximation fails closed via Aramid's own validators rejecting a mismatch, never by
+  under-charging), destination-chain decimals conversion (always rounded down, per Aramid's explicit warning
+  against over-crediting the destination), and the `aramid-transfer/v1:j<json>` note format/character-set
+  validation. The built transaction sends to `Chains[sourceChainId].Address` (Aramid's bridge deposit address -
+  never the recipient directly) for `sourceAmount + feeAmount`. **Does not verify destination-chain bridge
+  liquidity** - Aramid's guide calls this essential, but checking it for arbitrary EVM/NEAR/AVM destination
+  chains is out of scope here; every response carries a `Warning` about this instead of silently skipping it.
+  Only bridging from Algorand mainnet (`genesisId: mainnet-v1.0`, Aramid chain id `416001`) is supported.
 - **JWT issuer / OIDC provider**: `JwtIssuerService` + `JwtIssuerController` (`BiatecOIDC`) implement OIDC
   discovery (`/.well-known/openid-configuration`, `/.well-known/jwks.json`), `/authorize`, `/token`, `/userinfo`,
   `/introspect`, `/verify`. Supports both standard `response_type=code` and a legacy `returnUrl` direct

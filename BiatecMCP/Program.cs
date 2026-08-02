@@ -142,6 +142,11 @@ namespace BiatecMCP
             builder.Services.AddScoped<IDexQuoteProvider>(sp => sp.GetRequiredService<HaystackRouterQuoteProvider>());
             builder.Services.AddScoped<DexSwapAggregatorService>();
 
+            // createBridgeTransaction (Aramid Finance) - config is discovered on-chain + via IPFS (see the
+            // provider's remarks), not via a typed HttpClient with a fixed base address, so no
+            // AddHttpClient registration is needed here.
+            builder.Services.AddScoped<IAramidBridgeConfigProvider, AramidBridgeConfigProvider>();
+
             // Configure MCP Server
             builder.Services.AddMcpServer()
                 .WithHttpTransport(options =>
