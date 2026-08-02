@@ -13,6 +13,7 @@ namespace BiatecOIDCTests
     {
         private const string TestEmail = "user@example.com";
         private const string TestProvider = "Fake";
+        private const string TestAddress = "ADDR1";
 
         private FakeCloudStorageProvider _fakeProvider = null!;
         private Mock<ICloudStorageProviderCatalog> _mockCatalog = null!;
@@ -125,7 +126,7 @@ namespace BiatecOIDCTests
         [Test]
         public async Task EnsureWithinLimitsAsync_FullyUnbounded_NeverConsultsLedgerOrThrows()
         {
-            await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 1_000_000m);
+            await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 1_000_000m, TestAddress, 0);
         }
 
         [Test]
@@ -133,7 +134,7 @@ namespace BiatecOIDCTests
         {
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 });
 
-            await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 50m);
+            await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 50m, TestAddress, 0);
         }
 
         [Test]
@@ -142,9 +143,9 @@ namespace BiatecOIDCTests
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { CurrencyCode = "USD", DailyLimit = 100 });
 
             var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
-                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 150m));
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 150m, TestAddress, 0));
 
-            Assert.That(ex!.Window, Is.EqualTo("daily"));
+            Assert.That(ex!.Window, Is.EqualTo("global-daily"));
             Assert.That(ex.ProjectedAmount, Is.EqualTo(150m));
             Assert.That(ex.Limit, Is.EqualTo(100m));
             Assert.That(ex.CurrencyCode, Is.EqualTo("USD"));
@@ -156,16 +157,16 @@ namespace BiatecOIDCTests
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 });
             await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
             {
-                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 80m, AssetId = 0, Kind = "Payment" }
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 80m, AssetId = 0, Kind = "Payment", PrimaryAddress = TestAddress, Slot = 0 }
             });
 
             // 80 already spent + 30 more would be 110, over the 100 limit.
             Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
-                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 30m));
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 30m, TestAddress, 0));
 
             // But 80 + 15 = 95 stays under it.
             Assert.DoesNotThrowAsync(async () =>
-                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 15m));
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 15m, TestAddress, 0));
         }
 
         [Test]
@@ -174,14 +175,14 @@ namespace BiatecOIDCTests
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { WeeklyLimit = 1000 });
             await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
             {
-                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 5000m, AssetId = 0, Kind = "Payment" }
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 5000m, AssetId = 0, Kind = "Payment", PrimaryAddress = TestAddress, Slot = 0 }
             });
 
             // Daily has no limit configured, so a huge existing spend today doesn't block a new one...
             // but it's within the same week, so the weekly limit (which IS configured) still applies.
             var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
-                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 1m));
-            Assert.That(ex!.Window, Is.EqualTo("weekly"));
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 1m, TestAddress, 0));
+            Assert.That(ex!.Window, Is.EqualTo("global-weekly"));
         }
 
         [Test]
@@ -192,12 +193,127 @@ namespace BiatecOIDCTests
             // This entry is already outside every window (including monthly, the longest) the moment it's recorded.
             await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
             {
-                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow.AddDays(-45), AmountUsd = 999_999m, AssetId = 0, Kind = "Payment" }
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow.AddDays(-45), AmountUsd = 999_999m, AssetId = 0, Kind = "Payment", PrimaryAddress = TestAddress, Slot = 0 }
             });
 
             // If the stale entry weren't pruned, even a tiny new spend would appear to exceed the monthly limit.
             Assert.DoesNotThrowAsync(async () =>
-                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 50m));
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 50m, TestAddress, 0));
+        }
+
+        // ───────────────────────── Per-address + global limits ─────────────────────────
+
+        [Test]
+        public async Task GetLimitsAsync_PerAddress_NeverConfigured_ReturnsUnboundedDefault()
+        {
+            var result = await _service.GetLimitsAsync(TestEmail, TestProvider, "token", TestAddress, 2);
+
+            Assert.That(result.DailyLimit, Is.EqualTo(0));
+            Assert.That(result.WeeklyLimit, Is.EqualTo(0));
+            Assert.That(result.MonthlyLimit, Is.EqualTo(0));
+        }
+
+        [Test]
+        public async Task SetThenGet_PerAddress_RoundTripsAndDoesNotAffectGlobal()
+        {
+            await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { CurrencyCode = "EUR", DailyLimit = 25 }, TestAddress, 2);
+
+            var addressResult = await _service.GetLimitsAsync(TestEmail, TestProvider, "token", TestAddress, 2);
+            var globalResult = await _service.GetLimitsAsync(TestEmail, TestProvider, "token");
+            var otherSlotResult = await _service.GetLimitsAsync(TestEmail, TestProvider, "token", TestAddress, 3);
+
+            Assert.That(addressResult.CurrencyCode, Is.EqualTo("EUR"));
+            Assert.That(addressResult.DailyLimit, Is.EqualTo(25));
+            Assert.That(globalResult.DailyLimit, Is.EqualTo(0), "setting a per-address limit must not touch the global bucket");
+            Assert.That(otherSlotResult.DailyLimit, Is.EqualTo(0), "a different slot on the same seed is a distinct bucket");
+        }
+
+        [Test]
+        public async Task SetGlobal_DoesNotAffectExistingPerAddressLimits()
+        {
+            await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 25 }, TestAddress, 0);
+
+            await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 500 });
+
+            var addressResult = await _service.GetLimitsAsync(TestEmail, TestProvider, "token", TestAddress, 0);
+            Assert.That(addressResult.DailyLimit, Is.EqualTo(25));
+        }
+
+        [Test]
+        public async Task EnsureWithinLimitsAsync_GlobalLimitExceeded_ThrowsEvenWhenAddressUnbounded()
+        {
+            await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 });
+
+            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 150m, TestAddress, 0));
+            Assert.That(ex!.Window, Is.EqualTo("global-daily"));
+        }
+
+        [Test]
+        public async Task EnsureWithinLimitsAsync_AddressLimitExceeded_ThrowsEvenWhenGlobalUnbounded()
+        {
+            await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 }, TestAddress, 0);
+
+            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 150m, TestAddress, 0));
+            Assert.That(ex!.Window, Is.EqualTo("address-daily"));
+        }
+
+        [Test]
+        public async Task EnsureWithinLimitsAsync_SpendOnDifferentAddress_DoesNotCountTowardThisAddressLimit()
+        {
+            const string otherAddress = "ADDR2";
+            await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 }, TestAddress, 0);
+            await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
+            {
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 90m, AssetId = 0, Kind = "Payment", PrimaryAddress = otherAddress, Slot = 0 }
+            });
+
+            // The 90 was spent by a different address - TestAddress's own 100 limit is untouched by it.
+            Assert.DoesNotThrowAsync(async () =>
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 50m, TestAddress, 0));
+        }
+
+        [Test]
+        public async Task EnsureWithinLimitsAsync_SpendOnDifferentAddress_StillCountsTowardGlobalLimit()
+        {
+            const string otherAddress = "ADDR2";
+            await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 });
+            await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
+            {
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 90m, AssetId = 0, Kind = "Payment", PrimaryAddress = otherAddress, Slot = 0 }
+            });
+
+            // The global limit counts every address's spend together - 90 (other address) + 30 (this one) exceeds 100.
+            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 30m, TestAddress, 0));
+            Assert.That(ex!.Window, Is.EqualTo("global-daily"));
+        }
+
+        [Test]
+        public async Task GetLimitsAsync_LegacyFlatSettingsFile_MigratesToGlobalBucketOnRead()
+        {
+            var activeKey = _aesOptionsValue.Keys.First(k => k.KeyId == "gen-1");
+            var legacySettings = new SpendingLimitSettings { CurrencyCode = "EUR", DailyLimit = 42 };
+            var plaintext = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(legacySettings, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            var encrypted = BiatecSelfCustodyCore.Helper.AesEncryptionHelper.Encrypt(
+                plaintext,
+                BiatecSelfCustodyCore.Helper.AesKeyRingResolver.KeyBytes(activeKey),
+                BiatecSelfCustodyCore.Helper.AesKeyRingResolver.IvBytes(activeKey),
+                TestEmail);
+            var activeFileName = "SpendingLimits." + BiatecSelfCustodyCore.Helper.AesEncryptionHelper.MakeAesId(
+                BiatecSelfCustodyCore.Helper.AesKeyRingResolver.KeyBytes(activeKey),
+                BiatecSelfCustodyCore.Helper.AesKeyRingResolver.IvBytes(activeKey));
+            _fakeProvider.Files[activeFileName + ".dat"] = encrypted;
+
+            var result = await _service.GetLimitsAsync(TestEmail, TestProvider, "token");
+
+            Assert.That(result.CurrencyCode, Is.EqualTo("EUR"));
+            Assert.That(result.DailyLimit, Is.EqualTo(42));
+
+            // Per-address limits are untouched/empty after migrating a legacy (global-only) file.
+            var addressResult = await _service.GetLimitsAsync(TestEmail, TestProvider, "token", TestAddress, 0);
+            Assert.That(addressResult.DailyLimit, Is.EqualTo(0));
         }
 
         [Test]

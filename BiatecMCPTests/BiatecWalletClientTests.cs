@@ -105,6 +105,79 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task SignAsync_WithPrimaryAddressAndSlot_IncludesThemInRequestBody()
+        {
+            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new SignTransactionGroupResponse { SignedTransactions = { "c2lnbmVk" } })
+            });
+            var client = CreateClient(handler, out var captured);
+
+            await client.SignAsync("token", new[] { new byte[] { 1 } }, primaryAddress: "SEED-ADDR", slot: 5);
+
+            using var body = JsonDocument.Parse(captured.LastRequestBody!);
+            Assert.That(body.RootElement.GetProperty("primaryAddress").GetString(), Is.EqualTo("SEED-ADDR"));
+            Assert.That(body.RootElement.GetProperty("slot").GetInt32(), Is.EqualTo(5));
+        }
+
+        [Test]
+        public async Task ListAddressesAsync_ForwardsBearerTokenAndParsesResponse()
+        {
+            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new ListAddressesResponse
+                {
+                    Addresses =
+                    {
+                        new AddressResponse { Address = "ADDR1", IsPrimary = false },
+                        new AddressResponse { Address = "ADDR2", IsPrimary = true }
+                    }
+                })
+            });
+            var client = CreateClient(handler, out var captured);
+
+            var result = await client.ListAddressesAsync("the-bearer-token");
+
+            Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
+            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/address"));
+            Assert.That(captured.LastRequest.Headers.Authorization!.Parameter, Is.EqualTo("the-bearer-token"));
+            Assert.That(result.Addresses, Has.Count.EqualTo(2));
+            Assert.That(result.Addresses.Single(a => a.IsPrimary).Address, Is.EqualTo("ADDR2"));
+        }
+
+        [Test]
+        public async Task GetAddressAsync_ForwardsBearerTokenAndParsesResponse()
+        {
+            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new DerivedAddressResponse { Address = "DERIVED", PrimaryAddress = "ADDR1", Slot = 3 })
+            });
+            var client = CreateClient(handler, out var captured);
+
+            var result = await client.GetAddressAsync("the-bearer-token", "ADDR1", 3);
+
+            Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
+            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/address/ADDR1/3"));
+            Assert.That(result.Address, Is.EqualTo("DERIVED"));
+        }
+
+        [Test]
+        public void GetAddressAsync_UnknownSeed_ThrowsWalletApiException()
+        {
+            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent(
+                    """{"title":"seed_not_found","detail":"No seed with address 'X' exists."}""",
+                    Encoding.UTF8, "application/problem+json")
+            });
+            var client = CreateClient(handler, out _);
+
+            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.GetAddressAsync("token", "X", 0));
+
+            Assert.That(ex!.ErrorCode, Is.EqualTo("seed_not_found"));
+        }
+
+        [Test]
         public async Task ListSeedsAsync_ForwardsBearerTokenAndParsesResponse()
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)

@@ -48,14 +48,14 @@ namespace BiatecOIDC.BusinessLogic
             }
         }
 
-        public async Task<SpendingLimitSettings> GetLimitsAsync(string email, string provider, string? accessToken, CancellationToken cancellationToken = default)
+        public async Task<SpendingLimitSettings> GetLimitsAsync(string email, string provider, string? accessToken, string? primaryAddress = null, int slot = 0, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
-            var settings = await LoadEncryptedJsonAsync<SpendingLimitSettings>(email, provider, accessToken, LimitsFileNameTemplate);
-            return settings ?? new SpendingLimitSettings();
+            var document = await LoadDocumentAsync(email, provider, accessToken);
+            return ResolveBucket(document, primaryAddress, slot);
         }
 
-        public async Task SetLimitsAsync(string email, string provider, string? accessToken, SpendingLimitSettings settings, CancellationToken cancellationToken = default)
+        public async Task SetLimitsAsync(string email, string provider, string? accessToken, SpendingLimitSettings settings, string? primaryAddress = null, int slot = 0, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
             ArgumentNullException.ThrowIfNull(settings);
@@ -73,26 +73,137 @@ namespace BiatecOIDC.BusinessLogic
                 MonthlyLimit = settings.MonthlyLimit
             };
 
-            await SaveEncryptedJsonAsync(email, provider, accessToken, LimitsFileNameTemplate, normalized);
+            var document = await LoadDocumentAsync(email, provider, accessToken);
+            if (primaryAddress == null)
+            {
+                document.Global = normalized;
+            }
+            else
+            {
+                document.PerAddress[BuildAddressKey(primaryAddress, slot)] = normalized;
+            }
+
+            await SaveDocumentAsync(email, provider, accessToken, document);
         }
 
-        public async Task EnsureWithinLimitsAsync(string email, string provider, string? accessToken, decimal amountUsd, CancellationToken cancellationToken = default)
+        public async Task EnsureWithinLimitsAsync(string email, string provider, string? accessToken, decimal amountUsd, string primaryAddress, int slot, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
-
-            var settings = await GetLimitsAsync(email, provider, accessToken, cancellationToken);
-            if (settings.DailyLimit <= 0 && settings.WeeklyLimit <= 0 && settings.MonthlyLimit <= 0)
+            if (string.IsNullOrWhiteSpace(primaryAddress))
             {
-                return; // Fully unbounded - no need to even read the ledger.
+                throw new ArgumentException("A resolved signing address is required.", nameof(primaryAddress));
+            }
+
+            var document = await LoadDocumentAsync(email, provider, accessToken);
+            var global = document.Global;
+            document.PerAddress.TryGetValue(BuildAddressKey(primaryAddress, slot), out var address);
+
+            var globalUnbounded = IsUnbounded(global);
+            var addressUnbounded = address == null || IsUnbounded(address);
+            if (globalUnbounded && addressUnbounded)
+            {
+                return; // Neither tier configured - no need to even read the ledger.
             }
 
             var ledger = await LoadLedgerAsync(email, provider, accessToken);
             var now = DateTimeOffset.UtcNow;
-            var newAmountInCurrency = await _exchangeRateService.ConvertFromUsdAsync(amountUsd, settings.CurrencyCode, cancellationToken);
 
-            await CheckWindowAsync("daily", DailyWindow, settings.DailyLimit, ledger, now, newAmountInCurrency, settings.CurrencyCode, cancellationToken);
-            await CheckWindowAsync("weekly", WeeklyWindow, settings.WeeklyLimit, ledger, now, newAmountInCurrency, settings.CurrencyCode, cancellationToken);
-            await CheckWindowAsync("monthly", MonthlyWindow, settings.MonthlyLimit, ledger, now, newAmountInCurrency, settings.CurrencyCode, cancellationToken);
+            if (!globalUnbounded)
+            {
+                var newAmountInCurrency = await _exchangeRateService.ConvertFromUsdAsync(amountUsd, global.CurrencyCode, cancellationToken);
+                await CheckWindowAsync("global-daily", DailyWindow, global.DailyLimit, ledger, now, newAmountInCurrency, global.CurrencyCode, cancellationToken);
+                await CheckWindowAsync("global-weekly", WeeklyWindow, global.WeeklyLimit, ledger, now, newAmountInCurrency, global.CurrencyCode, cancellationToken);
+                await CheckWindowAsync("global-monthly", MonthlyWindow, global.MonthlyLimit, ledger, now, newAmountInCurrency, global.CurrencyCode, cancellationToken);
+            }
+
+            if (!addressUnbounded)
+            {
+                var addressLedger = ledger.Where(e =>
+                    string.Equals(e.PrimaryAddress, primaryAddress, StringComparison.Ordinal) && e.Slot == slot).ToList();
+                var newAmountInCurrency = await _exchangeRateService.ConvertFromUsdAsync(amountUsd, address!.CurrencyCode, cancellationToken);
+                await CheckWindowAsync("address-daily", DailyWindow, address.DailyLimit, addressLedger, now, newAmountInCurrency, address.CurrencyCode, cancellationToken);
+                await CheckWindowAsync("address-weekly", WeeklyWindow, address.WeeklyLimit, addressLedger, now, newAmountInCurrency, address.CurrencyCode, cancellationToken);
+                await CheckWindowAsync("address-monthly", MonthlyWindow, address.MonthlyLimit, addressLedger, now, newAmountInCurrency, address.CurrencyCode, cancellationToken);
+            }
+        }
+
+        private static bool IsUnbounded(SpendingLimitSettings settings) =>
+            settings.DailyLimit <= 0 && settings.WeeklyLimit <= 0 && settings.MonthlyLimit <= 0;
+
+        internal static string BuildAddressKey(string primaryAddress, int slot) => $"{primaryAddress}:{slot}";
+
+        private static SpendingLimitSettings ResolveBucket(SpendingLimitsDocument document, string? primaryAddress, int slot)
+        {
+            if (primaryAddress == null)
+            {
+                return document.Global;
+            }
+
+            return document.PerAddress.TryGetValue(BuildAddressKey(primaryAddress, slot), out var settings) ? settings : new SpendingLimitSettings();
+        }
+
+        /// <summary>
+        /// Loads the settings document, migrating a legacy flat <see cref="SpendingLimitSettings"/> file
+        /// (predating the global/per-address split) into <c>{ Global = &lt;that&gt;, PerAddress = {} }</c>
+        /// and re-saving it immediately - same "migrate on read, re-save immediately" precedent as
+        /// <c>CloudAccountRepository</c>'s legacy-mnemonic migration.
+        /// </summary>
+        private async Task<SpendingLimitsDocument> LoadDocumentAsync(string email, string provider, string? accessToken)
+        {
+            var storageProvider = _catalog.Resolve(provider);
+            var token = await ResolveAccessTokenAsync(storageProvider, accessToken);
+
+            var activeKey = AesKeyRingResolver.GetActiveKey(_aes.CurrentValue, "AesOptions");
+            var historicalKeys = AesKeyRingResolver.GetHistoricalKeys(_aes.CurrentValue, _logger);
+
+            byte[]? plaintext;
+            try
+            {
+                plaintext = await EncryptedKeyRingFileStore.LoadAsync(storageProvider, token, LimitsFileNameTemplate, activeKey, historicalKeys, email, _logger);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unable to decrypt or parse {FileName} for {Email}.", LimitsFileNameTemplate, email);
+                throw new InvalidOperationException("Unable to load spending-limit data. Please try again.");
+            }
+
+            if (plaintext == null)
+            {
+                return new SpendingLimitsDocument();
+            }
+
+            var (document, wasLegacyShape) = ParseDocument(plaintext);
+            if (wasLegacyShape)
+            {
+                await SaveDocumentAsync(email, provider, accessToken, document);
+            }
+
+            return document;
+        }
+
+        private static (SpendingLimitsDocument Document, bool WasLegacyShape) ParseDocument(byte[] plaintext)
+        {
+            using var probe = System.Text.Json.JsonDocument.Parse(plaintext);
+            if (probe.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                probe.RootElement.TryGetProperty("global", out _))
+            {
+                var document = JsonSerializer.Deserialize<SpendingLimitsDocument>(plaintext, JsonOptions) ?? new SpendingLimitsDocument();
+                return (document, false);
+            }
+
+            // Legacy shape: the whole file was just a flat SpendingLimitSettings object.
+            var legacy = JsonSerializer.Deserialize<SpendingLimitSettings>(plaintext, JsonOptions) ?? new SpendingLimitSettings();
+            return (new SpendingLimitsDocument { Global = legacy }, true);
+        }
+
+        private async Task SaveDocumentAsync(string email, string provider, string? accessToken, SpendingLimitsDocument document)
+        {
+            var storageProvider = _catalog.Resolve(provider);
+            var token = await ResolveAccessTokenAsync(storageProvider, accessToken);
+            var activeKey = AesKeyRingResolver.GetActiveKey(_aes.CurrentValue, "AesOptions");
+
+            var plaintext = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
+            await EncryptedKeyRingFileStore.SaveAsync(storageProvider, token, LimitsFileNameTemplate, activeKey, email, plaintext);
         }
 
         public async Task RecordSpendAsync(string email, string provider, string? accessToken, IReadOnlyList<SpendingLedgerEntry> entries, CancellationToken cancellationToken = default)

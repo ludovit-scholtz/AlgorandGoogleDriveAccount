@@ -39,7 +39,34 @@ namespace BiatecSelfCustodyCore.Repository
         /// Redis). If omitted, the token is resolved ambiently from the current signed-in user's
         /// cookie session for <paramref name="provider"/>.
         /// </param>
-        Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null);
+        /// <param name="primaryAddress">
+        /// Selects which seed to derive from, by its own identifying (slot-0) address - see
+        /// <see cref="Model.SeedVaultEntry.PrimaryAddress"/>. <c>null</c> (the default) keeps the
+        /// original behavior: derive from whichever seed is currently primary, auto-creating the
+        /// vault's first seed if none exists yet. A non-null value must name an existing seed - this
+        /// method does not auto-create for a caller that named a specific seed - and throws
+        /// <see cref="InvalidOperationException"/> if it doesn't exist.
+        /// </param>
+        Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null, string? primaryAddress = null);
+
+        /// <summary>
+        /// Derives (without signing or mutating anything) the ARC-76 address at <paramref name="slot"/>
+        /// for the seed identified by <paramref name="primaryAddress"/> (<c>null</c> = the vault's
+        /// current primary seed). Throws <see cref="InvalidOperationException"/> if
+        /// <paramref name="primaryAddress"/> is given but no seed in the vault has that address.
+        /// </summary>
+        Task<string> DeriveAddressAsync(string email, string provider, string? primaryAddress, int slot, string? accessToken = null);
+
+        /// <summary>
+        /// Resolves and validates a seed selector to its identifying address, without deriving any
+        /// slot address - <c>null</c> resolves to the vault's current primary seed (auto-creating the
+        /// first seed if the vault is empty, same side effect as <see cref="LoadAccountAsync"/>); a
+        /// non-null value is validated against the vault and returned unchanged. Used to resolve a
+        /// stable signing identity once per request (e.g. for keying per-address spending limits)
+        /// before any slot-specific derivation happens. Throws <see cref="InvalidOperationException"/>
+        /// if <paramref name="primaryAddress"/> is given but no seed in the vault has that address.
+        /// </summary>
+        Task<string> ResolveSeedAddressAsync(string email, string provider, string? primaryAddress, string? accessToken = null);
 
         /// <summary>Lists every seed ever generated for this user, most-recently-created last. Never includes a mnemonic.</summary>
         Task<IReadOnlyList<SeedSummary>> ListSeedsAsync(string email, string provider, string? accessToken = null);

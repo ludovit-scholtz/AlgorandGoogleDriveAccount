@@ -1,9 +1,10 @@
 ---
 name: biatec-oidc-jwt
-description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector, ICloudAccountRepository's multi-seed vault, IVaultBackupService) — endpoints, claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped, and the strict `rekey` scope required for any rekey transaction), redirect-URI/logout allowlist rules, signing-key format, daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, the encrypted provider-access-token caching embedded in issued tokens, including its automatic renewal from
+description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector, ICloudAccountRepository's multi-seed vault and multi-address (primaryAddress+slot) signing, IVaultBackupService) — endpoints, claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped, and the strict `rekey` scope required for any rekey transaction), redirect-URI/logout allowlist rules, signing-key format, global-and-per-address daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, the encrypted provider-access-token caching embedded in issued tokens, including its automatic renewal from
 a cached provider refresh token (both on Biatec token refresh and, opportunistically, mid-request in
-WalletController), the multi-seed vault (GET/POST /wallet/seeds, PUT /wallet/seeds/primary), and explicit
-cross-cloud vault backup (POST/GET /wallet/backup/*). Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, /wallet/limits/currencies, /wallet/seeds, /wallet/backup, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, CloudAccountRepository.cs, VaultBackupService.cs, VaultBackupController.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
+WalletController), the multi-seed vault (GET/POST /wallet/seeds, PUT /wallet/seeds/primary, GET /wallet/address,
+GET /wallet/address/{primaryAddress}/{slot?}), and explicit cross-cloud vault backup (POST/GET /wallet/backup/*).
+Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign, /wallet/limits, /wallet/limits/currencies, /wallet/seeds, /wallet/address, /wallet/backup, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, CloudAccountRepository.cs, DriveService.cs, VaultBackupService.cs, VaultBackupController.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
 ---
 
 # Biatec OIDC / JWT issuer
@@ -93,33 +94,58 @@ way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `V
 - `POST /wallet/sign` — requires the `sign` claim; if any transaction in the group has Algorand's `rekey` field
   set (`AlgorandTransactionInspector.Inspect(...).IsRekey`, checked in `WalletController.SignTransactionGroup`
   right after decoding, before anything else), also requires the `rekey` claim - a `sign`-only token gets 403
-  `insufficient_scope` naming `rekey`, and nothing in the group is signed. Body: `{ "transactions": ["<base64 msgpack>", ...] }` - no
-  provider-token field, no wallet endpoint accepts one; the Google/Microsoft token needed to read/decrypt the
-  self-custody file *and* the spending-limit data is always resolved from the bearer token's own encrypted
-  `provider_token` claim, via `WalletController.ResolveProviderAccessToken` (see "Provider access token caching"
-  below) - never persisted server-side in plaintext, never a caller-supplied parameter. Every `pay`/`axfer`
-  transaction in the group is priced in USD via `IAssetValuationService` (`BiatecRouterValuationService`, quoting
-  against the Biatec Router - see below), summed, and the total is checked against the caller's daily (trailing
-  24h)/weekly (trailing 7d)/monthly (trailing 30d) spending limits (`ISpendingLimitService.EnsureWithinLimitsAsync`)
-  *before* any transaction is signed via the shared `IDriveService.SignTransactionAsync` - a group that would
-  exceed a limit never partially signs. Signed spend is then recorded to the caller's encrypted ledger
-  (`ISpendingLimitService.RecordSpendAsync`). Throws (mapped to HTTP by `WalletController`):
-  `SpendingLimitExceededException` → 403, `FormatException` (bad transaction) → 400, `UnauthorizedAccessException`
+  `insufficient_scope` naming `rekey`, and nothing in the group is signed. Body:
+  `{ "transactions": ["<base64 msgpack>", ...], "primaryAddress": null, "slot": 0 }` - `primaryAddress`/`slot`
+  are optional and select which seed/ARC-76 slot signs (see "Multi-address signing" below); omitted = the
+  vault's current primary seed at slot 0, unchanged from before this existed. `primaryAddress` naming an
+  unknown seed → 400 `seed_not_found`. No provider-token field, no wallet endpoint accepts one; the
+  Google/Microsoft token needed to read/decrypt the self-custody file *and* the spending-limit data is always
+  resolved from the bearer token's own encrypted `provider_token` claim, via
+  `WalletController.ResolveProviderAccessToken` (see "Provider access token caching" below) - never persisted
+  server-side in plaintext, never a caller-supplied parameter. Every `pay`/`axfer` transaction in the group is
+  priced in USD via `IAssetValuationService` (`BiatecRouterValuationService`, quoting against the Biatec Router
+  - see below), summed, and the total is checked against **both** the signing identity's global and
+  per-address daily (trailing 24h)/weekly (trailing 7d)/monthly (trailing 30d) spending limits
+  (`ISpendingLimitService.EnsureWithinLimitsAsync`) *before* any transaction is signed via the shared
+  `IDriveService.SignTransactionAsync` - a group that would exceed either tier never partially signs. Signed
+  spend is then recorded to the caller's encrypted ledger (`ISpendingLimitService.RecordSpendAsync`), each
+  entry tagged with the resolved `(primaryAddress, slot)` identity that signed it. Throws (mapped to HTTP by
+  `WalletController`): `SpendingLimitExceededException` → 403, `FormatException` (bad transaction) → 400,
+  `InvalidOperationException` (unknown `primaryAddress`) → 400 `seed_not_found`, `UnauthorizedAccessException`
   (no provider token was ever cached, or it's since gone stale/expired) → 401,
   `AssetValuationException`/`UnsupportedCurrencyException` → 503 (a spent asset couldn't be priced, or the limit
   currency's FX rate couldn't be fetched - every transaction is subject to the limit, so this fails closed rather
   than treating an unpriceable asset as free).
-- `GET /wallet/limits` — only requires a valid bearer token, no other parameters at all (any authenticated caller
-  reads their own limits, no `manage-limits` claim). `PUT /wallet/limits` requires the `manage-limits` claim, no
-  other parameters beyond the limit values themselves. Limits (`SpendingLimitSettings`:
-  `CurrencyCode` + `DailyLimit`/`WeeklyLimit`/`MonthlyLimit`, `0` = unbounded per window) and the signed-transaction
-  ledger (`SpendingLedgerEntry` list, USD-denominated, pruned to the last 30 days on every write) are **not** in
-  Redis - `ISpendingLimitService`/`SpendingLimitService` stores both AES-encrypted in the wallet owner's own
-  cloud drive (same `ICloudStorageProviderCatalog`/`AesEncryptionHelper` primitives `CloudAccountRepository` uses
-  for the account file itself), under `SpendingLimits.<AESID>.dat`/`SpendingLedger.<AESID>.dat`. Windows are
-  rolling (measured back from "now"), not calendar-aligned - deliberately, so a limit can't be doubled up by
-  spending right before and right after a calendar boundary. Global per user (by email), not per relying-party
-  client - any app holding a `sign`-scoped token for that user is bound by the same limits, wherever last set.
+- `GET /wallet/address` — only requires a valid bearer token; lists every seed's identifying address and
+  `isPrimary`, via `ICloudAccountRepository.ListSeedsAsync` (same underlying data as `GET /wallet/seeds` below).
+  `GET /wallet/address/{primaryAddress}/{slot?}` — derives (no signing, no mutation) the ARC-76 address at
+  `slot` (default `0`) for the named seed, via `ICloudAccountRepository.DeriveAddressAsync`; 400
+  `seed_not_found` if `primaryAddress` doesn't match any seed.
+- `GET /wallet/limits` — only requires a valid bearer token; accepts optional `primaryAddress`/`slot` query
+  params selecting the per-address bucket instead of the account-wide global bucket (no `manage-limits` claim
+  needed to read either). `PUT /wallet/limits` requires the `manage-limits` claim, same optional query params.
+  Persisted shape is `SpendingLimitsDocument { Global: SpendingLimitSettings, PerAddress: Dictionary<string,
+  SpendingLimitSettings> }` (key = `SpendingLimitService.BuildAddressKey(primaryAddress, slot)` =
+  `"{primaryAddress}:{slot}"`) - `ISpendingLimitService.GetLimitsAsync`/`SetLimitsAsync` take a nullable
+  `primaryAddress` selector (`null` = `Global`, matching `ICloudAccountRepository.LoadAccountAsync`'s own
+  `null`-means-current-primary-seed convention). A file predating this split (a flat `SpendingLimitSettings`
+  object) is migrated on read into `{ Global: <that>, PerAddress: {} }` and re-saved immediately - same
+  "migrate on read" precedent as `CloudAccountRepository`'s legacy-mnemonic handling (`SpendingLimitService`'s
+  private `ParseDocument` detects the shape via a raw `JsonDocument` probe for a `"global"` property before
+  falling back). `ISpendingLimitService.EnsureWithinLimitsAsync` (called by `WalletService` with the resolved,
+  always-non-null signing address) checks the global bucket against the *entire* ledger (unfiltered - the
+  pre-split behavior, unaffected if only global limits are ever configured) **and** the per-address bucket (if
+  configured) against ledger entries filtered to that same `(primaryAddress, slot)` key, throwing
+  `SpendingLimitExceededException` with a `"global-*"`/`"address-*"`-prefixed window name so the caller can
+  tell which tier tripped. The settings document and the signed-transaction ledger (`SpendingLedgerEntry` list
+  - now also carrying `PrimaryAddress`/`Slot` per entry, blank/`0` on pre-existing entries, which then only
+  ever count toward the global tier - USD-denominated, pruned to the last 30 days on every write) are **not**
+  in Redis - `SpendingLimitService` stores both AES-encrypted in the wallet owner's own cloud drive (same
+  `ICloudStorageProviderCatalog`/`AesEncryptionHelper` primitives `CloudAccountRepository` uses for the account
+  file itself), under `SpendingLimits.<AESID>.dat`/`SpendingLedger.<AESID>.dat`. Windows are rolling (measured
+  back from "now"), not calendar-aligned - deliberately, so a limit can't be doubled up by spending right
+  before and right after a calendar boundary. Both tiers are per user (by email), not per relying-party client
+  - any app holding a `sign`-scoped token for that user is bound by the same limits, wherever last set.
 - `GET /wallet/limits/currencies` — only requires a valid bearer token. Lists every currency `PUT /wallet/limits`
   accepts plus its current USD rate, via `IExchangeRateService`/`CnbExchangeRateService` (Czech National Bank's
   daily fixing JSON API, cached in `IDistributedCache`/Redis for `ExchangeRateConfiguration.CacheDurationMinutes`,
@@ -148,11 +174,22 @@ type (wire key `"rekey"`, a 32-byte address; present whenever non-empty).
 
 The account file's decrypted content is a `SeedVault` (`BiatecSelfCustodyCore.Model`) - `List<SeedVaultEntry>`,
 each entry `{ Mnemonic, PrimaryAddress (its own ARC-76 slot-0 address, used as the entry's identifier instead
-of a separate id), CreatedUtc, IsPrimary }`. Exactly one entry is `IsPrimary` at a time;
-`LoadAccountAsync(email, slot, provider, accessToken)` **keeps its pre-existing signature** and always derives
-from whichever seed is primary via `ARC76.GetEmailAccount(email, primary.Mnemonic, slot)` - `slot` still
-parameterizes derivation *within* that seed exactly as before this existed, so `BiatecMCP`'s `getAlgorandAddress`
-and everything else calling `LoadAccountAsync` needed zero changes.
+of a separate id), CreatedUtc, IsPrimary }`. Exactly one entry is `IsPrimary` at a time.
+`LoadAccountAsync(email, slot, provider, accessToken, primaryAddress = null)` derives via
+`ARC76.GetEmailAccount(email, seed.Mnemonic, slot)` from whichever seed `primaryAddress` selects - `null`
+(the default, and every pre-multi-address call site's behavior, byte-for-byte unchanged) resolves to whichever
+seed is currently primary (auto-creating the vault's first seed if none exists yet, same side effect as
+always); a non-null value must already exist in the vault (never auto-created) and throws
+`InvalidOperationException` otherwise. `slot` still parameterizes derivation *within* the selected seed exactly
+as before this existed. Two more read-only methods share the same seed-resolution helper
+(`CloudAccountRepository.ResolveSeedEntryAsync`, private): `DeriveAddressAsync(email, provider, primaryAddress,
+slot, accessToken)` (derives an address without signing anything - backs `GET /wallet/address/{primaryAddress}/{slot?}`)
+and `ResolveSeedAddressAsync(email, provider, primaryAddress, accessToken)` (resolves/validates a selector to
+its seed's identifying address without deriving any slot - used once per `POST /wallet/sign` call, by
+`WalletService`, to get a stable identity for both the spending-limit check and the actual signing before
+either happens, so a concurrent `PUT /wallet/seeds/primary` mid-request can't make them disagree).
+`IDriveService.SignTransactionAsync`/`GetAccountAddressAsync` (`BiatecSelfCustodyCore.BusinessLogic`) forward
+the same optional `primaryAddress`/`slot` straight into `LoadAccountAsync`.
 
 - `CloudAccountRepository.LoadVaultOrEmptyAsync`/`LoadVaultEnsuringAtLeastOneSeedAsync` - the former never
   side-effect-creates a seed (used by `ListSeedsAsync`/`CreateSeedAsync`/`SwitchPrimarySeedAsync`, which need to

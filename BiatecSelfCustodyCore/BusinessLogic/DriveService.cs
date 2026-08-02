@@ -18,7 +18,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             _logger = logger;
         }
 
-        public async Task<byte[]> SignTransactionAsync(string email, byte[] txMsgPack, string provider, string? accessToken = null)
+        public async Task<byte[]> SignTransactionAsync(string email, byte[] txMsgPack, string provider, string? accessToken = null, string? primaryAddress = null, int slot = 0)
         {
             if (string.IsNullOrEmpty(email))
             {
@@ -40,7 +40,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
                 }
 
                 // Handle multisig transaction
-                var account = await _cloudAccountRepository.LoadAccountAsync(email, 0, provider, accessToken);
+                var account = await _cloudAccountRepository.LoadAccountAsync(email, slot, provider, accessToken, primaryAddress);
                 var address = account.Address.EncodeAsString();
                 _logger?.LogInformation($"PasswordAccountSignMsig:{address}");
 
@@ -66,7 +66,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
                         throw new Exception("Unable to parse data as Transaction nor SignedTransaction");
                     }
 
-                    var account = await _cloudAccountRepository.LoadAccountAsync(email, 0, provider, accessToken);
+                    var account = await _cloudAccountRepository.LoadAccountAsync(email, slot, provider, accessToken, primaryAddress);
                     var address = account.Address.EncodeAsString();
                     _logger?.LogInformation($"PasswordAccountSign:{address}");
 
@@ -81,7 +81,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             }
         }
 
-        public async Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null)
+        public async Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null, string? primaryAddress = null, int slot = 0)
         {
             if (string.IsNullOrEmpty(email))
             {
@@ -90,7 +90,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
 
             try
             {
-                var account = await _cloudAccountRepository.LoadAccountAsync(email, 0, provider, accessToken);
+                var account = await _cloudAccountRepository.LoadAccountAsync(email, slot, provider, accessToken, primaryAddress);
                 return account.Address.EncodeAsString();
             }
             catch (Exception exc)

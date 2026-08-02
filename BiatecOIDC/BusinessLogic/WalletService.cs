@@ -1,5 +1,6 @@
 using BiatecOIDC.Helper;
 using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Repository;
 
 namespace BiatecOIDC.BusinessLogic
 {
@@ -9,21 +10,24 @@ namespace BiatecOIDC.BusinessLogic
         private readonly IDriveService _driveService;
         private readonly ISpendingLimitService _spendingLimitService;
         private readonly IAssetValuationService _valuationService;
+        private readonly ICloudAccountRepository _accountRepository;
         private readonly ILogger<WalletService> _logger;
 
         public WalletService(
             IDriveService driveService,
             ISpendingLimitService spendingLimitService,
             IAssetValuationService valuationService,
+            ICloudAccountRepository accountRepository,
             ILogger<WalletService> logger)
         {
             _driveService = driveService;
             _spendingLimitService = spendingLimitService;
             _valuationService = valuationService;
+            _accountRepository = accountRepository;
             _logger = logger;
         }
 
-        public async Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken)
+        public async Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? primaryAddress = null, int slot = 0)
         {
             if (string.IsNullOrWhiteSpace(email))
             {
@@ -34,6 +38,10 @@ namespace BiatecOIDC.BusinessLogic
             {
                 throw new ArgumentException("At least one transaction is required.", nameof(transactionsMsgPack));
             }
+
+            // Resolved once, up front, so the spending-limit check and every actual signing call below
+            // agree on the same identity even if the vault's primary seed changes mid-request.
+            var resolvedAddress = await _accountRepository.ResolveSeedAddressAsync(email, provider, primaryAddress, accessToken);
 
             // Decode every transaction up front (cheap, purely local) before doing any network calls -
             // an undecodable transaction should fail fast, not after a round-trip to the router.
@@ -60,22 +68,24 @@ namespace BiatecOIDC.BusinessLogic
                     TimestampUtc = now,
                     AmountUsd = usdValue,
                     AssetId = info.AssetId,
-                    Kind = info.Kind.ToString()
+                    Kind = info.Kind.ToString(),
+                    PrimaryAddress = resolvedAddress,
+                    Slot = slot
                 });
             }
 
-            // Check the whole group's total spend against the caller's daily/weekly/monthly limits before
-            // signing any of it - signing has no rollback, so a group that would exceed a limit must never
-            // partially sign.
+            // Check the whole group's total spend against the caller's global and address-specific
+            // daily/weekly/monthly limits before signing any of it - signing has no rollback, so a group
+            // that would exceed a limit must never partially sign.
             if (totalUsd > 0m)
             {
-                await _spendingLimitService.EnsureWithinLimitsAsync(email, provider, accessToken, totalUsd);
+                await _spendingLimitService.EnsureWithinLimitsAsync(email, provider, accessToken, totalUsd, resolvedAddress, slot);
             }
 
             var signed = new List<byte[]>(transactionsMsgPack.Count);
             foreach (var txMsgPack in transactionsMsgPack)
             {
-                signed.Add(await _driveService.SignTransactionAsync(email, txMsgPack, provider, accessToken));
+                signed.Add(await _driveService.SignTransactionAsync(email, txMsgPack, provider, accessToken, resolvedAddress, slot));
             }
 
             if (ledgerEntries.Count > 0)

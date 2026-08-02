@@ -22,5 +22,15 @@ namespace BiatecOIDC.BusinessLogic
 
         /// <summary><c>"Payment"</c> or <c>"AssetTransfer"</c> - see <c>Helper.AlgorandTransactionKind</c>.</summary>
         public string Kind { get; set; } = string.Empty;
+
+        /// <summary>
+        /// The identifying (slot-0) address of the seed that signed this transaction - blank for entries
+        /// recorded before per-address spending limits existed (they still count toward the global limit,
+        /// just never toward any specific address-scoped one).
+        /// </summary>
+        public string PrimaryAddress { get; set; } = string.Empty;
+
+        /// <summary>The ARC-76 derivation slot used within <see cref="PrimaryAddress"/>'s seed.</summary>
+        public int Slot { get; set; }
     }
 }

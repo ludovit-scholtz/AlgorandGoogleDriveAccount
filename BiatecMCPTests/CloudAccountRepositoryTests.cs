@@ -227,6 +227,118 @@ namespace BiatecMCPTests
             Assert.That(encryptedBytes, Is.EqualTo(_fakeProvider.Files[fileName]));
         }
 
+        // ───────────────────────── Address selection (multi-address signing) ─────────────────────────
+
+        [Test]
+        public async Task LoadAccountAsync_WithPrimaryAddressOfNonPrimarySeed_DerivesFromThatSeedNotTheCurrentPrimary()
+        {
+            var repository = CreateRepository();
+            var primaryAccount = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+            var secondSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
+
+            var account = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token", secondSeed.PrimaryAddress);
+
+            Assert.That(account.Address.EncodeAsString(), Is.EqualTo(secondSeed.PrimaryAddress));
+            Assert.That(account.Address.EncodeAsString(), Is.Not.EqualTo(primaryAccount.Address.EncodeAsString()));
+        }
+
+        [Test]
+        public void LoadAccountAsync_WithUnknownPrimaryAddress_ThrowsInvalidOperationException()
+        {
+            var repository = CreateRepository();
+
+            Assert.That(async () =>
+                {
+                    await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+                    await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token", "NOTAREALADDRESS");
+                },
+                Throws.InvalidOperationException);
+        }
+
+        [Test]
+        public async Task DeriveAddressAsync_NullPrimaryAddress_DerivesFromCurrentPrimarySeed()
+        {
+            var repository = CreateRepository();
+            var primaryAccount = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var derived = await repository.DeriveAddressAsync(TestEmail, "Fake", null, 0, "token");
+
+            Assert.That(derived, Is.EqualTo(primaryAccount.Address.EncodeAsString()));
+        }
+
+        [Test]
+        public async Task DeriveAddressAsync_NonZeroSlot_DiffersFromSlotZero()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var slot0 = await repository.DeriveAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var slot1 = await repository.DeriveAddressAsync(TestEmail, "Fake", null, 1, "token");
+
+            Assert.That(slot1, Is.Not.EqualTo(slot0));
+        }
+
+        [Test]
+        public async Task DeriveAddressAsync_SpecificSeed_DerivesFromThatSeed()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+            var secondSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
+
+            var derived = await repository.DeriveAddressAsync(TestEmail, "Fake", secondSeed.PrimaryAddress, 0, "token");
+
+            Assert.That(derived, Is.EqualTo(secondSeed.PrimaryAddress));
+        }
+
+        [Test]
+        public void DeriveAddressAsync_UnknownPrimaryAddress_ThrowsInvalidOperationException()
+        {
+            var repository = CreateRepository();
+
+            Assert.That(async () =>
+                {
+                    await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+                    await repository.DeriveAddressAsync(TestEmail, "Fake", "NOTAREALADDRESS", 0, "token");
+                },
+                Throws.InvalidOperationException);
+        }
+
+        [Test]
+        public async Task ResolveSeedAddressAsync_NullSelector_ReturnsCurrentPrimarySeedAddress()
+        {
+            var repository = CreateRepository();
+            var primaryAccount = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var resolved = await repository.ResolveSeedAddressAsync(TestEmail, "Fake", null, "token");
+
+            Assert.That(resolved, Is.EqualTo(primaryAccount.Address.EncodeAsString()));
+        }
+
+        [Test]
+        public async Task ResolveSeedAddressAsync_KnownNonPrimarySeed_ReturnsThatAddress()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+            var secondSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
+
+            var resolved = await repository.ResolveSeedAddressAsync(TestEmail, "Fake", secondSeed.PrimaryAddress, "token");
+
+            Assert.That(resolved, Is.EqualTo(secondSeed.PrimaryAddress));
+        }
+
+        [Test]
+        public void ResolveSeedAddressAsync_UnknownSelector_ThrowsInvalidOperationException()
+        {
+            var repository = CreateRepository();
+
+            Assert.That(async () =>
+                {
+                    await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+                    await repository.ResolveSeedAddressAsync(TestEmail, "Fake", "NOTAREALADDRESS", "token");
+                },
+                Throws.InvalidOperationException);
+        }
+
         [Test]
         public void Construction_ActiveKeyMissing_InProduction_Throws()
         {

@@ -109,7 +109,7 @@ namespace BiatecMCPTests
 
             Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
             Assert.That(result.Error, Does.Contain("sign"));
-            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
+            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -121,7 +121,7 @@ namespace BiatecMCPTests
             var result = await CreateTool().OptIn(assetId: 123, note: "", genesisId: "mainnet-v1.0");
 
             Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
-            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
+            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -146,6 +146,116 @@ namespace BiatecMCPTests
             var result = await CreateTool().TransferAsset(receiverAccount: "SOME", assetId: 0, amount: 1, note: "", genesisId: "mainnet-v1.0");
 
             Assert.That(result.ErrorType, Is.EqualTo("Unauthorized"));
+        }
+
+        // ───────────────────────── Multi-address (ARC-76 slot) support ─────────────────────────
+
+        [Test]
+        public async Task GetAccountAddress_DefaultSlotAndNoPrimaryAddress_UsesClaimFastPath()
+        {
+            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+
+            var result = await CreateTool().GetAccountAddress();
+
+            Assert.That(result.Address, Is.EqualTo("SOMEADDRESS"));
+            _walletClient.Verify(c => c.GetAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task GetAccountAddress_NonZeroSlot_DerivesFromPrimarySeedViaWalletApi()
+        {
+            SetClaims(new Claim("algorand_address", "SOMEADDRESS")); // claim present but ignored - slot != 0
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ListSeedsResponse { Seeds = { new SeedResponse { Address = "PRIMARY", IsPrimary = true } } });
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 1, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "SECOND-ADDRESS", PrimaryAddress = "PRIMARY", Slot = 1 });
+
+            var result = await CreateTool().GetAccountAddress(slot: 1);
+
+            Assert.That(result.Address, Is.EqualTo("SECOND-ADDRESS"));
+        }
+
+        [Test]
+        public async Task GetAccountAddress_ExplicitPrimaryAddress_DerivesFromThatSeedViaWalletApi()
+        {
+            SetClaims();
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "OTHER-SEED", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "OTHER-DERIVED", PrimaryAddress = "OTHER-SEED", Slot = 0 });
+
+            var result = await CreateTool().GetAccountAddress(primaryAddress: "OTHER-SEED");
+
+            Assert.That(result.Address, Is.EqualTo("OTHER-DERIVED"));
+            _walletClient.Verify(c => c.ListSeedsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task ListAlgorandAddresses_ReturnsAddressesFromWalletClient()
+        {
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.ListAddressesAsync("tok", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ListAddressesResponse
+                {
+                    Addresses = { new AddressResponse { Address = "A1", IsPrimary = true }, new AddressResponse { Address = "A2", IsPrimary = false } }
+                });
+
+            var result = await CreateTool().ListAlgorandAddresses();
+
+            Assert.That(result.Addresses, Has.Count.EqualTo(2));
+            Assert.That(result.Error, Is.Empty);
+        }
+
+        [Test]
+        public async Task ListAlgorandAddresses_NoBearerToken_ReturnsError()
+        {
+            var result = await CreateTool().ListAlgorandAddresses();
+
+            Assert.That(result.Error, Does.Contain("bearer token"));
+        }
+
+        [Test]
+        public async Task TransferAsset_WithPrimaryAddressAndSlot_ResolvesSenderViaWalletApi()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "OTHER-SEED", 10, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ", PrimaryAddress = "OTHER-SEED", Slot = 10 });
+
+            // No Algod network is configured for "mainnet-v1.0" in this test's AlgodConfiguration, so the
+            // call fails deterministically once it reaches that stage - proving the sender was resolved
+            // through the wallet API first (an unconfigured genesisId throws ArgumentException).
+            var result = await CreateTool().TransferAsset(receiverAccount: "SOME", assetId: 0, amount: 1, note: "n", genesisId: "mainnet-v1.0", primaryAddress: "OTHER-SEED", slot: 10);
+
+            _walletClient.Verify(c => c.GetAddressAsync("tok", "OTHER-SEED", 10, It.IsAny<CancellationToken>()), Times.Once);
+            Assert.That(result.ErrorType, Does.Contain("ArgumentException"));
+        }
+
+        [Test]
+        public async Task ExecuteTransaction_MissingSignClaim_ReturnsInsufficientScope()
+        {
+            SetClaims();
+            SetBearerToken("tok");
+
+            var result = await CreateTool().ExecuteTransaction(new List<string> { "AA==" });
+
+            Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
+        }
+
+        [Test]
+        public async Task ExecuteTransaction_EmptyList_ReturnsInvalidRequest()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+
+            var result = await CreateTool().ExecuteTransaction(new List<string>());
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
         }
     }
 }

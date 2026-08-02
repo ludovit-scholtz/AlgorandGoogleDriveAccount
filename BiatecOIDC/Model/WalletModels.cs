@@ -10,6 +10,16 @@ namespace BiatecOIDC.Model
         /// group id across them before calling this endpoint).
         /// </summary>
         public List<string> Transactions { get; set; } = new();
+
+        /// <summary>
+        /// Which seed signs this group - its own identifying (slot-0) address, see <c>GET /wallet/address</c>.
+        /// Omitted (the default) signs with the vault's current primary seed, unchanged from before this
+        /// field existed.
+        /// </summary>
+        public string? PrimaryAddress { get; set; }
+
+        /// <summary>ARC-76 derivation slot within the selected seed. Defaults to <c>0</c>.</summary>
+        public int Slot { get; set; }
     }
 
     /// <summary>Response body for <c>POST /wallet/sign</c>.</summary>
@@ -53,6 +63,12 @@ namespace BiatecOIDC.Model
 
         /// <summary>The caller's current monthly (trailing 30d) spending limit, in <see cref="CurrencyCode"/>. <c>0</c> means unbounded.</summary>
         public decimal MonthlyLimit { get; set; }
+
+        /// <summary>Which bucket this response describes - <c>null</c> means the account-wide global bucket.</summary>
+        public string? PrimaryAddress { get; set; }
+
+        /// <summary>ARC-76 slot of <see cref="PrimaryAddress"/>'s bucket - meaningless when <see cref="PrimaryAddress"/> is <c>null</c>.</summary>
+        public int Slot { get; set; }
     }
 
     /// <summary>One supported currency and its current rate, as returned by <c>GET /wallet/limits/currencies</c>.</summary>
@@ -104,5 +120,35 @@ namespace BiatecOIDC.Model
     {
         /// <summary>The identifying address (see <see cref="SeedResponse.Address"/>) of the seed to make primary.</summary>
         public string Address { get; set; } = string.Empty;
+    }
+
+    /// <summary>One seed's identifying address, as returned by <c>GET /wallet/address</c>.</summary>
+    public class AddressResponse
+    {
+        /// <summary>This seed's identifying (ARC-76 slot-0) address.</summary>
+        public string Address { get; set; } = string.Empty;
+
+        /// <summary>Whether this is the seed currently used for normal signing (<c>POST /wallet/sign</c>) when no <c>PrimaryAddress</c> is given.</summary>
+        public bool IsPrimary { get; set; }
+    }
+
+    /// <summary>Response body for <c>GET /wallet/address</c>.</summary>
+    public class ListAddressesResponse
+    {
+        /// <summary>Every seed's identifying address in the caller's vault. Exactly one has <see cref="AddressResponse.IsPrimary"/> set.</summary>
+        public List<AddressResponse> Addresses { get; set; } = new();
+    }
+
+    /// <summary>Response body for <c>GET /wallet/address/{primaryAddress}/{slot?}</c>.</summary>
+    public class DerivedAddressResponse
+    {
+        /// <summary>The derived ARC-76 address at <see cref="Slot"/> for the seed identified by <see cref="PrimaryAddress"/>.</summary>
+        public string Address { get; set; } = string.Empty;
+
+        /// <summary>The seed's identifying (slot-0) address, echoed back.</summary>
+        public string PrimaryAddress { get; set; } = string.Empty;
+
+        /// <summary>The ARC-76 derivation slot that was used, echoed back.</summary>
+        public int Slot { get; set; }
     }
 }

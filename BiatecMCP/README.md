@@ -33,12 +33,40 @@ Registration / resource-indicator contract in detail.
 
 ## Available MCP tools
 
-- **`getAlgorandAddress`** — returns the signed-in account's Algorand address (read from the bearer token's own
-  `algorand_address` claim, falling back to the primary seed from `GET /wallet/seeds`).
+- **`getAlgorandAddress`** — returns an Algorand address for the signed-in account. With no arguments, returns the
+  default identity (from the bearer token's own `algorand_address` claim, falling back to the primary seed from
+  `GET /wallet/seeds`). Pass `slot` (ARC-76 derivation index — `1` for the "second address", `2` for the "third",
+  etc.) and/or `primaryAddress` (a specific seed's identifying address, from `listAlgorandAddresses`) to derive a
+  different address instead.
+- **`listAlgorandAddresses`** — lists every seed's identifying address in the account, and which one is primary.
+  Use an address from here as `primaryAddress` on the other tools.
 - **`transferAsset`** — signs and broadcasts a native ALGO payment or ASA transfer. An empty `receiverAccount`
-  performs a self-transfer. Requires the `sign` scope; BiatecOIDC enforces the caller's configured spending limit.
+  performs a self-transfer. Requires the `sign` scope; BiatecOIDC enforces the caller's configured spending limit
+  (global and/or per-address, see below). Signs with the default identity unless `primaryAddress`/`slot` are given.
 - **`optIn`** — opts the account in to an ASA (a zero-amount self-transfer, the standard Algorand pattern).
-  Requires the `sign` scope.
+  Requires the `sign` scope. Same `primaryAddress`/`slot` parameters as `transferAsset`.
+- **`executeAlgorandTransaction`** — broadcasts one or more already-signed transactions (base64 msgpack) to the
+  network. `transferAsset`/`optIn` call this internally after signing; it's also available directly for a
+  sign-then-execute flow. Requires the `sign` scope.
+
+### Example prompts
+
+- *"what is my algorand address"* → `getAlgorandAddress()`
+- *"what is my second address"* → `getAlgorandAddress(slot=1)`
+- *"list all my algorand addresses"* → `listAlgorandAddresses()`
+- *"pay to address ABCD...WXYZ 1 algo with note biatec"* → `transferAsset(receiverAccount="ABCD...WXYZ",
+  amount=1000000, note="biatec")` — signs with the default identity (primary seed, slot 0).
+- *"pay to address ABCD...WXYZ 1 algo with note biatec with my arc76 address SEED2...ADDR and slot 10"* →
+  `transferAsset(receiverAccount="ABCD...WXYZ", amount=1000000, note="biatec", primaryAddress="SEED2...ADDR",
+  slot=10)` — signs with that specific seed/slot instead.
+- *"do self transfer with 1 algo amount and note field biatecmcp"* → `transferAsset(amount=1000000,
+  note="biatecmcp")` (empty `receiverAccount` self-transfers).
+- *"opt in to asset 31566704"* → `optIn(assetId=31566704)`
+
+Spending limits (`PUT /wallet/limits` on BiatecOIDC) can be configured globally (apply to every address) and/or
+per address (`?primaryAddress=...&slot=...`) — a transaction is blocked if it would exceed either. See
+[BiatecOIDC/OIDC_INTEGRATION_GUIDE.md](../BiatecOIDC/OIDC_INTEGRATION_GUIDE.md) for the wallet API's full
+multi-address/spending-limit contract.
 
 ## Connecting an MCP client
 

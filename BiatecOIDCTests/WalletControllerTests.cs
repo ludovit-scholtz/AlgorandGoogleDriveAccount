@@ -331,13 +331,13 @@ namespace BiatecOIDCTests
             SetupValidToken("valid-token", new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
             _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("decrypted-google-token");
             _mockSpendingLimitService
-                .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<CancellationToken>()))
+                .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new SpendingLimitSettings());
 
             var result = await _controller.GetSpendingLimit();
 
             Assert.That(result, Is.InstanceOf<OkObjectResult>());
-            _mockSpendingLimitService.Verify(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<CancellationToken>()), Times.Once);
+            _mockSpendingLimitService.Verify(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
@@ -349,7 +349,7 @@ namespace BiatecOIDCTests
 
             await _controller.UpdateSpendingLimit(new UpdateSpendingLimitRequest { DailyLimit = 1 });
 
-            _mockSpendingLimitService.Verify(s => s.SetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<SpendingLimitSettings>(), It.IsAny<CancellationToken>()), Times.Once);
+            _mockSpendingLimitService.Verify(s => s.SetLimitsAsync(TestEmail, It.IsAny<string>(), "decrypted-google-token", It.IsAny<SpendingLimitSettings>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
@@ -446,7 +446,7 @@ namespace BiatecOIDCTests
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token"); // no manage-limits claim
             _mockSpendingLimitService
-                .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new SpendingLimitSettings { CurrencyCode = "EUR", DailyLimit = 42m });
 
             var result = await _controller.GetSpendingLimit();
@@ -464,7 +464,7 @@ namespace BiatecOIDCTests
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token");
             _mockSpendingLimitService
-                .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new UnauthorizedAccessException("expired"));
 
             var result = await _controller.GetSpendingLimit();
@@ -483,7 +483,7 @@ namespace BiatecOIDCTests
 
             var objectResult = result as ObjectResult;
             Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
-            _mockSpendingLimitService.Verify(s => s.SetLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<SpendingLimitSettings>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockSpendingLimitService.Verify(s => s.SetLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<SpendingLimitSettings>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -504,7 +504,7 @@ namespace BiatecOIDCTests
             _mockSpendingLimitService.Verify(s => s.SetLimitsAsync(
                 TestEmail, It.IsAny<string>(), It.IsAny<string?>(),
                 It.Is<SpendingLimitSettings>(x => x.CurrencyCode == "CZK" && x.DailyLimit == 1000 && x.WeeklyLimit == 5000 && x.MonthlyLimit == 20000),
-                It.IsAny<CancellationToken>()), Times.Once);
+                It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
@@ -518,7 +518,7 @@ namespace BiatecOIDCTests
             _mockSpendingLimitService.Verify(s => s.SetLimitsAsync(
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(),
                 It.Is<SpendingLimitSettings>(x => x.CurrencyCode == "USD"),
-                It.IsAny<CancellationToken>()), Times.Once);
+                It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
@@ -540,7 +540,7 @@ namespace BiatecOIDCTests
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token", new Claim("manage-limits", "true"));
             _mockSpendingLimitService
-                .Setup(s => s.SetLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<SpendingLimitSettings>(), It.IsAny<CancellationToken>()))
+                .Setup(s => s.SetLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<SpendingLimitSettings>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new UnsupportedCurrencyException("XYZ"));
 
             var result = await _controller.UpdateSpendingLimit(new UpdateSpendingLimitRequest { CurrencyCode = "XYZ", DailyLimit = 1 });
@@ -594,6 +594,162 @@ namespace BiatecOIDCTests
 
             var objectResult = result as ObjectResult;
             Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status503ServiceUnavailable));
+        }
+
+        // ───────────────────────── Multi-address signing / limits ─────────────────────────
+
+        [Test]
+        public async Task SignTransactionGroup_WithPrimaryAddressAndSlot_ForwardsToWalletService()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+
+            await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { "AA==" },
+                PrimaryAddress = "SEED-ADDR",
+                Slot = 5
+            });
+
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(
+                TestEmail, It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), "SEED-ADDR", 5), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_UnknownPrimaryAddress_ReturnsBadRequestSeedNotFound()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), "NOTAREALADDRESS", 0))
+                .ThrowsAsync(new InvalidOperationException("No seed with address 'NOTAREALADDRESS' exists for this account."));
+
+            var result = await _controller.SignTransactionGroup(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { "AA==" },
+                PrimaryAddress = "NOTAREALADDRESS"
+            });
+
+            Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task GetSpendingLimit_WithAddressSelector_ForwardsToSpendingLimitService()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockSpendingLimitService
+                .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "SEED-ADDR", 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SpendingLimitSettings { DailyLimit = 7 });
+
+            var result = await _controller.GetSpendingLimit("SEED-ADDR", 3);
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as SpendingLimitResponse;
+            Assert.That(response!.DailyLimit, Is.EqualTo(7));
+            Assert.That(response.PrimaryAddress, Is.EqualTo("SEED-ADDR"));
+            Assert.That(response.Slot, Is.EqualTo(3));
+        }
+
+        [Test]
+        public async Task UpdateSpendingLimit_WithAddressSelector_ForwardsToSpendingLimitService()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("manage-limits", "true"));
+
+            await _controller.UpdateSpendingLimit(new UpdateSpendingLimitRequest { DailyLimit = 1 }, "SEED-ADDR", 4);
+
+            _mockSpendingLimitService.Verify(s => s.SetLimitsAsync(
+                TestEmail, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<SpendingLimitSettings>(), "SEED-ADDR", 4, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task ListAddresses_ReturnsSeedsWithIsPrimary()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new List<SeedSummary>
+                {
+                    new("ADDR1", DateTimeOffset.UtcNow, true),
+                    new("ADDR2", DateTimeOffset.UtcNow, false)
+                });
+
+            var result = await _controller.ListAddresses();
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as ListAddressesResponse;
+            Assert.That(response!.Addresses, Has.Count.EqualTo(2));
+            Assert.That(response.Addresses[0].Address, Is.EqualTo("ADDR1"));
+            Assert.That(response.Addresses[0].IsPrimary, Is.True);
+            Assert.That(response.Addresses[1].IsPrimary, Is.False);
+        }
+
+        [Test]
+        public async Task ListAddresses_NoBearerToken_ReturnsUnauthorized()
+        {
+            var result = await _controller.ListAddresses();
+
+            Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
+        }
+
+        [Test]
+        public async Task GetAddress_KnownSeed_ReturnsDerivedAddress()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 2, It.IsAny<string?>()))
+                .ReturnsAsync("DERIVED-ADDR");
+
+            var result = await _controller.GetAddress("ADDR1", 2);
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as DerivedAddressResponse;
+            Assert.That(response!.Address, Is.EqualTo("DERIVED-ADDR"));
+            Assert.That(response.PrimaryAddress, Is.EqualTo("ADDR1"));
+            Assert.That(response.Slot, Is.EqualTo(2));
+        }
+
+        [Test]
+        public async Task GetAddress_NoSlotGiven_DefaultsToZero()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("DERIVED-ADDR");
+
+            var result = await _controller.GetAddress("ADDR1", null);
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockAccountRepository.Verify(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()), Times.Once);
+        }
+
+        [Test]
+        public async Task GetAddress_UnknownSeed_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "NOTAREALADDRESS", 0, It.IsAny<string?>()))
+                .ThrowsAsync(new InvalidOperationException("No seed with address 'NOTAREALADDRESS' exists for this account."));
+
+            var result = await _controller.GetAddress("NOTAREALADDRESS", null);
+
+            Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task GetAddress_NoBearerToken_ReturnsUnauthorized()
+        {
+            var result = await _controller.GetAddress("ADDR1", null);
+
+            Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
         }
     }
 }

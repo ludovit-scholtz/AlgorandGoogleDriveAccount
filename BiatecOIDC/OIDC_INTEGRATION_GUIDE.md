@@ -62,13 +62,24 @@ for a given client (don't mix the two for the same integration).
   - Convenience token verification endpoint.
 - `POST /wallet/sign`
   - Signs an Algorand transaction group. Requires the `sign` scope, and additionally the `rekey` scope if
-    any transaction in the group carries Algorand's `rekey` field (see "Wallet API" below).
+    any transaction in the group carries Algorand's `rekey` field (see "Wallet API" below). Body accepts
+    optional `primaryAddress`/`slot` fields to sign with a specific seed/ARC-76 slot instead of the vault's
+    current primary seed at slot 0 (see "Multi-address signing" below).
+- `GET /wallet/address`
+  - Lists every seed's identifying (slot-0) address in the caller's vault, and which one is primary. Same
+    data as `GET /wallet/seeds` below, addressed for the multi-address signing use case. Only requires
+    being authenticated.
+- `GET /wallet/address/{primaryAddress}/{slot?}`
+  - Derives (without signing anything) the ARC-76 address at `slot` (default `0`) for the seed identified
+    by `primaryAddress`. Only requires being authenticated.
 - `GET /wallet/limits`
   - Reads the caller's own daily/weekly/monthly spending limits. Only requires being authenticated
-    (`openid`) - no `manage-limits` scope needed to read your own limits.
+    (`openid`) - no `manage-limits` scope needed to read your own limits. Accepts optional
+    `primaryAddress`/`slot` query parameters to read a per-address bucket instead of the account-wide
+    global bucket (see "Multi-address signing" below).
 - `PUT /wallet/limits`
   - Sets the caller's own daily/weekly/monthly spending limits and their currency. Requires the
-    `manage-limits` scope.
+    `manage-limits` scope. Same optional `primaryAddress`/`slot` query parameters as the `GET`.
 - `GET /wallet/limits/currencies`
   - Lists every currency a spending limit can be configured in, with its current USD exchange rate. Only
     requires being authenticated.
@@ -230,26 +241,32 @@ self-custody data is resolved entirely from an encrypted copy cached inside that
 device/backend, not just the one the user originally signed in on.
 
 - **`POST /wallet/sign`** (needs `sign`; additionally needs `rekey` if any transaction in the group carries
-  Algorand's `rekey` field) — body: `{ "transactions": ["<base64 msgpack>", ...] }`. Every payment/asset-transfer
-  in the group is priced in USD via the Biatec Router, and the group's *total* is checked against the caller's
-  daily (trailing 24h), weekly (trailing 7d), and monthly (trailing 30d) spending limits *before* anything is
-  signed — if the total would exceed any configured (non-zero) limit, the whole request is rejected
-  (`403 spending_limit_exceeded`) and nothing is signed. A group containing a rekey transaction is checked for
-  the `rekey` claim before any of that - a `sign`-only token gets `403 insufficient_scope` naming `rekey`
-  specifically, and nothing in the group is signed. Returns `{ "signedTransactions": ["<base64 msgpack>", ...] }`
-  in the same order as the request. A `503` (`asset_valuation_failed` or `spending_limit_currency_unavailable`)
+  Algorand's `rekey` field) — body: `{ "transactions": ["<base64 msgpack>", ...], "primaryAddress": "ABC...",
+  "slot": 0 }`. `primaryAddress`/`slot` are optional and select which seed/ARC-76 index signs (see
+  "Multi-address signing" below) - omit both to sign with the vault's current primary seed at slot 0, unchanged
+  from before this existed. Every payment/asset-transfer in the group is priced in USD via the Biatec Router,
+  and the group's *total* is checked against the signing identity's global **and** per-address spending limits
+  *before* anything is signed — if the total would exceed either configured (non-zero) limit, the whole request
+  is rejected (`403 spending_limit_exceeded`) and nothing is signed. A group containing a rekey transaction is
+  checked for the `rekey` claim before any of that - a `sign`-only token gets `403 insufficient_scope` naming
+  `rekey` specifically, and nothing in the group is signed. `primaryAddress` naming a seed that doesn't exist in
+  the vault fails with `400 seed_not_found`. Returns `{ "signedTransactions": ["<base64 msgpack>", ...] }` in
+  the same order as the request. A `503` (`asset_valuation_failed` or `spending_limit_currency_unavailable`)
   means a spent asset couldn't be priced, or the caller's limit currency's exchange rate couldn't be fetched —
   every transaction is subject to the limit, so an unpriceable asset fails the request rather than being
   silently treated as free.
-- **`GET /wallet/limits`** (only needs to be authenticated, no body/query parameters at all) — read the caller's
-  own limits: `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000 }` (`0` on any
-  of the three means that window is unbounded). A first-time caller who's never configured limits gets an
-  all-zero, USD-denominated default rather than a 404.
-- **`PUT /wallet/limits`** (needs `manage-limits`) — set the caller's own limits: same shape as the `GET`
-  response, no other fields. `currencyCode` defaults to `"USD"` if omitted/blank; an unsupported code is rejected
-  with `400 unsupported_currency` (see `GET /wallet/limits/currencies` for the supported list). The limits belong
-  to the wallet owner, not to your application — they apply the same way across every app the owner has
-  authorized with a `sign`-scoped token.
+- **`GET /wallet/limits`** (only needs to be authenticated; optional `primaryAddress`/`slot` query params) — read
+  the caller's own limits for one bucket: the account-wide global bucket if `primaryAddress` is omitted, or the
+  per-address bucket for that `(primaryAddress, slot)` identity otherwise. Shape:
+  `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000, "primaryAddress": null,
+  "slot": 0 }` (`0` on any of the three limit fields means that window is unbounded). A bucket that's never been
+  configured gets an all-zero, USD-denominated default rather than a 404.
+- **`PUT /wallet/limits`** (needs `manage-limits`; same optional `primaryAddress`/`slot` query params as the
+  `GET`) — set the caller's limits for one bucket: same body shape as the `GET` response (query params select
+  the bucket, not body fields). `currencyCode` defaults to `"USD"` if omitted/blank; an unsupported code is
+  rejected with `400 unsupported_currency` (see `GET /wallet/limits/currencies` for the supported list). The
+  limits belong to the wallet owner, not to your application — they apply the same way across every app the
+  owner has authorized with a `sign`-scoped token.
 - **`GET /wallet/limits/currencies`** (only needs to be authenticated) — every currency `PUT /wallet/limits`
   will accept, with its current USD rate: `{ "currencies": [ { "code": "USD", "name": null, "usdPerUnit": 1.0 },
   { "code": "EUR", "name": "EMU euro", "usdPerUnit": 1.08 }, ... ] }`. Rates come from the Czech National Bank's
@@ -264,6 +281,27 @@ device/backend, not just the one the user originally signed in on.
   token was ever cached for this session (or it's since gone stale - see below), the call fails with
   `401 storage_access_denied`; there is no parameter to work around this with, the caller needs a fresh
   interactive sign-in through `/authorize`.
+
+## Multi-address signing
+
+Every signing identity is a `(primaryAddress, slot)` pair: `primaryAddress` selects *which seed* (its own
+identifying slot-0 address, from `GET /wallet/address`/`GET /wallet/seeds` - `null`/omitted means "the vault's
+current primary seed"), `slot` selects the ARC-76 derivation index *within* that seed (default `0`). This is
+addressable independently of which seed is currently "primary" - you don't need to call
+`PUT /wallet/seeds/primary` to sign with a non-default identity, just pass `primaryAddress`/`slot` on
+`POST /wallet/sign` directly.
+
+- **`GET /wallet/address`** (only needs to be authenticated) — lists every seed's identifying address and
+  whether it's primary: `{ "addresses": [ { "address": "ABC...", "isPrimary": true }, ... ] }`. Same underlying
+  data as `GET /wallet/seeds`, without the mnemonic-adjacent framing.
+- **`GET /wallet/address/{primaryAddress}/{slot?}`** (only needs to be authenticated) — derives (without
+  signing anything) the ARC-76 address at `slot` (default `0`) for the named seed: `{ "address": "derived...",
+  "primaryAddress": "ABC...", "slot": 3 }`. `400 seed_not_found` if `primaryAddress` doesn't match any seed in
+  the vault.
+- Spending limits are two-tiered per the `GET`/`PUT /wallet/limits` bullets above: a **global** bucket that
+  counts every signed transaction from any address together, and independent **per-address** buckets. A
+  transaction signed with a given `(primaryAddress, slot)` identity is checked against both - it's blocked if
+  it would exceed either.
 
 ## Multi-seed vault and rekey
 

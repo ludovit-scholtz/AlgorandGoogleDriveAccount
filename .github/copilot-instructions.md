@@ -71,12 +71,18 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — the 3 MCP tools (`getAlgorandAddress`, `transferAsset`, `optIn`), all forwarding the
-    caller's own bearer token to BiatecOIDC rather than touching any key material - see "MCP server" under
-    Architecture notes below for the full request flow
+  - `MCP/BiatecMCP.cs` — the 5 MCP tools (`getAlgorandAddress`, `listAlgorandAddresses`, `transferAsset`,
+    `optIn`, `executeAlgorandTransaction`), all forwarding the caller's own bearer token to BiatecOIDC rather
+    than touching any key material - see "MCP server" under Architecture notes below for the full request
+    flow. `getAlgorandAddress`/`transferAsset`/`optIn` accept optional `primaryAddress`/`slot` parameters to
+    address a specific seed/ARC-76 slot instead of the default identity (see BiatecOIDC's "Multi-address
+    signing" note); `executeAlgorandTransaction` broadcasts already-signed transactions directly and is what
+    `transferAsset`/`optIn` call internally after signing (via a shared private `SubmitSignedTransactionsAsync`
+    helper), so there's exactly one build→submit code path.
   - `BusinessLogic/IBiatecWalletClient.cs` + `BiatecWalletClient.cs` — typed `HttpClient` wrapping BiatecOIDC's
-    `POST /wallet/sign`/`GET /wallet/seeds`, forwarding the caller's bearer token; `WalletApiException` carries
-    BiatecOIDC's `ProblemDetails` title/detail back to the tool
+    `POST /wallet/sign`/`GET /wallet/seeds`/`GET /wallet/address`/`GET /wallet/address/{primaryAddress}/{slot}`,
+    forwarding the caller's bearer token; `WalletApiException` carries BiatecOIDC's `ProblemDetails` title/detail
+    back to the tool
   - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in transactions
     (Algorand4 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material ever touches this
     project
@@ -132,7 +138,7 @@ dependency on `BiatecSelfCustodyCore`.
   - `OIDC_INTEGRATION_GUIDE.md`, `BIATEC_OIDC_LOGOUT_REQUIREMENTS.md`, `ENTRA_SETUP_GUIDE.md`
 - `BiatecMCPTests/` — NUnit + Moq tests for `BiatecMCP` (OAuth resource-server wiring via
   `Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory`, `AlgorandTransactionBuilder`, `BiatecWalletClient`,
-  the 3 MCP tools) **and** `BiatecSelfCustodyCore` (AES encryption, transfer policy, `CloudStorageProviderCatalog`,
+  the 5 MCP tools) **and** `BiatecSelfCustodyCore` (AES encryption, transfer policy, `CloudStorageProviderCatalog`,
   `GoogleCloudStorageProvider`, `MicrosoftCloudStorageProvider`, plus a shared `FakeCloudStorageProvider` test
   double) — the latter group stays here even though the `BiatecMCP` *product* project no longer references
   `BiatecSelfCustodyCore`, since `BiatecOIDCTests` doesn't yet have its own copies and this is still the only
@@ -377,14 +383,18 @@ setup stage needs.
   contains **both** its own `client_id` and the resource URI (`JwtIssuerService.CreateAccessToken`'s RFC 8707
   handling) — this is what lets `BiatecMCP` validate tokens from *any* dynamically-registered client against one
   stable audience value via local JWT validation (`AddJwtBearer`, `Authority` = `Oidc:Issuer`), with no
-  per-request network call to BiatecOIDC; (4) the 3 tools (`MCP/BiatecMCP.cs`: `getAlgorandAddress`,
-  `transferAsset`, `optIn`) forward that same bearer token to BiatecOIDC's wallet REST API
-  (`IBiatecWalletClient`/`BiatecWalletClient`) — `getAlgorandAddress` reads the token's own `algorand_address`
-  claim (falling back to `GET /wallet/seeds`'s primary seed), `transferAsset`/`optIn` build an *unsigned*
-  transaction locally (`AlgorandTransactionBuilder`, Algorand4 SDK, no key material), `POST /wallet/sign` it
-  (BiatecOIDC enforces the `sign`/`rekey` claim and the spending limit there — `McpTransferLimitsConfiguration`/
-  `TransferPolicy` were removed from `BiatecMCP` entirely, since `/wallet/sign` already does this uniformly for
-  every relying party), then broadcast the signed bytes to Algod directly. Mounted at `/mcp` via
+  per-request network call to BiatecOIDC; (4) the 5 tools (`MCP/BiatecMCP.cs`: `getAlgorandAddress`,
+  `listAlgorandAddresses`, `transferAsset`, `optIn`, `executeAlgorandTransaction`) forward that same bearer
+  token to BiatecOIDC's wallet REST API (`IBiatecWalletClient`/`BiatecWalletClient`) — `getAlgorandAddress`
+  (with no `slot`/`primaryAddress` given) reads the token's own `algorand_address` claim (falling back to
+  `GET /wallet/seeds`'s primary seed); any non-default identity, or `listAlgorandAddresses`, hits
+  `GET /wallet/address`/`GET /wallet/address/{primaryAddress}/{slot?}` instead. `transferAsset`/`optIn` build
+  an *unsigned* transaction locally (`AlgorandTransactionBuilder`, Algorand4 SDK, no key material),
+  `POST /wallet/sign` it — forwarding `primaryAddress`/`slot` if given — (BiatecOIDC enforces the
+  `sign`/`rekey` claim and both spending-limit tiers there — `McpTransferLimitsConfiguration`/`TransferPolicy`
+  were removed from `BiatecMCP` entirely, since `/wallet/sign` already does this uniformly for every relying
+  party), then broadcast the signed bytes to Algod via the same private `SubmitSignedTransactionsAsync` helper
+  `executeAlgorandTransaction` (broadcast-only, no signing) also uses. Mounted at `/mcp` via
   `ModelContextProtocol.AspNetCore` (`AddMcpServer().WithHttpTransport().WithToolsFromAssembly().AddAuthorizationFilters()`),
   stateless HTTP transport.
 - **JWT issuer / OIDC provider**: `JwtIssuerService` + `JwtIssuerController` (`BiatecOIDC`) implement OIDC
@@ -402,10 +412,26 @@ setup stage needs.
   MSAL-flavored OIDC clients auto-append regardless of configuration) is silently dropped instead, since there's
   nothing to fix and failing login over library-injected noise would be worse. The actual grant is always visible
   in the token response's `scope` field.
+- **Multi-address signing**: every signing identity is a `(primaryAddress, slot)` pair — `primaryAddress`
+  selects *which seed* (its own identifying slot-0 address; `null`/omitted = the vault's current primary seed,
+  byte-for-byte unchanged from before this existed), `slot` selects the ARC-76 derivation index *within* that
+  seed (default `0`). `ICloudAccountRepository.LoadAccountAsync` gained this as an optional trailing
+  `primaryAddress` parameter; two new read-only methods share its private seed-resolution helper:
+  `DeriveAddressAsync` (derives an address without signing, backs `GET /wallet/address/{primaryAddress}/{slot?}`)
+  and `ResolveSeedAddressAsync` (resolves/validates a selector to its seed's address without deriving a slot —
+  called once by `WalletService.SignTransactionGroupAsync` before pricing/limit-checking, so the resolved
+  identity used for the spending-limit check and the identity actually used to sign can't disagree even if
+  `PUT /wallet/seeds/primary` runs concurrently). `IDriveService.SignTransactionAsync`/`GetAccountAddressAsync`
+  and `POST /wallet/sign`'s request body (`PrimaryAddress`/`Slot`, both optional) forward the same selector
+  straight through. `GET /wallet/address` lists every seed's address + `isPrimary` (same data as
+  `GET /wallet/seeds`, addressed for this use case).
 - **Wallet API (`sign`/`manage-limits`/`rekey` scopes)**: `WalletController` (`BiatecOIDC`) exposes
   `POST /wallet/sign` (signs an Algorand transaction group via the shared `IDriveService`), `GET`/`PUT /wallet/limits`
-  (the caller's own daily/weekly/monthly spending limits and their currency), `GET /wallet/limits/currencies`
-  (every currency a limit can be set in, with its current USD rate), and `GET`/`POST /wallet/seeds` +
+  (the caller's own daily/weekly/monthly spending limits and their currency — global by default, or a specific
+  `(primaryAddress, slot)`'s own bucket via optional `primaryAddress`/`slot` query params — see "Multi-address
+  signing" above and "Two-tier spending limits" below), `GET /wallet/limits/currencies`
+  (every currency a limit can be set in, with its current USD rate), `GET /wallet/address` +
+  `GET /wallet/address/{primaryAddress}/{slot?}`, and `GET`/`POST /wallet/seeds` +
   `PUT /wallet/seeds/primary` (the multi-seed vault — see the bullet above). `POST /wallet/sign` and
   `PUT /wallet/limits` are gated on a dedicated claim of the same name as the scope (`sign`/`manage-limits`),
   stamped onto the access token by `JwtIssuerService.CreateAccessToken` only when that scope was granted **and**
@@ -426,8 +452,9 @@ setup stage needs.
   via the `BiatecRouterConnector` NuGet package's public `/quote` endpoint — mainnet USDC by default, see
   `SpendingLimitsConfiguration`), summed, converted into the caller's configured limit currency via
   `IExchangeRateService`/`CnbExchangeRateService` (Czech National Bank daily fixing, cached in Redis), and checked
-  against `ISpendingLimitService`'s rolling daily (24h)/weekly (7d)/monthly (30d) windows **before** any
-  transaction in the group is signed — a group that would exceed a limit never partially signs. An asset that
+  against **both** the global and the resolved `(primaryAddress, slot)` identity's own per-address rolling
+  daily (24h)/weekly (7d)/monthly (30d) windows (see "Two-tier spending limits" below) **before** any
+  transaction in the group is signed — a group that would exceed either tier never partially signs. An asset that
   can't be priced (`AssetValuationException`) or a limit currency whose rate can't be fetched
   (`UnsupportedCurrencyException`) fails the whole request (503) rather than being silently treated as free.
   Both the limit settings and a rolling ledger of every signed `pay`/`axfer` (used to compute real trailing spend
@@ -438,6 +465,21 @@ setup stage needs.
   stamped onto the access token at issuance, never caller-supplied, so it can't be spoofed to point at the wrong
   storage backend. `BiatecOIDC/wwwroot/index.html` (served at `/`, reachable on `oidc.biatec.io`'s own Ingress)
   is this API's documentation site.
+- **Two-tier spending limits**: `SpendingLimitService` persists `SpendingLimitsDocument { Global:
+  SpendingLimitSettings, PerAddress: Dictionary<string, SpendingLimitSettings> }` (key =
+  `BuildAddressKey(primaryAddress, slot)` = `"{primaryAddress}:{slot}"`) instead of a single flat settings
+  object — `ISpendingLimitService.GetLimitsAsync`/`SetLimitsAsync` take a nullable `primaryAddress` selector
+  (`null` = `Global`, same convention as `LoadAccountAsync`). `EnsureWithinLimitsAsync` (always called with a
+  resolved, non-null identity) checks the global bucket against the *entire* ledger (unfiltered — the
+  pre-split behavior, so an account that only ever configures global limits sees no change) and, if a
+  per-address bucket is configured for that identity, checks it separately against ledger entries filtered to
+  the same `(primaryAddress, slot)` key — `SpendingLedgerEntry` gained `PrimaryAddress`/`Slot` fields for this
+  (blank/`0` on pre-existing entries, which then only ever count toward the global tier).
+  `SpendingLimitExceededException.Window` is prefixed `"global-"`/`"address-"` so callers can tell which tier
+  tripped. A settings file predating this split (a flat `SpendingLimitSettings` object) is detected via a raw
+  `JsonDocument` probe for a `"global"` property and migrated into `{ Global: <that>, PerAddress: {} }` on
+  first read, re-saved immediately — same "migrate on read" precedent as `CloudAccountRepository`'s
+  legacy-mnemonic handling. No filename/AESID change — same `SpendingLimits.%AESID%.dat`.
 - **Provider access token caching**: no wallet endpoint accepts the caller's Google/Microsoft access token as a
   parameter, ever — it's always resolved by `WalletController.ResolveProviderAccessToken` from a `provider_token`
   claim cached on the bearer token itself, so the exact same Biatec token works from any device/backend, not just

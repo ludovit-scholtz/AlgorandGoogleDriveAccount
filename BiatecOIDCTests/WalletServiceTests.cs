@@ -4,6 +4,7 @@ using Algorand.Algod.Model.Transactions;
 using Algorand.Utils;
 using BiatecOIDC.BusinessLogic;
 using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -14,11 +15,13 @@ namespace BiatecOIDCTests
     {
         private const string TestEmail = "user@example.com";
         private const string TestProvider = "Google";
+        private const string ResolvedAddress = "RESOLVEDPRIMARYSEEDADDRESS";
         private static readonly Digest TestGenesisHash = new(new byte[32]);
 
         private Mock<IDriveService> _mockDriveService = null!;
         private Mock<ISpendingLimitService> _mockSpendingLimitService = null!;
         private Mock<IAssetValuationService> _mockValuationService = null!;
+        private Mock<ICloudAccountRepository> _mockAccountRepository = null!;
         private WalletService _service = null!;
 
         [SetUp]
@@ -27,11 +30,16 @@ namespace BiatecOIDCTests
             _mockDriveService = new Mock<IDriveService>();
             _mockSpendingLimitService = new Mock<ISpendingLimitService>();
             _mockValuationService = new Mock<IAssetValuationService>();
-            _service = new WalletService(_mockDriveService.Object, _mockSpendingLimitService.Object, _mockValuationService.Object, new Mock<ILogger<WalletService>>().Object);
+            _mockAccountRepository = new Mock<ICloudAccountRepository>();
+            _service = new WalletService(_mockDriveService.Object, _mockSpendingLimitService.Object, _mockValuationService.Object, _mockAccountRepository.Object, new Mock<ILogger<WalletService>>().Object);
+
+            _mockAccountRepository
+                .Setup(r => r.ResolveSeedAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()))
+                .ReturnsAsync(ResolvedAddress);
 
             _mockDriveService
-                .Setup(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
-                .ReturnsAsync((string _, byte[] tx, string _, string? _) => tx.Reverse().ToArray());
+                .Setup(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ReturnsAsync((string _, byte[] tx, string _, string? _, string? _, int _) => tx.Reverse().ToArray());
 
             // 1 base unit == 1 USD by default, so tests can reason about amounts directly; individual
             // tests override this where they need a specific valuation.
@@ -98,12 +106,43 @@ namespace BiatecOIDCTests
             var result = await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, "access-token");
 
             Assert.That(result, Has.Count.EqualTo(1));
-            _mockDriveService.Verify(d => d.SignTransactionAsync(TestEmail, tx, TestProvider, "access-token"), Times.Once);
-            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, "access-token", 500_000m, It.IsAny<CancellationToken>()), Times.Once);
+            _mockDriveService.Verify(d => d.SignTransactionAsync(TestEmail, tx, TestProvider, "access-token", ResolvedAddress, 0), Times.Once);
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, "access-token", 500_000m, ResolvedAddress, 0, It.IsAny<CancellationToken>()), Times.Once);
             _mockSpendingLimitService.Verify(s => s.RecordSpendAsync(
                 TestEmail, TestProvider, "access-token",
-                It.Is<IReadOnlyList<SpendingLedgerEntry>>(entries => entries.Count == 1 && entries[0].AmountUsd == 500_000m && entries[0].Kind == "Payment"),
+                It.Is<IReadOnlyList<SpendingLedgerEntry>>(entries =>
+                    entries.Count == 1 && entries[0].AmountUsd == 500_000m && entries[0].Kind == "Payment" &&
+                    entries[0].PrimaryAddress == ResolvedAddress && entries[0].Slot == 0),
                 It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroupAsync_WithExplicitPrimaryAddressAndSlot_ResolvesAndForwardsThatIdentity()
+        {
+            const string requestedAddress = "SOME-OTHER-SEED-ADDRESS";
+            _mockAccountRepository
+                .Setup(r => r.ResolveSeedAddressAsync(TestEmail, TestProvider, requestedAddress, "access-token"))
+                .ReturnsAsync(requestedAddress);
+            var tx = BuildPayment(100);
+
+            await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, "access-token", requestedAddress, 7);
+
+            _mockAccountRepository.Verify(r => r.ResolveSeedAddressAsync(TestEmail, TestProvider, requestedAddress, "access-token"), Times.Once);
+            _mockDriveService.Verify(d => d.SignTransactionAsync(TestEmail, tx, TestProvider, "access-token", requestedAddress, 7), Times.Once);
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, "access-token", 100m, requestedAddress, 7, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public void SignTransactionGroupAsync_UnknownPrimaryAddress_PropagatesInvalidOperationException()
+        {
+            _mockAccountRepository
+                .Setup(r => r.ResolveSeedAddressAsync(TestEmail, TestProvider, "NOTAREALADDRESS", It.IsAny<string?>()))
+                .ThrowsAsync(new InvalidOperationException("No seed with address 'NOTAREALADDRESS' exists for this account."));
+
+            Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { BuildPayment(1) }, null, "NOTAREALADDRESS"));
+
+            _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
 
         [Test]
@@ -111,13 +150,13 @@ namespace BiatecOIDCTests
         {
             var tx = BuildPayment(2_000);
             _mockSpendingLimitService
-                .Setup(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 2_000m, It.IsAny<CancellationToken>()))
-                .ThrowsAsync(new SpendingLimitExceededException("daily", 2_000m, 1_000m, "USD"));
+                .Setup(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 2_000m, ResolvedAddress, 0, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new SpendingLimitExceededException("global-daily", 2_000m, 1_000m, "USD"));
 
             Assert.ThrowsAsync<SpendingLimitExceededException>(
                 async () => await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, null));
 
-            _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
             _mockSpendingLimitService.Verify(s => s.RecordSpendAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<SpendingLedgerEntry>>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
@@ -142,7 +181,7 @@ namespace BiatecOIDCTests
             Assert.ThrowsAsync<AssetValuationException>(
                 async () => await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, null));
 
-            _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
 
         [Test]
@@ -156,7 +195,7 @@ namespace BiatecOIDCTests
             var result = await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, null);
 
             Assert.That(result, Has.Count.EqualTo(1));
-            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
             // Still recorded to the ledger - it's a real signed transaction, just worth $0.
             _mockSpendingLimitService.Verify(s => s.RecordSpendAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<SpendingLedgerEntry>>(), It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -170,7 +209,7 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Has.Count.EqualTo(1));
             _mockValuationService.Verify(v => v.GetUsdValueAsync(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<CancellationToken>()), Times.Never);
-            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
             _mockSpendingLimitService.Verify(s => s.RecordSpendAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<SpendingLedgerEntry>>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
@@ -180,13 +219,13 @@ namespace BiatecOIDCTests
             var okTx = BuildPayment(500);
             var badTx = BuildPayment(5_000);
             _mockSpendingLimitService
-                .Setup(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 5_500m, It.IsAny<CancellationToken>()))
-                .ThrowsAsync(new SpendingLimitExceededException("daily", 5_500m, 1_000m, "USD"));
+                .Setup(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 5_500m, ResolvedAddress, 0, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new SpendingLimitExceededException("global-daily", 5_500m, 1_000m, "USD"));
 
             Assert.ThrowsAsync<SpendingLimitExceededException>(
                 async () => await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { okTx, badTx }, null));
 
-            _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
 
         [Test]
@@ -200,7 +239,7 @@ namespace BiatecOIDCTests
             Assert.That(result, Has.Count.EqualTo(2));
             Assert.That(result[0], Is.EqualTo(tx1.Reverse().ToArray()));
             Assert.That(result[1], Is.EqualTo(tx2.Reverse().ToArray()));
-            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 300m, It.IsAny<CancellationToken>()), Times.Once);
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 300m, ResolvedAddress, 0, It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]

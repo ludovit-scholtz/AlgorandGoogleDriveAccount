@@ -53,17 +53,16 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
-        public async Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null)
+        public async Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null, string? primaryAddress = null)
         {
             var storageProvider = _catalog.Resolve(provider);
 
             try
             {
                 var context = await ResolveContextAsync(storageProvider, accessToken);
-                var vault = await LoadVaultEnsuringAtLeastOneSeedAsync(email, storageProvider, context);
-                var primary = ResolvePrimary(vault);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, primaryAddress);
 
-                return AlgorandARC76AccountDotNet.ARC76.GetEmailAccount(email, primary.Mnemonic, slot);
+                return AlgorandARC76AccountDotNet.ARC76.GetEmailAccount(email, seed.Mnemonic, slot);
             }
             catch (UnauthorizedAccessException)
             {
@@ -82,6 +81,90 @@ namespace BiatecSelfCustodyCore.Repository
                 _logger.LogError(ex, "Error loading account from {Provider} for email {Email}", storageProvider.Name, email);
                 throw new InvalidOperationException($"Error loading account from {storageProvider.Name}.");
             }
+        }
+
+        public async Task<string> DeriveAddressAsync(string email, string provider, string? primaryAddress, int slot, string? accessToken = null)
+        {
+            var storageProvider = _catalog.Resolve(provider);
+
+            try
+            {
+                var context = await ResolveContextAsync(storageProvider, accessToken);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, primaryAddress);
+
+                return AlgorandARC76AccountDotNet.ARC76.GetEmailAccount(email, seed.Mnemonic, slot).Address.EncodeAsString();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deriving an address from {Provider} for email {Email}", storageProvider.Name, email);
+                throw new InvalidOperationException($"Error deriving an address from {storageProvider.Name}.");
+            }
+        }
+
+        public async Task<string> ResolveSeedAddressAsync(string email, string provider, string? primaryAddress, string? accessToken = null)
+        {
+            var storageProvider = _catalog.Resolve(provider);
+
+            try
+            {
+                var context = await ResolveContextAsync(storageProvider, accessToken);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, primaryAddress);
+
+                return seed.PrimaryAddress;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resolving the seed address from {Provider} for email {Email}", storageProvider.Name, email);
+                throw new InvalidOperationException($"Error resolving the seed address from {storageProvider.Name}.");
+            }
+        }
+
+        /// <summary>
+        /// Resolves <paramref name="primaryAddress"/> to a concrete <see cref="SeedVaultEntry"/> - <c>null</c>
+        /// resolves to (and, if needed, auto-creates) the vault's current primary seed, exactly like the
+        /// pre-multi-address behavior; a non-null value must already exist in the vault and is never
+        /// auto-created, since the caller named a specific seed.
+        /// </summary>
+        private async Task<SeedVaultEntry> ResolveSeedEntryAsync(string email, ICloudStorageProvider storageProvider, VaultContext context, string? primaryAddress)
+        {
+            if (primaryAddress == null)
+            {
+                var vault = await LoadVaultEnsuringAtLeastOneSeedAsync(email, storageProvider, context);
+                return ResolvePrimary(vault);
+            }
+
+            var lookupVault = await LoadVaultOrEmptyAsync(email, storageProvider, context);
+            var seed = lookupVault.Seeds.FirstOrDefault(s => string.Equals(s.PrimaryAddress, primaryAddress, StringComparison.Ordinal));
+            if (seed == null)
+            {
+                throw new InvalidOperationException($"No seed with address '{primaryAddress}' exists for this account.");
+            }
+
+            return seed;
         }
 
         public async Task<IReadOnlyList<SeedSummary>> ListSeedsAsync(string email, string provider, string? accessToken = null)

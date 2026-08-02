@@ -140,7 +140,7 @@ namespace BiatecOIDC.Controllers
             try
             {
                 var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token));
+                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, request.PrimaryAddress, request.Slot));
                 return Ok(new SignTransactionGroupResponse
                 {
                     SignedTransactions = signed.Select(Convert.ToBase64String).ToList()
@@ -153,6 +153,10 @@ namespace BiatecOIDC.Controllers
             catch (FormatException ex)
             {
                 return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "seed_not_found", Detail = ex.Message });
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -173,14 +177,20 @@ namespace BiatecOIDC.Controllers
             }
         }
 
-        /// <summary>Returns the caller's current daily/weekly/monthly spending limits and their currency.</summary>
+        /// <summary>
+        /// Returns the caller's current daily/weekly/monthly spending limits and their currency, for one
+        /// bucket - the account-wide global bucket if <paramref name="primaryAddress"/> is omitted, or the
+        /// per-address bucket for that <c>(primaryAddress, slot)</c> signing identity otherwise.
+        /// </summary>
+        /// <param name="primaryAddress">Selects the per-address bucket instead of the global one. Omit for the account-wide global bucket.</param>
+        /// <param name="slot">ARC-76 slot of <paramref name="primaryAddress"/>'s bucket. Ignored if <paramref name="primaryAddress"/> is omitted.</param>
         /// <response code="200">The current limits (all-zero/unbounded, in USD, if never configured).</response>
         /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider
         /// access token is available (see the class remarks) - a fresh interactive sign-in is required.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("limits")]
-        public async Task<IActionResult> GetSpendingLimit()
+        public async Task<IActionResult> GetSpendingLimit([FromQuery] string? primaryAddress = null, [FromQuery] int slot = 0)
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
             if (authError != null)
@@ -195,8 +205,8 @@ namespace BiatecOIDC.Controllers
             try
             {
                 var settings = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, resolvedAccessToken,
-                    token => _spendingLimitService.GetLimitsAsync(email, provider, token));
-                return Ok(ToResponse(settings));
+                    token => _spendingLimitService.GetLimitsAsync(email, provider, token, primaryAddress, slot));
+                return Ok(ToResponse(settings, primaryAddress, slot));
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -204,8 +214,14 @@ namespace BiatecOIDC.Controllers
             }
         }
 
-        /// <summary>Sets the caller's daily/weekly/monthly spending limits and the currency they're expressed in.</summary>
+        /// <summary>
+        /// Sets the caller's daily/weekly/monthly spending limits and the currency they're expressed in,
+        /// for one bucket - same <paramref name="primaryAddress"/>/<paramref name="slot"/> selector
+        /// convention as <see cref="GetSpendingLimit"/>.
+        /// </summary>
         /// <param name="request">The new limits (<c>0</c> to leave a window unbounded) and their currency.</param>
+        /// <param name="primaryAddress">Selects the per-address bucket instead of the global one. Omit for the account-wide global bucket.</param>
+        /// <param name="slot">ARC-76 slot of <paramref name="primaryAddress"/>'s bucket. Ignored if <paramref name="primaryAddress"/> is omitted.</param>
         /// <response code="200">The limits were updated.</response>
         /// <response code="400">The requested currency isn't supported - see <c>GET /wallet/limits/currencies</c>.</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
@@ -213,7 +229,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpPut("limits")]
-        public async Task<IActionResult> UpdateSpendingLimit([FromBody] UpdateSpendingLimitRequest request)
+        public async Task<IActionResult> UpdateSpendingLimit([FromBody] UpdateSpendingLimitRequest request, [FromQuery] string? primaryAddress = null, [FromQuery] int slot = 0)
         {
             var authError = TryAuthenticate(WalletScopes.ManageLimits, out var principal);
             if (authError != null)
@@ -236,7 +252,7 @@ namespace BiatecOIDC.Controllers
             try
             {
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings));
+                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings, primaryAddress, slot));
             }
             catch (UnsupportedCurrencyException ex)
             {
@@ -248,7 +264,81 @@ namespace BiatecOIDC.Controllers
             }
 
             _logger.LogInformation("{Email} updated their spending limits (currency {Currency}).", email, settings.CurrencyCode);
-            return Ok(ToResponse(settings));
+            return Ok(ToResponse(settings, primaryAddress, slot));
+        }
+
+        /// <summary>Lists every seed's identifying address in the caller's vault, and which one is primary.</summary>
+        /// <response code="200">The caller's seed addresses.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpGet("address")]
+        public async Task<IActionResult> ListAddresses()
+        {
+            var authError = TryAuthenticate(requiredClaim: null, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            try
+            {
+                var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.ListSeedsAsync(email, provider, token));
+                return Ok(new ListAddressesResponse
+                {
+                    Addresses = seeds.Select(s => new AddressResponse { Address = s.PrimaryAddress, IsPrimary = s.IsPrimary }).ToList()
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Derives (without signing anything) the ARC-76 address at <paramref name="slot"/> for the seed
+        /// identified by <paramref name="primaryAddress"/> (see <see cref="ListAddresses"/>).
+        /// </summary>
+        /// <param name="primaryAddress">The seed's own identifying (slot-0) address.</param>
+        /// <param name="slot">ARC-76 derivation index within that seed. Defaults to <c>0</c>.</param>
+        /// <response code="200">The derived address.</response>
+        /// <response code="400">No seed with that address exists in the caller's vault.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpGet("address/{primaryAddress}/{slot:int?}")]
+        public async Task<IActionResult> GetAddress(string primaryAddress, int? slot)
+        {
+            var authError = TryAuthenticate(requiredClaim: null, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+            var resolvedSlot = slot ?? 0;
+
+            try
+            {
+                var address = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.DeriveAddressAsync(email, provider, primaryAddress, resolvedSlot, token));
+                return Ok(new DerivedAddressResponse { Address = address, PrimaryAddress = primaryAddress, Slot = resolvedSlot });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "seed_not_found", Detail = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
         }
 
         /// <summary>
@@ -511,12 +601,14 @@ namespace BiatecOIDC.Controllers
             return refreshed?.AccessToken;
         }
 
-        private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings) => new()
+        private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings, string? primaryAddress, int slot) => new()
         {
             CurrencyCode = settings.CurrencyCode,
             DailyLimit = settings.DailyLimit,
             WeeklyLimit = settings.WeeklyLimit,
-            MonthlyLimit = settings.MonthlyLimit
+            MonthlyLimit = settings.MonthlyLimit,
+            PrimaryAddress = primaryAddress,
+            Slot = slot
         };
 
         /// <summary>
