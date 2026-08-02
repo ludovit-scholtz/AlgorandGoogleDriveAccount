@@ -171,6 +171,14 @@ namespace BiatecOIDC
             // ASP.NET Core Challenge()/cookie sign-in flow.
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IVaultBackupService, BiatecOIDC.BusinessLogic.VaultBackupService>();
 
+            // GET /chains (ChainsController): the public, liveness-checked registry of Algorand-family
+            // chains this deployment currently considers usable - see AlgorandChainRegistry's remarks. This
+            // is discovery/documentation data, not security-sensitive, so it's cached in-process
+            // (IMemoryCache) rather than added to Redis alongside real session/token state.
+            builder.Services.AddMemoryCache();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IPublicAlgodDataSource, BiatecOIDC.BusinessLogic.PublicAlgodDataSource>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IAlgorandChainRegistry, BiatecOIDC.BusinessLogic.AlgorandChainRegistry>();
+
             builder.Services.AddHttpContextAccessor();
 
             // Add Redis distributed cache

@@ -35,6 +35,7 @@ namespace BiatecMCP.MCP
         private readonly IOptionsMonitor<Model.AlgodConfiguration> _algodConfig;
         private readonly DexSwapAggregatorService _dexSwapAggregator;
         private readonly IAramidBridgeConfigProvider _aramidBridgeConfigProvider;
+        private readonly IAlgorandChainRegistry _chainRegistry;
         private readonly ILogger<BiatecMCP> _logger;
 
         public BiatecMCP(
@@ -43,6 +44,7 @@ namespace BiatecMCP.MCP
             IOptionsMonitor<Model.AlgodConfiguration> algodConfig,
             DexSwapAggregatorService dexSwapAggregator,
             IAramidBridgeConfigProvider aramidBridgeConfigProvider,
+            IAlgorandChainRegistry chainRegistry,
             ILogger<BiatecMCP> logger)
         {
             _walletClient = walletClient;
@@ -50,6 +52,7 @@ namespace BiatecMCP.MCP
             _algodConfig = algodConfig;
             _dexSwapAggregator = dexSwapAggregator;
             _aramidBridgeConfigProvider = aramidBridgeConfigProvider;
+            _chainRegistry = chainRegistry;
             _logger = logger;
         }
 
@@ -378,9 +381,21 @@ namespace BiatecMCP.MCP
             public ulong SourceAmount { get; set; }
             public ulong FeeAmount { get; set; }
             public ulong DestinationAmount { get; set; }
+
+            /// <summary><c>true</c> if Biatec confirmed the bridge deposit address on the destination chain currently holds enough of the destination token; <c>false</c> if it couldn't be checked (see <see cref="Warning"/>). A request that was checked and found insufficient never reaches this response - see <c>InsufficientDestinationLiquidity</c>.</summary>
+            public bool? LiquidityVerified { get; set; }
             public string? Warning { get; set; }
             public string Error { get; set; } = string.Empty;
             public string ErrorType { get; set; } = string.Empty;
+        }
+
+        private sealed class DestinationLiquidityCheckResult
+        {
+            public bool? Verified { get; set; }
+            public string? Warning { get; set; }
+
+            /// <summary>Set only when liquidity was actually checked and found insufficient - the caller must fail closed on this, never return a built transaction.</summary>
+            public string? Error { get; set; }
         }
 
         /// <summary>Aramid chain id per source genesisId - see https://github.com/AramidFinance/docs. Only Algorand mainnet is supported today.</summary>
@@ -390,7 +405,7 @@ namespace BiatecMCP.MCP
         };
 
         [McpServerTool(Name = "createBridgeTransaction"),
-         Description("Builds an unsigned Aramid Finance bridge transaction (a pay/axfer sent to Aramid's bridge deposit address, with a note field encoding the destination chain/address/amounts) - does NOT sign or broadcast it. Fetches Aramid's live bridge configuration first and validates the route and amount bounds against it. Does NOT verify destination-chain bridge liquidity - Aramid's own integration guide flags this as essential to avoid a stranded transfer, so confirm it independently before broadcasting anything but a small amount. Pass the result's UnsignedTransaction to signTransaction next, then executeAlgorandTransaction to broadcast.")]
+         Description("Builds an unsigned Aramid Finance bridge transaction (a pay/axfer sent to Aramid's bridge deposit address, with a note field encoding the destination chain/address/amounts) - does NOT sign or broadcast it. Fetches Aramid's live bridge configuration first and validates the route and amount bounds against it. For Algorand-family destination chains with a currently-live public algod node, also verifies the bridge deposit address there actually holds enough of the destination token, and refuses to build the transaction (InsufficientDestinationLiquidity) if not; for other destinations the response's LiquidityVerified/Warning fields explain why it couldn't be checked - confirm independently in that case before broadcasting anything but a small amount. Consider calling getBridgeConfiguration first to see valid routes/chains. Pass the result's UnsignedTransaction to signTransaction next, then executeAlgorandTransaction to broadcast.")]
         public async Task<CreateBridgeTransactionResponse> CreateBridgeTransaction(
             [Description("ASA id to bridge from Algorand. 0 = native ALGO.")] ulong assetId,
             [Description("Total amount to bridge, in the source asset's base units, INCLUDING Aramid's bridge fee - the fee is deducted from this amount, never added on top.")] ulong amount,
@@ -462,6 +477,12 @@ namespace BiatecMCP.MCP
                 var destinationDecimals = destinationChain.Tokens.TryGetValue(destinationToken, out var destinationTokenInfo) ? destinationTokenInfo.Decimals ?? sourceDecimals : sourceDecimals;
                 var destinationAmount = AramidBridgeCalculator.ComputeDestinationAmount(sourceAmount, sourceDecimals, destinationDecimals);
 
+                var liquidityCheck = await CheckDestinationLiquidityAsync(destinationChain, destinationNetwork, destinationToken, destinationAmount);
+                if (liquidityCheck.Error != null)
+                {
+                    return new CreateBridgeTransactionResponse { Error = liquidityCheck.Error, ErrorType = "InsufficientDestinationLiquidity" };
+                }
+
                 string transferNote;
                 try
                 {
@@ -485,7 +506,8 @@ namespace BiatecMCP.MCP
                     SourceAmount = sourceAmount,
                     FeeAmount = feeAmount,
                     DestinationAmount = destinationAmount,
-                    Warning = "Destination-chain bridge liquidity was not verified - Aramid's integration guide flags this as essential to avoid a stranded transfer. Confirm independently before broadcasting anything but a small amount."
+                    LiquidityVerified = liquidityCheck.Verified,
+                    Warning = liquidityCheck.Warning
                 };
             }
             catch (WalletApiException ex)
@@ -499,6 +521,194 @@ namespace BiatecMCP.MCP
             catch (Exception ex)
             {
                 return new CreateBridgeTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateBridgeTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        /// <summary>
+        /// Checks whether Aramid's bridge deposit address on the destination chain currently holds enough of
+        /// the destination token to fulfill this transfer - only possible for Algorand-family
+        /// (<c>destinationChain.Type == "algo"</c>) destination chains with a currently-live public algod node
+        /// (<see cref="IAlgorandChainRegistry"/>); EVM/NEAR destinations can't be checked this way and fall
+        /// back to an honest warning instead, same as an unreachable/unknown Algorand-family chain.
+        /// </summary>
+        private async Task<DestinationLiquidityCheckResult> CheckDestinationLiquidityAsync(BusinessLogic.AramidChainItem destinationChain, long destinationNetwork, string destinationToken, ulong destinationAmount)
+        {
+            if (!string.Equals(destinationChain.Type, "algo", StringComparison.OrdinalIgnoreCase))
+            {
+                return new DestinationLiquidityCheckResult
+                {
+                    Verified = false,
+                    Warning = $"Destination-chain bridge liquidity was not verified - chain {destinationNetwork} is not an Algorand-family chain, so Biatec cannot check its balance directly. Confirm independently before broadcasting anything but a small amount."
+                };
+            }
+
+            AlgorandChain? liveChain;
+            try
+            {
+                liveChain = await _chainRegistry.TryGetChainByAramidIdAsync(destinationNetwork);
+            }
+            catch (Exception)
+            {
+                liveChain = null;
+            }
+
+            if (liveChain == null)
+            {
+                return new DestinationLiquidityCheckResult
+                {
+                    Verified = false,
+                    Warning = $"Destination-chain bridge liquidity was not verified - no currently-live public algod node is known for chain {destinationNetwork}. Confirm independently before broadcasting anything but a small amount."
+                };
+            }
+
+            if (!ulong.TryParse(destinationToken, out var destinationAssetId))
+            {
+                return new DestinationLiquidityCheckResult
+                {
+                    Verified = false,
+                    Warning = $"Destination-chain bridge liquidity was not verified - destination token '{destinationToken}' is not a numeric asset id Biatec can look up directly. Confirm independently before broadcasting anything but a small amount."
+                };
+            }
+
+            try
+            {
+                using var httpClient = HttpClientConfigurator.ConfigureHttpClient(liveChain.AlgodApiAddress, liveChain.AlgodApiToken);
+                var algodApi = new DefaultApi(httpClient);
+                var account = await algodApi.AccountInformationAsync(destinationChain.Address);
+
+                var availableBalance = destinationAssetId == 0
+                    ? account.Amount
+                    : account.Assets?.FirstOrDefault(a => a.AssetId == destinationAssetId)?.Amount ?? 0;
+
+                if (availableBalance < destinationAmount)
+                {
+                    return new DestinationLiquidityCheckResult
+                    {
+                        Error = $"Aramid's bridge deposit address on destination chain {destinationNetwork} only holds {availableBalance} base units of token '{destinationToken}' - not enough to fulfill a transfer of {destinationAmount}. This transfer would likely be stranded; reduce the amount or try again later."
+                    };
+                }
+
+                return new DestinationLiquidityCheckResult { Verified = true };
+            }
+            catch (Exception)
+            {
+                return new DestinationLiquidityCheckResult
+                {
+                    Verified = false,
+                    Warning = $"Destination-chain bridge liquidity was not verified - the live algod node for chain {destinationNetwork} could not be queried. Confirm independently before broadcasting anything but a small amount."
+                };
+            }
+        }
+
+        public class AramidChainSummary
+        {
+            public long ChainId { get; set; }
+            public string Name { get; set; } = string.Empty;
+
+            /// <summary><c>"algo"</c>, <c>"eth"</c>, or <c>"near"</c>.</summary>
+            public string Type { get; set; } = string.Empty;
+
+            /// <summary>The bridge's own deposit/multisig address on this chain - transfers are sent here, never directly to the recipient.</summary>
+            public string Address { get; set; } = string.Empty;
+
+            /// <summary>Decimals for each token id Aramid recognizes on this chain, where known.</summary>
+            public Dictionary<string, int?> TokenDecimals { get; set; } = new();
+        }
+
+        public class AramidRouteSummary
+        {
+            public long DestinationChainId { get; set; }
+            public string SourceToken { get; set; } = string.Empty;
+            public string DestinationToken { get; set; } = string.Empty;
+
+            /// <summary>
+            /// This route's fee schedule "generations" as Aramid published them, each with the round range
+            /// it's valid for (<c>null</c> on either side = unbounded) - not resolved to "the current one"
+            /// here, since that needs a live Algod round and this tool is deliberately Algod-independent;
+            /// createBridgeTransaction resolves the actually-active one at build time via the same data.
+            /// </summary>
+            public List<AramidFeeAlternative> FeeAlternatives { get; set; } = new();
+        }
+
+        public class GetBridgeConfigurationResponse
+        {
+            public List<AramidChainSummary> Chains { get; set; } = new();
+            public List<AramidRouteSummary> RoutesFromAlgorandMainnet { get; set; } = new();
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "getBridgeConfiguration"),
+         Description("Fetches Aramid Finance's live bridge configuration (from IPFS, per Aramid's own integration guide) and returns every chain it knows about plus every route out of Algorand mainnet (source chain 416001) - amount bounds, fee schedule generations, and token decimals. Call this before createBridgeTransaction to confirm the destinationNetwork/assetId/destinationToken combination you're about to use is actually valid and to see the allowed amount range, instead of guessing and getting a RouteNotFound/AmountOutOfRange error. Fee alternatives are returned as published (not resolved to 'the current one', since that needs a live round) - createBridgeTransaction resolves the actually-active one at build time. No authentication required.")]
+        public async Task<GetBridgeConfigurationResponse> GetBridgeConfiguration(
+            [Description("Optional Aramid destination chain id to filter routes to, e.g. 416101 for Voi. Omit to list every route out of Algorand mainnet.")] long? destinationChainId = null)
+        {
+            try
+            {
+                var config = await _aramidBridgeConfigProvider.GetConfigAsync();
+
+                var chains = config.Chains.Values
+                    .Select(c => new AramidChainSummary
+                    {
+                        ChainId = c.ChainId,
+                        Name = c.Name,
+                        Type = c.Type,
+                        Address = c.Address,
+                        TokenDecimals = c.Tokens.ToDictionary(t => t.Key, t => t.Value.Decimals)
+                    })
+                    .OrderBy(c => c.ChainId)
+                    .ToList();
+
+                var routes = new List<AramidRouteSummary>();
+                var sourceChainKey = AramidSourceChainIdsByGenesisId["mainnet-v1.0"].ToString(CultureInfo.InvariantCulture);
+                if (config.Chains2Tokens.TryGetValue(sourceChainKey, out var byDestinationChain))
+                {
+                    foreach (var (destinationChainKey, bySourceToken) in byDestinationChain)
+                    {
+                        if (!long.TryParse(destinationChainKey, NumberStyles.Integer, CultureInfo.InvariantCulture, out var destChainId))
+                        {
+                            continue;
+                        }
+
+                        if (destinationChainId.HasValue && destChainId != destinationChainId.Value)
+                        {
+                            continue;
+                        }
+
+                        foreach (var (sourceToken, byDestinationToken) in bySourceToken)
+                        {
+                            foreach (var (destinationToken, mapping) in byDestinationToken)
+                            {
+                                if (mapping.FeeAlternatives.Count == 0)
+                                {
+                                    continue;
+                                }
+
+                                routes.Add(new AramidRouteSummary
+                                {
+                                    DestinationChainId = destChainId,
+                                    SourceToken = sourceToken,
+                                    DestinationToken = destinationToken,
+                                    FeeAlternatives = mapping.FeeAlternatives
+                                });
+                            }
+                        }
+                    }
+                }
+
+                return new GetBridgeConfigurationResponse
+                {
+                    Chains = chains,
+                    RoutesFromAlgorandMainnet = routes
+                        .OrderBy(r => r.DestinationChainId)
+                        .ThenBy(r => r.SourceToken, StringComparer.Ordinal)
+                        .ThenBy(r => r.DestinationToken, StringComparer.Ordinal)
+                        .ToList()
+                };
+            }
+            catch (Exception ex)
+            {
+                return new GetBridgeConfigurationResponse { Error = SanitizeForToolResponse(ex, nameof(GetBridgeConfiguration)), ErrorType = ex.GetType().ToString() };
             }
         }
 
@@ -662,7 +872,7 @@ namespace BiatecMCP.MCP
 
             try
             {
-                var (apiAddress, apiToken, explorerBaseUrl) = GetAlgodSettings(genesisId);
+                var (apiAddress, apiToken, explorerBaseUrl) = await GetAlgodSettings(genesisId);
                 using var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
                 var algodApi = new DefaultApi(httpClient);
 
@@ -698,7 +908,14 @@ namespace BiatecMCP.MCP
             return new ExecuteTransactionResponse { TxId = postResult.Txid, ExplorerLink = $"{explorerBaseUrl}{postResult.Txid}" };
         }
 
-        private (string apiAddress, string apiToken, string explorerBaseUrl) GetAlgodSettings(string genesisId)
+        /// <summary>
+        /// Resolves algod connection details for <paramref name="genesisId"/> - locally-configured
+        /// <c>Algod:Networks</c> entries take precedence (preserves operator control/custom explorer links),
+        /// falling back to <see cref="IAlgorandChainRegistry"/>'s dynamically discovered, liveness-verified
+        /// public chain registry for anything not explicitly configured. The registry doesn't publish
+        /// explorer URLs, so a dynamically-resolved chain gets a generic Allo Explorer-style fallback.
+        /// </summary>
+        private async Task<(string apiAddress, string apiToken, string explorerBaseUrl)> GetAlgodSettings(string genesisId)
         {
             var algodConfig = _algodConfig.CurrentValue;
 
@@ -707,13 +924,19 @@ namespace BiatecMCP.MCP
                 return (networkSettings.ApiAddress, networkSettings.ApiToken, networkSettings.ExplorerBaseUrl);
             }
 
+            var chain = await _chainRegistry.TryGetChainAsync(genesisId);
+            if (chain != null)
+            {
+                return (chain.AlgodApiAddress, chain.AlgodApiToken, "https://allo.info/tx/");
+            }
+
             throw new ArgumentException($"Unknown or unconfigured genesisId '{genesisId}'.");
         }
 
         /// <summary>Fetches Algod's current suggested transaction parameters for <paramref name="genesisId"/> - used by every <c>create*</c> tool.</summary>
         private async Task<Algorand.Algod.Model.TransactionParametersResponse> GetSuggestedParamsAsync(string genesisId)
         {
-            var (apiAddress, apiToken, _) = GetAlgodSettings(genesisId);
+            var (apiAddress, apiToken, _) = await GetAlgodSettings(genesisId);
             using var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
             var algodApi = new DefaultApi(httpClient);
             return await algodApi.TransactionParamsAsync();

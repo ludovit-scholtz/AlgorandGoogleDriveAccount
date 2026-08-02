@@ -26,6 +26,7 @@ namespace BiatecMCPTests
         private IOptionsMonitor<AlgodConfiguration> _algodConfig = null!;
         private Mock<IDexQuoteProvider> _biatecRouterQuoteProvider = null!;
         private Mock<IAramidBridgeConfigProvider> _aramidBridgeConfigProvider = null!;
+        private Mock<IAlgorandChainRegistry> _chainRegistry = null!;
 
         [SetUp]
         public void SetUp()
@@ -37,12 +38,16 @@ namespace BiatecMCPTests
             _biatecRouterQuoteProvider = new Mock<IDexQuoteProvider>();
             _biatecRouterQuoteProvider.Setup(p => p.ProviderName).Returns("BiatecRouter");
             _aramidBridgeConfigProvider = new Mock<IAramidBridgeConfigProvider>();
+            _chainRegistry = new Mock<IAlgorandChainRegistry>();
+            _chainRegistry.Setup(r => r.TryGetChainAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync((AlgorandChain?)null);
+            _chainRegistry.Setup(r => r.TryGetChainByAramidIdAsync(It.IsAny<long>(), It.IsAny<CancellationToken>())).ReturnsAsync((AlgorandChain?)null);
         }
 
         private BiatecMCP.MCP.BiatecMCP CreateTool(DexSwapAggregatorService? aggregator = null) =>
             new(_walletClient.Object, _httpContextAccessor, _algodConfig,
                 aggregator ?? new DexSwapAggregatorService(new[] { _biatecRouterQuoteProvider.Object }),
                 _aramidBridgeConfigProvider.Object,
+                _chainRegistry.Object,
                 NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
 
         private void SetBearerToken(string token) =>
@@ -467,6 +472,63 @@ namespace BiatecMCPTests
             var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 416101, "VOIRECIPIENT", "302189");
 
             Assert.That(result.ErrorType, Does.Contain("ArgumentException"));
+        }
+
+        // ───────────────────────── getBridgeConfiguration ─────────────────────────
+
+        [Test]
+        public async Task GetBridgeConfiguration_ReturnsChainsAndRoutesFromAlgorandMainnet()
+        {
+            _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ValidAramidConfig());
+
+            var result = await CreateTool().GetBridgeConfiguration();
+
+            Assert.That(result.Error, Is.Empty);
+            Assert.That(result.Chains.Select(c => c.ChainId), Is.EquivalentTo(new long[] { 416001, 416101 }));
+            Assert.That(result.RoutesFromAlgorandMainnet, Has.Count.EqualTo(1));
+            var route = result.RoutesFromAlgorandMainnet[0];
+            Assert.That(route.DestinationChainId, Is.EqualTo(416101));
+            Assert.That(route.SourceToken, Is.EqualTo("0"));
+            Assert.That(route.DestinationToken, Is.EqualTo("302189"));
+            Assert.That(route.FeeAlternatives, Has.Count.EqualTo(1));
+            Assert.That(route.FeeAlternatives[0].MinimumAmount, Is.EqualTo(1000));
+        }
+
+        [Test]
+        public async Task GetBridgeConfiguration_FilteredByDestinationChainId_ExcludesOtherRoutes()
+        {
+            _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ValidAramidConfig());
+
+            var result = await CreateTool().GetBridgeConfiguration(destinationChainId: 999999);
+
+            Assert.That(result.RoutesFromAlgorandMainnet, Is.Empty);
+        }
+
+        [Test]
+        public async Task GetBridgeConfiguration_NoRoutesFromMainnet_ReturnsEmptyRoutesNotError()
+        {
+            _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new AramidConfigRoot
+            {
+                Chains = new Dictionary<string, AramidChainItem>
+                {
+                    ["416001"] = new AramidChainItem { ChainId = 416001, Type = "algo", Address = "BRIDGEDEPOSITADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" }
+                }
+            });
+
+            var result = await CreateTool().GetBridgeConfiguration();
+
+            Assert.That(result.Error, Is.Empty);
+            Assert.That(result.RoutesFromAlgorandMainnet, Is.Empty);
+        }
+
+        [Test]
+        public async Task GetBridgeConfiguration_ConfigProviderThrows_ReturnsError()
+        {
+            _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new InvalidOperationException("IPFS unreachable"));
+
+            var result = await CreateTool().GetBridgeConfiguration();
+
+            Assert.That(result.Error, Is.Not.Empty);
         }
 
         // ───────────────────────── createMultisigTransaction / mergeMultisigTransactions ─────────────────────────

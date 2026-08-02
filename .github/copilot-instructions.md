@@ -71,22 +71,24 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — 10 MCP tools split into three chainable steps (build → sign → execute) rather than
+  - `MCP/BiatecMCP.cs` — 11 MCP tools split into three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast: `getAlgorandAddress`,
-    `listAlgorandAddresses` (read-only); `createPaymentTransaction`, `createOptInTransaction`,
-    `createAssetCreateTransaction`, `createSwapTransaction`, `createBridgeTransaction` (a real
-    [Aramid Finance](https://aramid.finance) bridge integration - see "Aramid bridge integration" below),
-    `createMultisigTransaction` (build-only, no `sign` claim needed - see "Multisig transactions" below);
-    `signTransaction` (new, standalone - forwards to BiatecOIDC's `POST /wallet/sign`, requires `sign`),
-    `mergeMultisigTransactions` (combines independently-signed multisig copies, no BiatecOIDC/Algod call);
-    `executeAlgorandTransaction` (broadcasts already-signed transactions, requires `sign`). Every tool's
-    `[Description]` names the next tool in the chain, since MCP has no other side-channel for teaching the
-    connected agent the intended protocol. All forward the caller's own bearer token to BiatecOIDC rather
-    than touching any key material - see "MCP server" under Architecture notes below for the full request
-    flow. The `create*`/`getAlgorandAddress` tools accept optional `primaryAddress`/`slot` parameters to
-    build against/from a specific seed/ARC-76 slot instead of the default identity (see BiatecOIDC's
-    "Multi-address signing" note).
+    `listAlgorandAddresses`, `getBridgeConfiguration` (read-only); `createPaymentTransaction`,
+    `createOptInTransaction`, `createAssetCreateTransaction`, `createSwapTransaction`,
+    `createBridgeTransaction` (a real [Aramid Finance](https://aramid.finance) bridge integration - see
+    "Aramid bridge integration" below), `createMultisigTransaction` (build-only, no `sign` claim needed -
+    see "Multisig transactions" below); `signTransaction` (new, standalone - forwards to BiatecOIDC's
+    `POST /wallet/sign`, requires `sign`), `mergeMultisigTransactions` (combines independently-signed
+    multisig copies, no BiatecOIDC/Algod call); `executeAlgorandTransaction` (broadcasts already-signed
+    transactions, requires `sign`). Every tool's `[Description]` names the next tool in the chain, since MCP
+    has no other side-channel for teaching the connected agent the intended protocol. All forward the
+    caller's own bearer token to BiatecOIDC rather than touching any key material - see "MCP server" under
+    Architecture notes below for the full request flow. The `create*`/`getAlgorandAddress` tools accept
+    optional `primaryAddress`/`slot` parameters to build against/from a specific seed/ARC-76 slot instead of
+    the default identity (see BiatecOIDC's "Multi-address signing" note). Every `genesisId` parameter across
+    these tools resolves against the dynamic, liveness-verified `IAlgorandChainRegistry` (see "Multi-chain
+    support" below) when it isn't one of the locally-configured `Algod:Networks` entries.
   - `BusinessLogic/IBiatecWalletClient.cs` + `BiatecWalletClient.cs` — typed `HttpClient` wrapping BiatecOIDC's
     `POST /wallet/sign`/`GET /wallet/seeds`/`GET /wallet/address`/`GET /wallet/address/{primaryAddress}/{slot}`,
     forwarding the caller's bearer token; `WalletApiException` carries BiatecOIDC's `ProblemDetails` title/detail
@@ -95,6 +97,14 @@ dependency on `BiatecSelfCustodyCore`.
     `HaystackRouterQuoteProvider.cs` + `DexSwapAggregatorService.cs` — `createSwapTransaction`'s quote
     comparison (see "DEX swap aggregation" under Architecture notes below for the scope decision on which
     provider can actually build a transaction today)
+  - `BusinessLogic/AlgorandChainRegistryModels.cs`, `IPublicAlgodDataSource.cs`/`PublicAlgodDataSource.cs`,
+    `IAlgorandChainRegistry.cs`/`AlgorandChainRegistry.cs` — the dynamic multi-chain registry (see
+    "Multi-chain support" below); a separate, independently-implemented copy exists under `BiatecOIDC/`,
+    per this repo's no-compile-time-coupling rule
+  - `BusinessLogic/IAramidBridgeConfigProvider.cs`/`AramidBridgeConfigProvider.cs`,
+    `AramidBridgeModels.cs`, `Helper/AramidBridgeCalculator.cs` — Aramid Finance's live bridge
+    configuration/fee math (see "Aramid bridge integration" below); backs both `getBridgeConfiguration` and
+    `createBridgeTransaction`
   - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in/asset-create
     transactions (Algorand4 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material
     ever touches this project
@@ -117,6 +127,12 @@ dependency on `BiatecSelfCustodyCore`.
   - `Controllers/WalletController.cs` — `/wallet/sign` (`sign` claim), `/wallet/limits` get (identity only)/put
     (`manage-limits` claim), `/wallet/limits/currencies` (identity only); same manual bearer-token pattern as
     `JwtIssuerController`'s `/userinfo` (not `[Authorize]` — see `.claude/skills/biatec-oidc-jwt/SKILL.md`)
+  - `Controllers/ChainsController.cs` + `Model/ChainsModels.cs` — `GET /chains`, `[AllowAnonymous]`, no bearer
+    token needed - the public, liveness-checked Algorand chain registry (see "Multi-chain support" below)
+  - `BusinessLogic/AlgorandChainRegistryModels.cs`, `IPublicAlgodDataSource.cs`/`PublicAlgodDataSource.cs`,
+    `IAlgorandChainRegistry.cs`/`AlgorandChainRegistry.cs` — an independent copy of `BiatecMCP`'s own registry
+    (see "Multi-chain support" below), duplicated rather than shared via `BiatecSelfCustodyCore` per this
+    repo's no-compile-time-coupling rule
   - `BusinessLogic/JwtIssuerService.cs` (+ `IJwtIssuerService`) — depends on `BiatecSelfCustodyCore`'s
     `IDriveService` for the `algorand_address` claim; also stamps `biatec_idp`/`sign`/`manage-limits` claims
     onto issued access tokens. `ResolveClientAsync(clientId)` checks statically-configured `JwtIssuer:Clients`
@@ -448,6 +464,29 @@ setup stage needs.
   merge" - so no BiatecOIDC-side change was needed for this. `mergeMultisigTransactions` combines the
   collected copies via the Algorand4 SDK's `SignedTransaction.MergeMultisigTransactionBytes` once at least
   `threshold` of them are present, ready for `executeAlgorandTransaction`.
+- **Multi-chain support**: `IAlgorandChainRegistry`/`AlgorandChainRegistry` (independently implemented in
+  both `BiatecMCP/BusinessLogic/` and `BiatecOIDC/BusinessLogic/` - no shared code, per this repo's
+  no-compile-time-coupling rule) discovers which Algorand-family chains are currently safe to use: it fetches
+  the public [genesis list](https://scholtz.github.io/AlgorandPublicData/genesis/genesis-list.json) (skipping
+  any entry with a blank `genesisHash`, e.g. a local sandbox placeholder), then for each chain fetches that
+  network's [`public-algod-providers.json`](https://scholtz.github.io/AlgorandPublicData/algod/mainnet-v1.0/public-algod-providers.json)
+  and calls each candidate node's own `/v2/transactions/params` (reusing the Algorand4 SDK's
+  `DefaultApi.TransactionParamsAsync()` - the response shape is identical, so no bespoke JSON parsing is
+  needed) - the first provider whose reported genesis hash matches the genesis list's value wins as that
+  chain's live node; a chain with no currently-live matching provider is dropped entirely, never counted as
+  "supported". Results are cached in-process (`IMemoryCache`, ~10 minutes - both `BiatecMCP` and `BiatecOIDC`
+  avoid Redis for this, since it's cheap-to-rediscover discovery data, not session/security state).
+  `IPublicAlgodDataSource`/`PublicAlgodDataSource` is a deliberate seam (the interface is what
+  `AlgorandChainRegistry`'s tests mock; `PublicAlgodDataSource`, the real HTTP-calling implementation, is
+  left to manual/E2E verification, same precedent as this repo's other leaf HTTP providers). In `BiatecMCP`,
+  every tool's `genesisId` parameter resolves through `GetAlgodSettings` - a locally-configured
+  `Algod:Networks` entry always wins first (operator control over a specific node/explorer link), falling
+  back to this registry for anything else - so a chain doesn't need an `appsettings.json` entry to become
+  usable, only public listing + liveness. In `BiatecOIDC`, the same registry backs a public,
+  `[AllowAnonymous]` `GET /chains` (`ChainsController`) so relying parties other than `BiatecMCP` can query
+  which chains this deployment currently considers usable; the response deliberately omits each node's own
+  auth token/header (`AlgodApiToken`/`AlgodApiTokenHeader`), unlike `BiatecMCP`'s internal copy which needs
+  them to actually call the node.
 - **Aramid bridge integration**: `createBridgeTransaction` bridges assets off Algorand via
   [Aramid Finance](https://aramid.finance), per its published AI-agent integration guide
   (`https://raw.githubusercontent.com/AramidFinance/docs/refs/heads/main/docs/developers/ai-agent-integration.md`).
@@ -464,10 +503,21 @@ setup stage needs.
   under-charging), destination-chain decimals conversion (always rounded down, per Aramid's explicit warning
   against over-crediting the destination), and the `aramid-transfer/v1:j<json>` note format/character-set
   validation. The built transaction sends to `Chains[sourceChainId].Address` (Aramid's bridge deposit address -
-  never the recipient directly) for `sourceAmount + feeAmount`. **Does not verify destination-chain bridge
-  liquidity** - Aramid's guide calls this essential, but checking it for arbitrary EVM/NEAR/AVM destination
-  chains is out of scope here; every response carries a `Warning` about this instead of silently skipping it.
-  Only bridging from Algorand mainnet (`genesisId: mainnet-v1.0`, Aramid chain id `416001`) is supported.
+  never the recipient directly) for `sourceAmount + feeAmount`. Before returning, `CheckDestinationLiquidityAsync`
+  verifies the bridge deposit address actually holds enough of the destination token to fulfill the
+  transfer - possible only for an Algorand-family destination chain (`destinationChain.Type == "algo"`) with
+  a currently-live public algod node per `IAlgorandChainRegistry` (see "Multi-chain support" below); it
+  resolves that node via `TryGetChainByAramidIdAsync` and calls `AccountInformationAsync` against the bridge
+  deposit address, comparing its ALGO balance/ASA holding to the computed `destinationAmount`. Insufficient
+  balance **fails closed** - `ErrorType = "InsufficientDestinationLiquidity"`, no transaction returned - since
+  building something that would strand a transfer is worse than refusing outright. For an EVM/NEAR
+  destination, or an Algorand-family chain with no currently-live node, this can't be checked at all and the
+  response instead carries `LiquidityVerified = false` plus an explanatory `Warning`, same "confirm
+  independently" guidance as before. `getBridgeConfiguration` is a companion, no-auth, Algod-independent tool
+  that returns every chain/route Aramid's config exposes (raw fee-alternative generations, not resolved to
+  "the current one" - that still needs a live round, done by `createBridgeTransaction` itself) so an agent can
+  sanity-check `destinationNetwork`/`assetId`/`destinationToken` before calling `createBridgeTransaction` at
+  all. Only bridging from Algorand mainnet (`genesisId: mainnet-v1.0`, Aramid chain id `416001`) is supported.
 - **JWT issuer / OIDC provider**: `JwtIssuerService` + `JwtIssuerController` (`BiatecOIDC`) implement OIDC
   discovery (`/.well-known/openid-configuration`, `/.well-known/jwks.json`), `/authorize`, `/token`, `/userinfo`,
   `/introspect`, `/verify`. Supports both standard `response_type=code` and a legacy `returnUrl` direct

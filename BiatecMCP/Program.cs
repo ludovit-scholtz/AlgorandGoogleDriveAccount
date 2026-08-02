@@ -147,6 +147,14 @@ namespace BiatecMCP
             // AddHttpClient registration is needed here.
             builder.Services.AddScoped<IAramidBridgeConfigProvider, AramidBridgeConfigProvider>();
 
+            // Dynamic multi-chain support: every chain published at https://scholtz.github.io/AlgorandPublicData
+            // that also currently has a live, genesis-hash-matching public algod node - see
+            // AlgorandChainRegistry's remarks. BiatecMCP has no Redis by design, so the registry's ~10-minute
+            // cache is in-process (IMemoryCache) rather than distributed.
+            builder.Services.AddMemoryCache();
+            builder.Services.AddScoped<IPublicAlgodDataSource, PublicAlgodDataSource>();
+            builder.Services.AddScoped<IAlgorandChainRegistry, AlgorandChainRegistry>();
+
             // Configure MCP Server
             builder.Services.AddMcpServer()
                 .WithHttpTransport(options =>

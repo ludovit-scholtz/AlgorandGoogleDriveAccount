@@ -97,6 +97,25 @@ for a given client (don't mix the two for the same integration).
   - Explicit, user-triggered copy of the encrypted vault to a second cloud provider (see "Cross-cloud vault
     backup" below). `start`/`complete` require the `sign` scope; `authorize`/`callback` are a browser round
     trip, not API calls.
+- `GET /chains`
+  - Public, unauthenticated - no bearer token required. Lists every Algorand-family chain this deployment
+    currently considers usable: every chain published in the public
+    [genesis list](https://scholtz.github.io/AlgorandPublicData/genesis/genesis-list.json) that also has at
+    least one currently-live public algod node reporting the matching genesis hash right now (checked live
+    against each chain's own `public-algod-providers.json`). See "Multi-chain support" below.
+
+## Multi-chain support
+
+`GET /chains` returns `{ "chains": [ { "genesisId", "name", "genesisHash", "algodApiAddress" }, ... ] }` -
+one entry per currently-supported chain, sorted by nothing in particular (treat it as a set). Deliberately
+does **not** include a node's own auth token/header - that's operational detail an external relying party
+has no use for; if you need to call that chain's node yourself, use your own algod infrastructure or one of
+the entries from that chain's own `public-algod-providers.json`.
+
+A chain only appears here if it's both listed in the public registry *and* currently reachable - this is a
+liveness snapshot (cached ~10 minutes server-side), not a static allowlist. Use it to validate a `genesisId`
+before passing it to `POST /wallet/sign` or any other genesisId-accepting call, instead of hardcoding a list
+that can silently go stale if a chain's public infrastructure changes.
 
 ## Important Claims in Tokens
 

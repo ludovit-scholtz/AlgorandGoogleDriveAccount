@@ -31,6 +31,18 @@ See the repo root [CLAUDE.md](../CLAUDE.md)'s "MCP server" architecture note for
 and [BiatecOIDC/OIDC_INTEGRATION_GUIDE.md](../BiatecOIDC/OIDC_INTEGRATION_GUIDE.md) for the Dynamic Client
 Registration / resource-indicator contract in detail.
 
+## Multi-chain support
+
+Every tool's `genesisId` parameter isn't limited to a small hardcoded list — it accepts any Algorand-family
+chain published in [scholtz.github.io/AlgorandPublicData's genesis list](https://scholtz.github.io/AlgorandPublicData/genesis/genesis-list.json)
+that currently has at least one publicly reachable algod node reporting the matching genesis hash (checked
+live against each chain's [`public-algod-providers.json`](https://scholtz.github.io/AlgorandPublicData/algod/mainnet-v1.0/public-algod-providers.json),
+via that node's own `/v2/transactions/params`). A locally-configured `Algod:Networks` entry always takes
+precedence for a given `genesisId` (so an operator can still pin a specific node/explorer link); anything else
+falls back to this dynamically discovered, liveness-verified registry, cached in-process for ~10 minutes. The
+same registry backs `createBridgeTransaction`'s destination-liquidity check (below) and BiatecOIDC's public
+`GET /chains` endpoint.
+
 ## Available MCP tools
 
 Wallet operations are three separate, chainable steps — **build** an unsigned transaction, **sign** it, then
@@ -56,13 +68,22 @@ request is handled as three chained tool calls automatically.
   the best price. Only builds a real unsigned transaction for Biatec Router's own route today — if a competing
   aggregator quotes better, the comparison is still returned but no transaction is attached for that route yet
   (see the note below).
+- **`getBridgeConfiguration`** — fetches Aramid Finance's live bridge configuration (same on-chain + IPFS
+  discovery `createBridgeTransaction` uses) and returns every chain Aramid knows about plus every route out of
+  Algorand mainnet — amount bounds and fee schedule generations, token decimals — so an agent can confirm a
+  `destinationNetwork`/`assetId`/`destinationToken` combination is actually valid before calling
+  `createBridgeTransaction`, instead of guessing and getting a `RouteNotFound`/`AmountOutOfRange` error. No
+  authentication required.
 - **`createBridgeTransaction`** — builds an unsigned [Aramid Finance](https://aramid.finance) bridge transaction:
   a pay/axfer sent to Aramid's bridge deposit address (fetched live from Aramid's own on-chain + IPFS-hosted
   configuration — never hardcoded) with a note field encoding the destination chain/address/amounts per Aramid's
   `aramid-transfer/v1:j` format. Validates the route and Aramid's configured min/max amount bounds before
-  building. **Does not verify destination-chain bridge liquidity** — Aramid's own integration guide flags this
-  as essential to avoid a stranded transfer; the response always carries a `Warning` about this, and you should
-  confirm it independently (e.g. via Aramid's own tooling) before bridging anything but a small amount. Only
+  building. For an Algorand-family destination chain with a currently-live public algod node (see "Multi-chain
+  support" below), also verifies the bridge deposit address there actually holds enough of the destination token
+  — and refuses to build the transaction (`InsufficientDestinationLiquidity`) if not, rather than returning
+  something that would strand the transfer. For any other destination (EVM/NEAR chains, or an Algorand-family
+  chain with no currently-live node), the response's `LiquidityVerified`/`Warning` fields explain why it
+  couldn't be checked, and you should confirm independently before bridging anything but a small amount. Only
   bridging *from* Algorand mainnet is supported today.
 - **`createMultisigTransaction`** — builds an unsigned payment/ASA transfer proposal from a `(version, threshold,
   participantAddresses)` multisig account. Each participant independently signs the returned envelope with their
@@ -100,9 +121,12 @@ request is handled as three chained tool calls automatically.
   SEED3...ADDR"* → `createMultisigTransaction(version=1, threshold=2, participantAddresses=[...], ...)`, then
   each participant runs `signTransaction` on the returned envelope in their own session, and any one party runs
   `mergeMultisigTransactions` on the collected signed copies followed by `executeAlgorandTransaction`.
+- *"what bridge routes are available from Algorand mainnet"* → `getBridgeConfiguration()`, or
+  `getBridgeConfiguration(destinationChainId=416101)` to filter to a specific destination (e.g. Voi).
 - *"bridge 1 algo to my address VOI...ADDR on Voi"* → `createBridgeTransaction(assetId=0, amount=1000000,
   destinationNetwork=416101, destinationAddress="VOI...ADDR", destinationToken="<Voi ALGO token id>")` → review
-  the returned fee/amount breakdown and liquidity warning → `signTransaction` → `executeAlgorandTransaction`.
+  the returned fee/amount breakdown and `LiquidityVerified`/`Warning` fields → `signTransaction` →
+  `executeAlgorandTransaction`.
 
 Spending limits (`PUT /wallet/limits` on BiatecOIDC) can be configured globally (apply to every address) and/or
 per address (`?primaryAddress=...&slot=...`) — a transaction is blocked if it would exceed either, enforced by
