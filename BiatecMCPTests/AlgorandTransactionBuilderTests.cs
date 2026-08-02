@@ -97,6 +97,48 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public void BuildAssetCreate_EncodesAssetParams()
+        {
+            var sender = new Address(SenderAddress);
+
+            var bytes = AlgorandTransactionBuilder.BuildAssetCreate(
+                sender,
+                total: 1_000_000,
+                decimals: 6,
+                unitName: "TEST",
+                assetName: "Test Asset",
+                url: "https://example.com",
+                defaultFrozen: false,
+                SuggestedParams());
+
+            var decoded = Encoder.DecodeFromMsgPack<AssetCreateTransaction>(bytes);
+            Assert.That(decoded.Sender.EncodeAsString(), Is.EqualTo(SenderAddress));
+            Assert.That(decoded.AssetParams.Total, Is.EqualTo(1_000_000UL));
+            Assert.That(decoded.AssetParams.Decimals, Is.EqualTo(6UL));
+            Assert.That(decoded.AssetParams.UnitName, Is.EqualTo("TEST"));
+            Assert.That(decoded.AssetParams.Name, Is.EqualTo("Test Asset"));
+            Assert.That(decoded.AssetParams.Url, Is.EqualTo("https://example.com"));
+            // Canonical msgpack encoding omits default-valued (falsy) fields, so a `false` DefaultFrozen
+            // round-trips as the property being absent (null) rather than an explicit `false`.
+            Assert.That(decoded.AssetParams.DefaultFrozen, Is.Not.True);
+        }
+
+        [Test]
+        public void BuildAssetCreate_ManagerReserveFreezeClawback_DefaultToSender_WhenNotGiven()
+        {
+            var sender = new Address(SenderAddress);
+
+            var bytes = AlgorandTransactionBuilder.BuildAssetCreate(
+                sender, total: 1, decimals: 0, unitName: "T", assetName: "T", url: null, defaultFrozen: false, SuggestedParams());
+
+            var decoded = Encoder.DecodeFromMsgPack<AssetCreateTransaction>(bytes);
+            Assert.That(decoded.AssetParams.Manager.EncodeAsString(), Is.EqualTo(SenderAddress));
+            Assert.That(decoded.AssetParams.Reserve.EncodeAsString(), Is.EqualTo(SenderAddress));
+            Assert.That(decoded.AssetParams.Freeze.EncodeAsString(), Is.EqualTo(SenderAddress));
+            Assert.That(decoded.AssetParams.Clawback.EncodeAsString(), Is.EqualTo(SenderAddress));
+        }
+
+        [Test]
         public void BuildAssetTransfer_EmptyNote_ProducesNoNoteBytes()
         {
             var sender = new Address(SenderAddress);

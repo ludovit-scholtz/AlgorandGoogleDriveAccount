@@ -33,6 +33,12 @@ Registration / resource-indicator contract in detail.
 
 ## Available MCP tools
 
+Wallet operations are three separate, chainable steps — **build** an unsigned transaction, **sign** it, then
+**execute** (broadcast) it — rather than one monolithic call. Each `create*` tool only builds and never touches
+BiatecOIDC or the network; only `signTransaction` and `executeAlgorandTransaction` require the `sign` scope.
+Every tool's own description tells the connected AI assistant which tool to call next, so a plain "pay X"
+request is handled as three chained tool calls automatically.
+
 - **`getAlgorandAddress`** — returns an Algorand address for the signed-in account. With no arguments, returns the
   default identity (from the bearer token's own `algorand_address` claim, falling back to the primary seed from
   `GET /wallet/seeds`). Pass `slot` (ARC-76 derivation index — `1` for the "second address", `2` for the "third",
@@ -40,31 +46,59 @@ Registration / resource-indicator contract in detail.
   different address instead.
 - **`listAlgorandAddresses`** — lists every seed's identifying address in the account, and which one is primary.
   Use an address from here as `primaryAddress` on the other tools.
-- **`transferAsset`** — signs and broadcasts a native ALGO payment or ASA transfer. An empty `receiverAccount`
-  performs a self-transfer. Requires the `sign` scope; BiatecOIDC enforces the caller's configured spending limit
-  (global and/or per-address, see below). Signs with the default identity unless `primaryAddress`/`slot` are given.
-- **`optIn`** — opts the account in to an ASA (a zero-amount self-transfer, the standard Algorand pattern).
-  Requires the `sign` scope. Same `primaryAddress`/`slot` parameters as `transferAsset`.
+- **`createPaymentTransaction`** — builds an unsigned native-ALGO payment or ASA transfer. An empty
+  `receiverAccount` builds a self-transfer. Does not sign or broadcast.
+- **`createOptInTransaction`** — builds an unsigned ASA opt-in (a zero-amount self-transfer). Does not sign or
+  broadcast.
+- **`createAssetCreateTransaction`** — builds an unsigned ASA (Algorand Standard Asset) creation transaction.
+  `manager`/`reserve`/`freeze`/`clawback` each default to the creator's own address if not given.
+- **`createSwapTransaction`** — quotes a swap across Biatec Router, Folks Router, and Haystack Router and reports
+  the best price. Only builds a real unsigned transaction for Biatec Router's own route today — if a competing
+  aggregator quotes better, the comparison is still returned but no transaction is attached for that route yet
+  (see the note below).
+- **`createBridgeTransaction`** — **architecture placeholder** for a future Aramid Finance bridge integration (a
+  plain payment/ASA transfer with a specific note field indicating the destination chain/address). Always
+  returns a clear "not implemented" error today — do not rely on it to move funds.
+- **`createMultisigTransaction`** — builds an unsigned payment/ASA transfer proposal from a `(version, threshold,
+  participantAddresses)` multisig account. Each participant independently signs the returned envelope with their
+  own `signTransaction` call (in their own wallet/MCP session — not necessarily this one), then the signed copies
+  are combined with `mergeMultisigTransactions`.
+- **`signTransaction`** — signs one or more unsigned transactions (from any `create*` tool, or a
+  `createMultisigTransaction` envelope) via BiatecOIDC's `POST /wallet/sign`. Requires the `sign` scope; signs
+  with the default identity unless `primaryAddress`/`slot` are given.
+- **`mergeMultisigTransactions`** — combines independently-signed copies of the same multisig envelope (collected
+  from each cosigner's own `signTransaction` call) into one transaction, once at least `threshold` signatures are
+  present.
 - **`executeAlgorandTransaction`** — broadcasts one or more already-signed transactions (base64 msgpack) to the
-  network. `transferAsset`/`optIn` call this internally after signing; it's also available directly for a
-  sign-then-execute flow. Requires the `sign` scope.
+  network. Requires the `sign` scope.
 
 ### Example prompts
 
 - *"what is my algorand address"* → `getAlgorandAddress()`
 - *"what is my second address"* → `getAlgorandAddress(slot=1)`
 - *"list all my algorand addresses"* → `listAlgorandAddresses()`
-- *"pay to address ABCD...WXYZ 1 algo with note biatec"* → `transferAsset(receiverAccount="ABCD...WXYZ",
-  amount=1000000, note="biatec")` — signs with the default identity (primary seed, slot 0).
-- *"pay to address ABCD...WXYZ 1 algo with note biatec with my arc76 address SEED2...ADDR and slot 10"* →
-  `transferAsset(receiverAccount="ABCD...WXYZ", amount=1000000, note="biatec", primaryAddress="SEED2...ADDR",
-  slot=10)` — signs with that specific seed/slot instead.
-- *"do self transfer with 1 algo amount and note field biatecmcp"* → `transferAsset(amount=1000000,
-  note="biatecmcp")` (empty `receiverAccount` self-transfers).
-- *"opt in to asset 31566704"* → `optIn(assetId=31566704)`
+- *"pay to address ABCD...WXYZ 1 algo with note biatec"* → `createPaymentTransaction(receiverAccount="ABCD...WXYZ",
+  amount=1000000, note="biatec")` → `signTransaction(...)` → `executeAlgorandTransaction(...)` — three chained
+  calls, signing with the default identity (primary seed, slot 0).
+- *"pay to address ABCD...WXYZ 1 algo with note biatec with my arc76 address SEED2...ADDR and slot 10"* → same
+  chain, with `primaryAddress="SEED2...ADDR", slot=10` passed to both `createPaymentTransaction` and
+  `signTransaction`.
+- *"do self transfer with 1 algo amount and note field biatecmcp"* → `createPaymentTransaction(amount=1000000,
+  note="biatecmcp")` (empty `receiverAccount` self-transfers) → `signTransaction` → `executeAlgorandTransaction`.
+- *"opt in to asset 31566704"* → `createOptInTransaction(assetId=31566704)` → `signTransaction` →
+  `executeAlgorandTransaction`.
+- *"swap 1 algo for USDC"* → `createSwapTransaction(fromAssetId=0, toAssetId=31566704, amount=1000000)` — quotes
+  all three aggregators; if Biatec Router wins, chain `signTransaction` → `executeAlgorandTransaction` on the
+  returned transaction(s), otherwise the response explains which aggregator quoted better and that its
+  transaction can't be built yet.
+- *"propose a 2-of-3 multisig payment of 5 algo to address ABCD...WXYZ between my address, SEED2...ADDR, and
+  SEED3...ADDR"* → `createMultisigTransaction(version=1, threshold=2, participantAddresses=[...], ...)`, then
+  each participant runs `signTransaction` on the returned envelope in their own session, and any one party runs
+  `mergeMultisigTransactions` on the collected signed copies followed by `executeAlgorandTransaction`.
 
 Spending limits (`PUT /wallet/limits` on BiatecOIDC) can be configured globally (apply to every address) and/or
-per address (`?primaryAddress=...&slot=...`) — a transaction is blocked if it would exceed either. See
+per address (`?primaryAddress=...&slot=...`) — a transaction is blocked if it would exceed either, enforced by
+`signTransaction`'s underlying `POST /wallet/sign` call. See
 [BiatecOIDC/OIDC_INTEGRATION_GUIDE.md](../BiatecOIDC/OIDC_INTEGRATION_GUIDE.md) for the wallet API's full
 multi-address/spending-limit contract.
 

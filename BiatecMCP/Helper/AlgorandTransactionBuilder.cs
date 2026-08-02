@@ -42,5 +42,46 @@ namespace BiatecMCP.Helper
         /// </summary>
         public static byte[] BuildOptIn(Address sender, ulong assetId, string? note, TransactionParametersResponse suggestedParams) =>
             BuildAssetTransfer(sender, sender, assetId, amount: 0, note, suggestedParams);
+
+        /// <summary>
+        /// Builds an unsigned ASA creation transaction, canonical-msgpack-encoded. <paramref name="manager"/>/
+        /// <paramref name="reserve"/>/<paramref name="freeze"/>/<paramref name="clawback"/> each default to
+        /// <paramref name="sender"/> when not given - the common "creator keeps every role" case; pass an
+        /// empty/zero address explicitly to permanently renounce a role instead.
+        /// </summary>
+        public static byte[] BuildAssetCreate(
+            Address sender,
+            ulong total,
+            ulong decimals,
+            string? unitName,
+            string? assetName,
+            string? url,
+            bool defaultFrozen,
+            TransactionParametersResponse suggestedParams,
+            Address? manager = null,
+            Address? reserve = null,
+            Address? freeze = null,
+            Address? clawback = null)
+        {
+            var transaction = new AssetCreateTransaction
+            {
+                Sender = sender,
+                AssetParams = new AssetParams
+                {
+                    Total = total,
+                    Decimals = decimals,
+                    UnitName = unitName,
+                    Name = assetName,
+                    Url = url,
+                    DefaultFrozen = defaultFrozen,
+                    Manager = manager ?? sender,
+                    Reserve = reserve ?? sender,
+                    Freeze = freeze ?? sender,
+                    Clawback = clawback ?? sender
+                }
+            };
+            transaction.FillInParams(suggestedParams);
+            return Algorand.Utils.Encoder.EncodeToMsgPackOrdered(transaction);
+        }
     }
 }

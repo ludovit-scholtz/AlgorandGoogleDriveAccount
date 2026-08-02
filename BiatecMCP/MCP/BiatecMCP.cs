@@ -10,32 +10,42 @@ using ModelContextProtocol.Server;
 namespace BiatecMCP.MCP
 {
     /// <summary>
-    /// MCP tools exposed to AI assistants: read the caller's Algorand address and sign/broadcast transfers.
-    /// This class never touches key material - every signing operation is a bearer-token-forwarding HTTP
-    /// call to BiatecOIDC's <c>POST /wallet/sign</c>, which does the actual signing (and enforces the
-    /// caller's spending limit and <c>rekey</c>-claim requirement) on the caller's behalf. See
-    /// <c>CLAUDE.md</c>'s BiatecMCP architecture notes for the full request flow.
+    /// MCP tools exposed to AI assistants: read the caller's Algorand address(es), build unsigned
+    /// transaction proposals, sign them via BiatecOIDC, and broadcast them - as three separate, chainable
+    /// steps (<c>create*</c> → <c>signTransaction</c> → <c>executeAlgorandTransaction</c>) rather than one
+    /// monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
+    /// combined as part of a multisig proposal before it's ever broadcast. This class never touches key
+    /// material - every signing operation is a bearer-token-forwarding HTTP call to BiatecOIDC's
+    /// <c>POST /wallet/sign</c>, which does the actual signing (and enforces the caller's spending limit and
+    /// <c>rekey</c>-claim requirement) on the caller's behalf. See <c>CLAUDE.md</c>'s BiatecMCP architecture
+    /// notes for the full request flow.
     /// </summary>
     [McpServerToolType]
     public class BiatecMCP
     {
-        /// <summary>Wallet-scope claim name (see BiatecOIDC's <c>JwtIssuerService.WalletApiScopes</c>) required to sign a transaction group.</summary>
+        /// <summary>Wallet-scope claim name (see BiatecOIDC's <c>JwtIssuerService.WalletApiScopes</c>) required to sign or broadcast a transaction.</summary>
         private const string SignClaimType = "sign";
+
+        private const string NoAlgorandAddressMessage =
+            "This account has no Algorand address yet. Complete storage-provider consent by signing in through BiatecOIDC first.";
 
         private readonly IBiatecWalletClient _walletClient;
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly IOptionsMonitor<Model.AlgodConfiguration> _algodConfig;
+        private readonly DexSwapAggregatorService _dexSwapAggregator;
         private readonly ILogger<BiatecMCP> _logger;
 
         public BiatecMCP(
             IBiatecWalletClient walletClient,
             IHttpContextAccessor httpContextAccessor,
             IOptionsMonitor<Model.AlgodConfiguration> algodConfig,
+            DexSwapAggregatorService dexSwapAggregator,
             ILogger<BiatecMCP> logger)
         {
             _walletClient = walletClient;
             _httpContextAccessor = httpContextAccessor;
             _algodConfig = algodConfig;
+            _dexSwapAggregator = dexSwapAggregator;
             _logger = logger;
         }
 
@@ -83,7 +93,7 @@ namespace BiatecMCP.MCP
             public string Error { get; set; } = string.Empty;
         }
 
-        [McpServerTool(Name = "listAlgorandAddresses"), Description("Lists every seed's identifying address in the signed-in Biatec account, and which one is primary. Use an address from here as transferAsset/optIn/getAlgorandAddress's primaryAddress parameter.")]
+        [McpServerTool(Name = "listAlgorandAddresses"), Description("Lists every seed's identifying address in the signed-in Biatec account, and which one is primary. Use an address from here as any create*/getAlgorandAddress tool's primaryAddress parameter.")]
         public async Task<ListAlgorandAddressesResponse> ListAlgorandAddresses()
         {
             try
@@ -106,7 +116,415 @@ namespace BiatecMCP.MCP
             }
         }
 
-        public class TransferAssetResponse
+        public class CreateTransactionResponse
+        {
+            public string UnsignedTransaction { get; set; } = string.Empty;
+            public string Sender { get; set; } = string.Empty;
+            public string? Receiver { get; set; }
+            public ulong AssetId { get; set; }
+            public ulong Amount { get; set; }
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "createPaymentTransaction"),
+         Description("Builds an unsigned native-ALGO payment or ASA transfer from the signed-in Biatec account - does NOT sign or broadcast it. Pass the result's UnsignedTransaction to signTransaction next, then the signed result to executeAlgorandTransaction to broadcast it. An empty receiver builds a self-transfer.")]
+        public async Task<CreateTransactionResponse> CreatePaymentTransaction(
+            [Description("Receiver address. If empty, builds a self-transfer.")] string receiverAccount = "",
+            [Description("ASA id to transfer. If 0, builds a native ALGO payment instead.")] ulong assetId = 0,
+            [Description("Amount to transfer, in the asset's base units (microAlgos for native ALGO).")] ulong amount = 0,
+            [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
+            [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0",
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
+        {
+            try
+            {
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                if (string.IsNullOrWhiteSpace(senderAddress))
+                {
+                    return new CreateTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
+                }
+
+                var sender = new Address(senderAddress);
+                var receiver = string.IsNullOrWhiteSpace(receiverAccount) ? sender : new Address(receiverAccount);
+                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+
+                var unsignedTransaction = assetId == 0
+                    ? AlgorandTransactionBuilder.BuildPayment(sender, receiver, amount, note, suggestedParams)
+                    : AlgorandTransactionBuilder.BuildAssetTransfer(sender, receiver, assetId, amount, note, suggestedParams);
+
+                return new CreateTransactionResponse
+                {
+                    UnsignedTransaction = Convert.ToBase64String(unsignedTransaction),
+                    Sender = senderAddress,
+                    Receiver = receiver.EncodeAsString(),
+                    AssetId = assetId,
+                    Amount = amount
+                };
+            }
+            catch (WalletApiException ex)
+            {
+                return new CreateTransactionResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new CreateTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (Exception ex)
+            {
+                return new CreateTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreatePaymentTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        [McpServerTool(Name = "createOptInTransaction"),
+         Description("Builds an unsigned ASA opt-in (a zero-amount self-transfer, the standard Algorand pattern) for the signed-in Biatec account - does NOT sign or broadcast it. Pass the result's UnsignedTransaction to signTransaction next, then executeAlgorandTransaction to broadcast it.")]
+        public async Task<CreateTransactionResponse> CreateOptInTransaction(
+            [Description("ASA id to opt in to. Must be a positive number for an asset that exists.")] ulong assetId = 0,
+            [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
+            [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0",
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
+        {
+            if (assetId == 0)
+            {
+                return new CreateTransactionResponse { Error = "Asset id must be a positive number for an asset that exists.", ErrorType = "InvalidRequest" };
+            }
+
+            try
+            {
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                if (string.IsNullOrWhiteSpace(senderAddress))
+                {
+                    return new CreateTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
+                }
+
+                var sender = new Address(senderAddress);
+                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var unsignedTransaction = AlgorandTransactionBuilder.BuildOptIn(sender, assetId, note, suggestedParams);
+
+                return new CreateTransactionResponse
+                {
+                    UnsignedTransaction = Convert.ToBase64String(unsignedTransaction),
+                    Sender = senderAddress,
+                    Receiver = senderAddress,
+                    AssetId = assetId,
+                    Amount = 0
+                };
+            }
+            catch (WalletApiException ex)
+            {
+                return new CreateTransactionResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new CreateTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (Exception ex)
+            {
+                return new CreateTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateOptInTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        [McpServerTool(Name = "createAssetCreateTransaction"),
+         Description("Builds an unsigned Algorand Standard Asset (ASA) creation transaction from the signed-in Biatec account - does NOT sign or broadcast it. Pass the result's UnsignedTransaction to signTransaction next, then executeAlgorandTransaction to broadcast it. manager/reserve/freeze/clawback each default to the creator's own address if not given.")]
+        public async Task<CreateTransactionResponse> CreateAssetCreateTransaction(
+            [Description("Total units of the asset that will ever exist, in its own base units.")] ulong total,
+            [Description("Number of decimal places the asset's base unit is divided into.")] ulong decimals,
+            [Description("Short ticker/unit name (max 8 characters).")] string unitName,
+            [Description("Full asset name (max 32 characters).")] string assetName,
+            [Description("Optional URL with more information about the asset.")] string? url = null,
+            [Description("Whether newly-opted-in holders start frozen (requires the freeze address to unfreeze them).")] bool defaultFrozen = false,
+            [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0",
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to create the asset from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("ARC-76 derivation slot to create the asset from. Defaults to 0 (matches the signed-in identity).")] int slot = 0,
+            [Description("Manager address. Defaults to the creator's own address.")] string? manager = null,
+            [Description("Reserve address. Defaults to the creator's own address.")] string? reserve = null,
+            [Description("Freeze address. Defaults to the creator's own address.")] string? freeze = null,
+            [Description("Clawback address. Defaults to the creator's own address.")] string? clawback = null)
+        {
+            try
+            {
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                if (string.IsNullOrWhiteSpace(senderAddress))
+                {
+                    return new CreateTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
+                }
+
+                var sender = new Address(senderAddress);
+                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var unsignedTransaction = AlgorandTransactionBuilder.BuildAssetCreate(
+                    sender, total, decimals, unitName, assetName, url, defaultFrozen, suggestedParams,
+                    manager: string.IsNullOrWhiteSpace(manager) ? null : new Address(manager),
+                    reserve: string.IsNullOrWhiteSpace(reserve) ? null : new Address(reserve),
+                    freeze: string.IsNullOrWhiteSpace(freeze) ? null : new Address(freeze),
+                    clawback: string.IsNullOrWhiteSpace(clawback) ? null : new Address(clawback));
+
+                return new CreateTransactionResponse
+                {
+                    UnsignedTransaction = Convert.ToBase64String(unsignedTransaction),
+                    Sender = senderAddress
+                };
+            }
+            catch (WalletApiException ex)
+            {
+                return new CreateTransactionResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new CreateTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (Exception ex)
+            {
+                return new CreateTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateAssetCreateTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        public class DexQuoteResponse
+        {
+            public string ProviderName { get; set; } = string.Empty;
+            public long OutputAmount { get; set; }
+        }
+
+        public class CreateSwapTransactionResponse
+        {
+            public List<DexQuoteResponse> Quotes { get; set; } = new();
+            public string? BestProvider { get; set; }
+            public List<string> UnsignedTransactions { get; set; } = new();
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "createSwapTransaction"),
+         Description("Quotes a swap across Biatec Router, Folks Router, and Haystack Router and reports the best price. Only builds a real unsigned transaction for Biatec Router's own route today - if a competing aggregator quotes better, the comparison is still returned but no transaction is attached for it yet (transaction building for the others isn't wired up). Pass any returned UnsignedTransactions to signTransaction next, then executeAlgorandTransaction to broadcast.")]
+        public async Task<CreateSwapTransactionResponse> CreateSwapTransaction(
+            [Description("Asset id to swap from. 0 = native ALGO.")] long fromAssetId,
+            [Description("Asset id to swap to. 0 = native ALGO.")] long toAssetId,
+            [Description("Amount to swap, in fromAssetId's base units.")] long amount,
+            [Description("Minimum acceptable output amount, in toAssetId's base units. 0 = no minimum.")] long receiveMinimum = 0,
+            [Description("Blockchain genesis id.")] string genesisId = "mainnet-v1.0",
+            [Description("A specific seed's identifying address to swap from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("ARC-76 derivation slot to swap from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
+        {
+            var response = new CreateSwapTransactionResponse();
+
+            try
+            {
+                var quotes = await _dexSwapAggregator.GetAllQuotesAsync(fromAssetId, toAssetId, amount);
+                response.Quotes = quotes.Select(q => new DexQuoteResponse { ProviderName = q.ProviderName, OutputAmount = q.OutputAmount }).ToList();
+
+                var best = DexSwapAggregatorService.PickBest(quotes);
+                if (best == null)
+                {
+                    response.Error = "No aggregator returned a quote for this pair right now.";
+                    response.ErrorType = "NoQuoteAvailable";
+                    return response;
+                }
+
+                response.BestProvider = best.ProviderName;
+
+                if (!string.Equals(best.ProviderName, BiatecRouterProviderName, StringComparison.Ordinal))
+                {
+                    response.Error = $"{best.ProviderName} quoted the best price, but building a transaction for it isn't wired up yet in this MCP server - only {BiatecRouterProviderName}'s route can be built into a transaction today. You can still execute {BiatecRouterProviderName}'s route, or swap manually elsewhere for the better price.";
+                    response.ErrorType = "TransactionBuildingNotAvailable";
+                    return response;
+                }
+
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                if (string.IsNullOrWhiteSpace(senderAddress))
+                {
+                    response.Error = NoAlgorandAddressMessage;
+                    response.ErrorType = "NoAlgorandAddress";
+                    return response;
+                }
+
+                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var biatecRouterProvider = (BiatecRouterQuoteProvider)_dexSwapAggregator.Providers.Single(p => p.ProviderName == BiatecRouterProviderName);
+                var routerParams = BiatecRouterConnector.Extensions.ToRouterParams(suggestedParams);
+                var unsignedTransactions = await biatecRouterProvider.BuildRouteTransactionsAsync(
+                    senderAddress, fromAssetId, toAssetId, amount, receiveMinimum, routerParams);
+
+                response.UnsignedTransactions = unsignedTransactions.ToList();
+                return response;
+            }
+            catch (WalletApiException ex)
+            {
+                response.Error = ex.Message;
+                response.ErrorType = ex.ErrorCode;
+                return response;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                response.Error = ex.Message;
+                response.ErrorType = "Unauthorized";
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.Error = SanitizeForToolResponse(ex, nameof(CreateSwapTransaction));
+                response.ErrorType = ex.GetType().ToString();
+                return response;
+            }
+        }
+
+        public class CreateBridgeTransactionResponse
+        {
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "createBridgeTransaction"),
+         Description("PLACEHOLDER for a future Aramid Finance bridge integration (a plain payment/ASA transfer with a specific note field indicating the destination chain/address) - not implemented yet. Always returns a clear error; do not rely on this tool to actually bridge funds.")]
+        public Task<CreateBridgeTransactionResponse> CreateBridgeTransaction(
+            [Description("Asset id to bridge. 0 = native ALGO.")] ulong assetId,
+            [Description("Amount to bridge, in the asset's base units.")] ulong amount,
+            [Description("Destination chain identifier (e.g. an EVM chain id or name).")] string destinationChain,
+            [Description("Destination address on the target chain.")] string destinationAddress,
+            [Description("A specific seed's identifying address to bridge from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("ARC-76 derivation slot to bridge from. Defaults to 0.")] int slot = 0)
+        {
+            return Task.FromResult(new CreateBridgeTransactionResponse
+            {
+                Error = "Aramid Finance bridge integration is not implemented yet. This tool is a placeholder for the intended architecture (a plain payment/asset-transfer with a bridge-specific note field) - do not use it to move funds.",
+                ErrorType = "NotImplemented"
+            });
+        }
+
+        public class CreateMultisigTransactionResponse
+        {
+            public string UnsignedTransactionEnvelope { get; set; } = string.Empty;
+            public string MultisigAddress { get; set; } = string.Empty;
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "createMultisigTransaction"),
+         Description("Builds an unsigned multisig payment/ASA transfer proposal from a (version, threshold, participantAddresses) multisig account - does NOT sign it. Each participant independently signs the returned UnsignedTransactionEnvelope with their own signTransaction call (in their own wallet/MCP session, not necessarily this one), then the signed copies are combined with mergeMultisigTransactions before executeAlgorandTransaction broadcasts the result.")]
+        public async Task<CreateMultisigTransactionResponse> CreateMultisigTransaction(
+            [Description("Multisig version - always 1 for every multisig account created on Algorand today.")] int version,
+            [Description("How many of participantAddresses must sign before the transaction can be broadcast.")] int threshold,
+            [Description("The multisig account's participants, identified by their own normal Algorand addresses.")] List<string> participantAddresses,
+            [Description("Receiver address. If empty, builds a self-transfer.")] string receiverAccount = "",
+            [Description("ASA id to transfer. If 0, builds a native ALGO payment instead.")] ulong assetId = 0,
+            [Description("Amount to transfer, in the asset's base units.")] ulong amount = 0,
+            [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
+            [Description("Blockchain genesis id.")] string genesisId = "mainnet-v1.0")
+        {
+            if (participantAddresses == null || participantAddresses.Count == 0)
+            {
+                return new CreateMultisigTransactionResponse { Error = "At least one participant address is required.", ErrorType = "InvalidRequest" };
+            }
+
+            if (threshold < 1 || threshold > participantAddresses.Count)
+            {
+                return new CreateMultisigTransactionResponse { Error = "threshold must be between 1 and the number of participant addresses.", ErrorType = "InvalidRequest" };
+            }
+
+            try
+            {
+                var multisigAddress = MultisigTransactionBuilder.DeriveAddress(version, threshold, participantAddresses);
+                var sender = new Address(multisigAddress);
+                var receiver = string.IsNullOrWhiteSpace(receiverAccount) ? sender : new Address(receiverAccount);
+                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+
+                var inner = assetId == 0
+                    ? AlgorandTransactionBuilder.BuildPayment(sender, receiver, amount, note, suggestedParams)
+                    : AlgorandTransactionBuilder.BuildAssetTransfer(sender, receiver, assetId, amount, note, suggestedParams);
+
+                var envelope = MultisigTransactionBuilder.BuildEnvelope(inner, version, threshold, participantAddresses);
+
+                return new CreateMultisigTransactionResponse { UnsignedTransactionEnvelope = envelope, MultisigAddress = multisigAddress };
+            }
+            catch (Exception ex)
+            {
+                return new CreateMultisigTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateMultisigTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        public class SignTransactionResponse
+        {
+            public List<string> SignedTransactions { get; set; } = new();
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "signTransaction"),
+         Description("Signs one or more unsigned transactions (from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope) via BiatecOIDC. Requires the 'sign' scope. Pass the result to executeAlgorandTransaction to broadcast, or to mergeMultisigTransactions first if this was a multisig envelope.")]
+        public async Task<SignTransactionResponse> SignTransaction(
+            [Description("Unsigned transaction(s), base64-encoded msgpack.")] List<string> unsignedTransactions,
+            [Description("A specific seed's identifying address to sign with instead of the primary seed.")] string? primaryAddress = null,
+            [Description("ARC-76 derivation slot to sign with. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
+        {
+            var authError = RequireSignClaim();
+            if (authError != null)
+            {
+                return new SignTransactionResponse { Error = authError, ErrorType = "InsufficientScope" };
+            }
+
+            if (unsignedTransactions == null || unsignedTransactions.Count == 0)
+            {
+                return new SignTransactionResponse { Error = "At least one transaction is required.", ErrorType = "InvalidRequest" };
+            }
+
+            List<byte[]> rawTransactions;
+            try
+            {
+                rawTransactions = unsignedTransactions.Select(Convert.FromBase64String).ToList();
+            }
+            catch (FormatException)
+            {
+                return new SignTransactionResponse { Error = "Each transaction must be base64-encoded.", ErrorType = "InvalidRequest" };
+            }
+
+            try
+            {
+                var bearerToken = GetBearerToken();
+                var signResult = await _walletClient.SignAsync(bearerToken, rawTransactions, primaryAddress, slot);
+                return new SignTransactionResponse { SignedTransactions = signResult.SignedTransactions };
+            }
+            catch (WalletApiException ex)
+            {
+                return new SignTransactionResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new SignTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (Exception ex)
+            {
+                return new SignTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(SignTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        public class MergeMultisigTransactionsResponse
+        {
+            public string SignedTransaction { get; set; } = string.Empty;
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "mergeMultisigTransactions"),
+         Description("Combines independently-signed copies of the same createMultisigTransaction envelope (collected from each cosigner's own signTransaction call, possibly across different sessions) into one transaction. Once at least the configured threshold of signatures are present, pass the result to executeAlgorandTransaction to broadcast.")]
+        public Task<MergeMultisigTransactionsResponse> MergeMultisigTransactions(
+            [Description("Independently-signed copies of the same multisig envelope, base64-encoded msgpack.")] List<string> signedTransactions)
+        {
+            if (signedTransactions == null || signedTransactions.Count == 0)
+            {
+                return Task.FromResult(new MergeMultisigTransactionsResponse { Error = "At least one signed copy is required.", ErrorType = "InvalidRequest" });
+            }
+
+            try
+            {
+                var merged = MultisigTransactionBuilder.Merge(signedTransactions);
+                return Task.FromResult(new MergeMultisigTransactionsResponse { SignedTransaction = merged });
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult(new MergeMultisigTransactionsResponse { Error = SanitizeForToolResponse(ex, nameof(MergeMultisigTransactions)), ErrorType = ex.GetType().ToString() });
+            }
+        }
+
+        public class ExecuteTransactionResponse
         {
             public string TxId { get; set; } = string.Empty;
             public string Error { get; set; } = string.Empty;
@@ -114,145 +532,20 @@ namespace BiatecMCP.MCP
             public string? ExplorerLink { get; set; }
         }
 
-        [McpServerTool(Name = "transferAsset"), Description("Signs and broadcasts a native ALGO payment or ASA transfer from the signed-in Biatec account. An empty receiver performs a self-transfer. Signs with the primary seed's default address unless primaryAddress/slot are given.")]
-        public async Task<TransferAssetResponse> TransferAsset(
-            [Description("Receiver address. If empty, performs a self-transfer.")] string receiverAccount = "",
-            [Description("ASA id to transfer. If 0, performs a native ALGO payment instead.")] ulong assetId = 0,
-            [Description("Amount to transfer, in the asset's base units (microAlgos for native ALGO).")] ulong amount = 0,
-            [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
-            [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0",
-            [Description("A specific seed's identifying address (see listAlgorandAddresses) to sign with instead of the primary seed.")] string? primaryAddress = null,
-            [Description("ARC-76 derivation slot to sign with. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
-        {
-            var authError = RequireSignClaim();
-            if (authError != null)
-            {
-                return new TransferAssetResponse { Error = authError, ErrorType = "InsufficientScope" };
-            }
-
-            try
-            {
-                var bearerToken = GetBearerToken();
-                var senderAddress = await ResolveAlgorandAddressAsync(bearerToken, slot, primaryAddress);
-                if (string.IsNullOrWhiteSpace(senderAddress))
-                {
-                    return new TransferAssetResponse
-                    {
-                        Error = "This account has no Algorand address yet. Complete storage-provider consent by signing in through BiatecOIDC first.",
-                        ErrorType = "NoAlgorandAddress"
-                    };
-                }
-
-                var sender = new Address(senderAddress);
-                var receiver = string.IsNullOrWhiteSpace(receiverAccount) ? sender : new Address(receiverAccount);
-
-                var (apiAddress, apiToken, explorerBaseUrl) = GetAlgodSettings(genesisId);
-                using var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
-                var algodApi = new DefaultApi(httpClient);
-                var suggestedParams = await algodApi.TransactionParamsAsync();
-
-                var unsignedTransaction = assetId == 0
-                    ? AlgorandTransactionBuilder.BuildPayment(sender, receiver, amount, note, suggestedParams)
-                    : AlgorandTransactionBuilder.BuildAssetTransfer(sender, receiver, assetId, amount, note, suggestedParams);
-
-                var signResult = await _walletClient.SignAsync(bearerToken, new[] { unsignedTransaction }, primaryAddress, slot);
-                return await SubmitSignedTransactionsAsync(signResult.SignedTransactions, algodApi, explorerBaseUrl);
-            }
-            catch (WalletApiException ex)
-            {
-                return new TransferAssetResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
-            }
-            catch (Algorand.ApiException<Algorand.Algod.Model.ErrorResponse> ex)
-            {
-                // Legitimate, already user-facing Algorand node error text (e.g. "insufficient balance") -
-                // distinct from raw .NET exception text, same distinction BiatecOIDC's own error handling
-                // draws.
-                return new TransferAssetResponse { Error = ex.Result.Message, ErrorType = ex.GetType().ToString() };
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return new TransferAssetResponse { Error = ex.Message, ErrorType = "Unauthorized" };
-            }
-            catch (Exception ex)
-            {
-                return new TransferAssetResponse { Error = SanitizeForToolResponse(ex, nameof(TransferAsset)), ErrorType = ex.GetType().ToString() };
-            }
-        }
-
-        [McpServerTool(Name = "optIn"), Description("Opts the signed-in Biatec account in to an ASA (a zero-amount self-transfer, the standard Algorand opt-in pattern). Signs with the primary seed's default address unless primaryAddress/slot are given.")]
-        public async Task<TransferAssetResponse> OptIn(
-            [Description("ASA id to opt in to. Must be a positive number for an asset that exists.")] ulong assetId = 0,
-            [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
-            [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0",
-            [Description("A specific seed's identifying address (see listAlgorandAddresses) to sign with instead of the primary seed.")] string? primaryAddress = null,
-            [Description("ARC-76 derivation slot to sign with. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
-        {
-            var authError = RequireSignClaim();
-            if (authError != null)
-            {
-                return new TransferAssetResponse { Error = authError, ErrorType = "InsufficientScope" };
-            }
-
-            if (assetId == 0)
-            {
-                return new TransferAssetResponse { Error = "Asset id must be a positive number for an asset that exists.", ErrorType = "InvalidRequest" };
-            }
-
-            try
-            {
-                var bearerToken = GetBearerToken();
-                var senderAddress = await ResolveAlgorandAddressAsync(bearerToken, slot, primaryAddress);
-                if (string.IsNullOrWhiteSpace(senderAddress))
-                {
-                    return new TransferAssetResponse
-                    {
-                        Error = "This account has no Algorand address yet. Complete storage-provider consent by signing in through BiatecOIDC first.",
-                        ErrorType = "NoAlgorandAddress"
-                    };
-                }
-
-                var sender = new Address(senderAddress);
-                var (apiAddress, apiToken, explorerBaseUrl) = GetAlgodSettings(genesisId);
-                using var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
-                var algodApi = new DefaultApi(httpClient);
-                var suggestedParams = await algodApi.TransactionParamsAsync();
-
-                var unsignedTransaction = AlgorandTransactionBuilder.BuildOptIn(sender, assetId, note, suggestedParams);
-                var signResult = await _walletClient.SignAsync(bearerToken, new[] { unsignedTransaction }, primaryAddress, slot);
-                return await SubmitSignedTransactionsAsync(signResult.SignedTransactions, algodApi, explorerBaseUrl);
-            }
-            catch (WalletApiException ex)
-            {
-                return new TransferAssetResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
-            }
-            catch (Algorand.ApiException<Algorand.Algod.Model.ErrorResponse> ex)
-            {
-                return new TransferAssetResponse { Error = ex.Result.Message, ErrorType = ex.GetType().ToString() };
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return new TransferAssetResponse { Error = ex.Message, ErrorType = "Unauthorized" };
-            }
-            catch (Exception ex)
-            {
-                return new TransferAssetResponse { Error = SanitizeForToolResponse(ex, nameof(OptIn)), ErrorType = ex.GetType().ToString() };
-            }
-        }
-
-        [McpServerTool(Name = "executeAlgorandTransaction"), Description("Broadcasts one or more already-signed Algorand transactions (base64 msgpack, e.g. from a prior sign step) to the network. Gated on the same 'sign' scope as transferAsset/optIn, which call this internally.")]
-        public async Task<TransferAssetResponse> ExecuteTransaction(
+        [McpServerTool(Name = "executeAlgorandTransaction"), Description("Broadcasts one or more already-signed Algorand transactions (base64 msgpack, e.g. from signTransaction or mergeMultisigTransactions) to the network. Requires the 'sign' scope.")]
+        public async Task<ExecuteTransactionResponse> ExecuteTransaction(
             [Description("Signed transaction(s), base64-encoded msgpack, in submission order.")] List<string> signedTransactions,
             [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0")
         {
             var authError = RequireSignClaim();
             if (authError != null)
             {
-                return new TransferAssetResponse { Error = authError, ErrorType = "InsufficientScope" };
+                return new ExecuteTransactionResponse { Error = authError, ErrorType = "InsufficientScope" };
             }
 
             if (signedTransactions == null || signedTransactions.Count == 0)
             {
-                return new TransferAssetResponse { Error = "At least one signed transaction is required.", ErrorType = "InvalidRequest" };
+                return new ExecuteTransactionResponse { Error = "At least one signed transaction is required.", ErrorType = "InvalidRequest" };
             }
 
             try
@@ -265,23 +558,23 @@ namespace BiatecMCP.MCP
             }
             catch (Algorand.ApiException<Algorand.Algod.Model.ErrorResponse> ex)
             {
-                return new TransferAssetResponse { Error = ex.Result.Message, ErrorType = ex.GetType().ToString() };
+                return new ExecuteTransactionResponse { Error = ex.Result.Message, ErrorType = ex.GetType().ToString() };
             }
             catch (Exception ex)
             {
-                return new TransferAssetResponse { Error = SanitizeForToolResponse(ex, nameof(ExecuteTransaction)), ErrorType = ex.GetType().ToString() };
+                return new ExecuteTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(ExecuteTransaction)), ErrorType = ex.GetType().ToString() };
             }
         }
 
+        private const string BiatecRouterProviderName = "BiatecRouter";
+
         /// <summary>
-        /// Submits one or more already-signed transactions (base64 msgpack) to Algod, in order - shared by
-        /// <see cref="TransferAsset"/>/<see cref="OptIn"/> (which sign exactly one, then call this) and
-        /// <see cref="ExecuteTransaction"/> (which broadcasts caller-supplied signed transactions directly).
-        /// The current Algorand4 SDK only exposes a single-transaction submit call, so a multi-transaction
-        /// group is submitted sequentially rather than as one atomic HTTP request; the returned <c>TxId</c>
-        /// is the last transaction submitted.
+        /// Submits one or more already-signed transactions (base64 msgpack) to Algod, in order. The current
+        /// Algorand4 SDK only exposes a single-transaction submit call, so a multi-transaction group is
+        /// submitted sequentially rather than as one atomic HTTP request; the returned <c>TxId</c> is the
+        /// last transaction submitted.
         /// </summary>
-        private static async Task<TransferAssetResponse> SubmitSignedTransactionsAsync(IReadOnlyList<string> signedTransactionsBase64, DefaultApi algodApi, string explorerBaseUrl)
+        private static async Task<ExecuteTransactionResponse> SubmitSignedTransactionsAsync(IReadOnlyList<string> signedTransactionsBase64, DefaultApi algodApi, string explorerBaseUrl)
         {
             Algorand.Algod.Model.PostTransactionsResponse postResult = null!;
             foreach (var signedBase64 in signedTransactionsBase64)
@@ -290,7 +583,7 @@ namespace BiatecMCP.MCP
                 postResult = await Algorand.Utils.Utils.SubmitTransaction(algodApi, signedTransaction);
             }
 
-            return new TransferAssetResponse { TxId = postResult.Txid, ExplorerLink = $"{explorerBaseUrl}{postResult.Txid}" };
+            return new ExecuteTransactionResponse { TxId = postResult.Txid, ExplorerLink = $"{explorerBaseUrl}{postResult.Txid}" };
         }
 
         private (string apiAddress, string apiToken, string explorerBaseUrl) GetAlgodSettings(string genesisId)
@@ -303,6 +596,15 @@ namespace BiatecMCP.MCP
             }
 
             throw new ArgumentException($"Unknown or unconfigured genesisId '{genesisId}'.");
+        }
+
+        /// <summary>Fetches Algod's current suggested transaction parameters for <paramref name="genesisId"/> - used by every <c>create*</c> tool.</summary>
+        private async Task<Algorand.Algod.Model.TransactionParametersResponse> GetSuggestedParamsAsync(string genesisId)
+        {
+            var (apiAddress, apiToken, _) = GetAlgodSettings(genesisId);
+            using var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
+            var algodApi = new DefaultApi(httpClient);
+            return await algodApi.TransactionParamsAsync();
         }
 
         /// <summary>

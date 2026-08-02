@@ -10,11 +10,12 @@ namespace BiatecMCPTests
 {
     /// <summary>
     /// Tests for <see cref="BiatecMCP.MCP.BiatecMCP"/> that don't require a live Algod node or BiatecOIDC -
-    /// the claim-reading/scope-gating logic that runs before any network I/O. The full build-sign-broadcast
-    /// path (which talks to a real Algod node via <c>HttpClientConfigurator</c>) is covered independently by
-    /// <see cref="AlgorandTransactionBuilderTests"/> (transaction construction) and
-    /// <see cref="BiatecWalletClientTests"/> (the BiatecOIDC wallet API call) - and, per this rewrite's
-    /// verification plan, by a manual end-to-end run against a real MCP client, Algod, and BiatecOIDC.
+    /// the claim-reading/scope-gating logic that runs before any network I/O. The full build path (which
+    /// talks to a real Algod node via <c>HttpClientConfigurator</c>) is covered independently by
+    /// <see cref="AlgorandTransactionBuilderTests"/>/<see cref="MultisigTransactionBuilderTests"/>
+    /// (transaction construction) and <see cref="BiatecWalletClientTests"/> (the BiatecOIDC wallet API call)
+    /// - and, per this rewrite's verification plan, by a manual end-to-end run against a real MCP client,
+    /// Algod, and BiatecOIDC.
     /// </summary>
     [TestFixture]
     public class BiatecMCPToolsTests
@@ -23,6 +24,7 @@ namespace BiatecMCPTests
         private IHttpContextAccessor _httpContextAccessor = null!;
         private DefaultHttpContext _httpContext = null!;
         private IOptionsMonitor<AlgodConfiguration> _algodConfig = null!;
+        private Mock<IDexQuoteProvider> _biatecRouterQuoteProvider = null!;
 
         [SetUp]
         public void SetUp()
@@ -31,10 +33,14 @@ namespace BiatecMCPTests
             _httpContext = new DefaultHttpContext();
             _httpContextAccessor = Mock.Of<IHttpContextAccessor>(a => a.HttpContext == _httpContext);
             _algodConfig = Mock.Of<IOptionsMonitor<AlgodConfiguration>>(m => m.CurrentValue == new AlgodConfiguration());
+            _biatecRouterQuoteProvider = new Mock<IDexQuoteProvider>();
+            _biatecRouterQuoteProvider.Setup(p => p.ProviderName).Returns("BiatecRouter");
         }
 
-        private BiatecMCP.MCP.BiatecMCP CreateTool() =>
-            new(_walletClient.Object, _httpContextAccessor, _algodConfig, NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
+        private BiatecMCP.MCP.BiatecMCP CreateTool(DexSwapAggregatorService? aggregator = null) =>
+            new(_walletClient.Object, _httpContextAccessor, _algodConfig,
+                aggregator ?? new DexSwapAggregatorService(new[] { _biatecRouterQuoteProvider.Object }),
+                NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
 
         private void SetBearerToken(string token) =>
             _httpContext.Request.Headers.Authorization = $"Bearer {token}";
@@ -97,55 +103,6 @@ namespace BiatecMCPTests
             var result = await CreateTool().GetAccountAddress();
 
             Assert.That(result.Error, Does.Contain("bearer token"));
-        }
-
-        [Test]
-        public async Task TransferAsset_MissingSignClaim_ReturnsInsufficientScope_WithoutCallingWalletClient()
-        {
-            SetClaims(); // no "sign" claim
-            SetBearerToken("tok");
-
-            var result = await CreateTool().TransferAsset(receiverAccount: "SOME", assetId: 0, amount: 1, note: "n", genesisId: "mainnet-v1.0");
-
-            Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
-            Assert.That(result.Error, Does.Contain("sign"));
-            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
-        }
-
-        [Test]
-        public async Task OptIn_MissingSignClaim_ReturnsInsufficientScope_WithoutCallingWalletClient()
-        {
-            SetClaims();
-            SetBearerToken("tok");
-
-            var result = await CreateTool().OptIn(assetId: 123, note: "", genesisId: "mainnet-v1.0");
-
-            Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
-            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
-        }
-
-        [Test]
-        public async Task OptIn_ZeroAssetId_ReturnsInvalidRequest_EvenWithSignClaim()
-        {
-            SetClaims(new Claim("sign", "true"));
-            SetBearerToken("tok");
-
-            var result = await CreateTool().OptIn(assetId: 0, note: "", genesisId: "mainnet-v1.0");
-
-            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
-        }
-
-        [Test]
-        public async Task TransferAsset_SignClaimPresentButNoBearerToken_ReturnsUnauthorized()
-        {
-            // Defensive edge case: HttpContext.User carries the claim but the raw Authorization header is
-            // somehow missing (shouldn't happen once JwtBearer auth has run, but this tool must not throw
-            // an unhandled exception either way).
-            SetClaims(new Claim("sign", "true"));
-
-            var result = await CreateTool().TransferAsset(receiverAccount: "SOME", assetId: 0, amount: 1, note: "", genesisId: "mainnet-v1.0");
-
-            Assert.That(result.ErrorType, Is.EqualTo("Unauthorized"));
         }
 
         // ───────────────────────── Multi-address (ARC-76 slot) support ─────────────────────────
@@ -218,23 +175,135 @@ namespace BiatecMCPTests
             Assert.That(result.Error, Does.Contain("bearer token"));
         }
 
+        // ───────────────────────── createPaymentTransaction / createOptInTransaction (no sign claim needed - build only) ─────────────────────────
+
         [Test]
-        public async Task TransferAsset_WithPrimaryAddressAndSlot_ResolvesSenderViaWalletApi()
+        public async Task CreatePaymentTransaction_NoBearerTokenAndNoClaim_ReturnsUnauthorized()
         {
-            SetClaims(new Claim("sign", "true"));
+            SetClaims(); // no algorand_address claim, no bearer token at all
+
+            var result = await CreateTool().CreatePaymentTransaction(receiverAccount: "SOME", amount: 1);
+
+            Assert.That(result.Error, Does.Contain("bearer token"));
+            Assert.That(result.UnsignedTransaction, Is.Empty);
+        }
+
+        [Test]
+        public async Task CreatePaymentTransaction_WithPrimaryAddressAndSlot_ResolvesSenderViaWalletApi()
+        {
+            SetClaims();
             SetBearerToken("tok");
             _walletClient
                 .Setup(c => c.GetAddressAsync("tok", "OTHER-SEED", 10, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DerivedAddressResponse { Address = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ", PrimaryAddress = "OTHER-SEED", Slot = 10 });
+                .ReturnsAsync(new DerivedAddressResponse { Address = "OTHER-SEED", PrimaryAddress = "OTHER-SEED", Slot = 10 });
 
             // No Algod network is configured for "mainnet-v1.0" in this test's AlgodConfiguration, so the
             // call fails deterministically once it reaches that stage - proving the sender was resolved
             // through the wallet API first (an unconfigured genesisId throws ArgumentException).
-            var result = await CreateTool().TransferAsset(receiverAccount: "SOME", assetId: 0, amount: 1, note: "n", genesisId: "mainnet-v1.0", primaryAddress: "OTHER-SEED", slot: 10);
+            var result = await CreateTool().CreatePaymentTransaction(receiverAccount: "SOME", amount: 1, primaryAddress: "OTHER-SEED", slot: 10);
 
             _walletClient.Verify(c => c.GetAddressAsync("tok", "OTHER-SEED", 10, It.IsAny<CancellationToken>()), Times.Once);
             Assert.That(result.ErrorType, Does.Contain("ArgumentException"));
+            // Never touches the wallet's sign endpoint - this tool only builds, never signs.
+            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         }
+
+        [Test]
+        public async Task CreateOptInTransaction_ZeroAssetId_ReturnsInvalidRequest()
+        {
+            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+
+            var result = await CreateTool().CreateOptInTransaction(assetId: 0);
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        [Test]
+        public async Task CreateOptInTransaction_NoAlgorandAddress_ReturnsClearError()
+        {
+            SetClaims();
+            SetBearerToken("tok");
+            _walletClient.Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>())).ReturnsAsync(new ListSeedsResponse());
+
+            var result = await CreateTool().CreateOptInTransaction(assetId: 123);
+
+            Assert.That(result.ErrorType, Is.EqualTo("NoAlgorandAddress"));
+        }
+
+        // ───────────────────────── createAssetCreateTransaction ─────────────────────────
+
+        [Test]
+        public async Task CreateAssetCreateTransaction_NoBearerTokenAndNoClaim_ReturnsUnauthorized()
+        {
+            SetClaims();
+
+            var result = await CreateTool().CreateAssetCreateTransaction(total: 1000, decimals: 0, unitName: "T", assetName: "Test");
+
+            Assert.That(result.Error, Does.Contain("bearer token"));
+        }
+
+        // ───────────────────────── signTransaction (standalone - requires 'sign' claim) ─────────────────────────
+
+        [Test]
+        public async Task SignTransaction_MissingSignClaim_ReturnsInsufficientScope_WithoutCallingWalletClient()
+        {
+            SetClaims();
+            SetBearerToken("tok");
+
+            var result = await CreateTool().SignTransaction(new List<string> { "AA==" });
+
+            Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
+            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransaction_EmptyList_ReturnsInvalidRequest()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+
+            var result = await CreateTool().SignTransaction(new List<string>());
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        [Test]
+        public async Task SignTransaction_SignClaimPresentButNoBearerToken_ReturnsUnauthorized()
+        {
+            SetClaims(new Claim("sign", "true"));
+
+            var result = await CreateTool().SignTransaction(new List<string> { "AA==" });
+
+            Assert.That(result.ErrorType, Is.EqualTo("Unauthorized"));
+        }
+
+        [Test]
+        public async Task SignTransaction_ValidRequest_ForwardsToWalletClientWithPrimaryAddressAndSlot()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.SignAsync("tok", It.IsAny<IReadOnlyList<byte[]>>(), "SEED", 5, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SignTransactionGroupResponse { SignedTransactions = { "c2lnbmVk" } });
+
+            var result = await CreateTool().SignTransaction(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, primaryAddress: "SEED", slot: 5);
+
+            Assert.That(result.SignedTransactions, Is.EqualTo(new[] { "c2lnbmVk" }));
+            Assert.That(result.Error, Is.Empty);
+        }
+
+        [Test]
+        public async Task SignTransaction_NonBase64Transaction_ReturnsInvalidRequest()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+
+            var result = await CreateTool().SignTransaction(new List<string> { "not-base64!!" });
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        // ───────────────────────── executeAlgorandTransaction ─────────────────────────
 
         [Test]
         public async Task ExecuteTransaction_MissingSignClaim_ReturnsInsufficientScope()
@@ -254,6 +323,104 @@ namespace BiatecMCPTests
             SetBearerToken("tok");
 
             var result = await CreateTool().ExecuteTransaction(new List<string>());
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        // ───────────────────────── createSwapTransaction ─────────────────────────
+
+        [Test]
+        public async Task CreateSwapTransaction_BiatecRouterQuotesBest_ReturnsErrorWhenAlsoUnauthenticated()
+        {
+            // No bearer token/claim at all - even though Biatec Router's quote wins, building the actual
+            // transaction still needs to resolve a sender address, which requires authentication.
+            SetClaims();
+            _biatecRouterQuoteProvider
+                .Setup(p => p.GetQuoteAsync(0, 31566704, 1_000_000, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DexQuote { ProviderName = "BiatecRouter", OutputAmount = 500 });
+
+            var result = await CreateTool().CreateSwapTransaction(0, 31566704, 1_000_000);
+
+            Assert.That(result.BestProvider, Is.EqualTo("BiatecRouter"));
+            Assert.That(result.Error, Does.Contain("bearer token"));
+        }
+
+        [Test]
+        public async Task CreateSwapTransaction_CompetitorQuotesBest_ReturnsComparisonWithoutBuildingTransaction()
+        {
+            SetClaims();
+            var competitor = new Mock<IDexQuoteProvider>();
+            competitor.Setup(p => p.ProviderName).Returns("FolksRouter");
+            competitor
+                .Setup(p => p.GetQuoteAsync(0, 31566704, 1_000_000, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DexQuote { ProviderName = "FolksRouter", OutputAmount = 999 });
+            _biatecRouterQuoteProvider
+                .Setup(p => p.GetQuoteAsync(0, 31566704, 1_000_000, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DexQuote { ProviderName = "BiatecRouter", OutputAmount = 500 });
+            var aggregator = new DexSwapAggregatorService(new[] { _biatecRouterQuoteProvider.Object, competitor.Object });
+
+            var result = await CreateTool(aggregator).CreateSwapTransaction(0, 31566704, 1_000_000);
+
+            Assert.That(result.BestProvider, Is.EqualTo("FolksRouter"));
+            Assert.That(result.UnsignedTransactions, Is.Empty);
+            Assert.That(result.ErrorType, Is.EqualTo("TransactionBuildingNotAvailable"));
+            Assert.That(result.Quotes, Has.Count.EqualTo(2));
+        }
+
+        [Test]
+        public async Task CreateSwapTransaction_NoQuotesAvailable_ReturnsClearError()
+        {
+            SetClaims();
+            _biatecRouterQuoteProvider
+                .Setup(p => p.GetQuoteAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((DexQuote?)null);
+
+            var result = await CreateTool().CreateSwapTransaction(0, 31566704, 1_000_000);
+
+            Assert.That(result.ErrorType, Is.EqualTo("NoQuoteAvailable"));
+        }
+
+        // ───────────────────────── createBridgeTransaction (architecture placeholder) ─────────────────────────
+
+        [Test]
+        public async Task CreateBridgeTransaction_ReturnsNotImplementedError()
+        {
+            var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, "ethereum", "0xabc");
+
+            Assert.That(result.ErrorType, Is.EqualTo("NotImplemented"));
+            Assert.That(result.Error, Does.Contain("Aramid"));
+        }
+
+        // ───────────────────────── createMultisigTransaction / mergeMultisigTransactions ─────────────────────────
+
+        [Test]
+        public async Task CreateMultisigTransaction_NoParticipants_ReturnsInvalidRequest()
+        {
+            var result = await CreateTool().CreateMultisigTransaction(1, 1, new List<string>());
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        [Test]
+        public async Task CreateMultisigTransaction_ThresholdExceedsParticipantCount_ReturnsInvalidRequest()
+        {
+            var result = await CreateTool().CreateMultisigTransaction(1, 5, new List<string> { "I3IINASAS7SKHFOP75DGTHDTYSQ42EBUCNNU5I3PQSSUVX32B2QIOTXIWU" });
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        [Test]
+        public async Task CreateMultisigTransaction_InvalidParticipantAddress_ReturnsError()
+        {
+            var result = await CreateTool().CreateMultisigTransaction(1, 1, new List<string> { "not-a-real-address" });
+
+            Assert.That(result.Error, Is.Not.Empty);
+        }
+
+        [Test]
+        public void MergeMultisigTransactions_EmptyList_ReturnsInvalidRequest()
+        {
+            var result = CreateTool().MergeMultisigTransactions(new List<string>()).Result;
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
         }

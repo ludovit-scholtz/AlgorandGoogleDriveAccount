@@ -71,21 +71,38 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — the 5 MCP tools (`getAlgorandAddress`, `listAlgorandAddresses`, `transferAsset`,
-    `optIn`, `executeAlgorandTransaction`), all forwarding the caller's own bearer token to BiatecOIDC rather
+  - `MCP/BiatecMCP.cs` — 10 MCP tools split into three chainable steps (build → sign → execute) rather than
+    one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
+    combined as part of a multisig proposal before ever being broadcast: `getAlgorandAddress`,
+    `listAlgorandAddresses` (read-only); `createPaymentTransaction`, `createOptInTransaction`,
+    `createAssetCreateTransaction`, `createSwapTransaction`, `createBridgeTransaction` (**architecture
+    placeholder** for a future Aramid Finance bridge - always returns a "not implemented" error today),
+    `createMultisigTransaction` (build-only, no `sign` claim needed - see "Multisig transactions" below);
+    `signTransaction` (new, standalone - forwards to BiatecOIDC's `POST /wallet/sign`, requires `sign`),
+    `mergeMultisigTransactions` (combines independently-signed multisig copies, no BiatecOIDC/Algod call);
+    `executeAlgorandTransaction` (broadcasts already-signed transactions, requires `sign`). Every tool's
+    `[Description]` names the next tool in the chain, since MCP has no other side-channel for teaching the
+    connected agent the intended protocol. All forward the caller's own bearer token to BiatecOIDC rather
     than touching any key material - see "MCP server" under Architecture notes below for the full request
-    flow. `getAlgorandAddress`/`transferAsset`/`optIn` accept optional `primaryAddress`/`slot` parameters to
-    address a specific seed/ARC-76 slot instead of the default identity (see BiatecOIDC's "Multi-address
-    signing" note); `executeAlgorandTransaction` broadcasts already-signed transactions directly and is what
-    `transferAsset`/`optIn` call internally after signing (via a shared private `SubmitSignedTransactionsAsync`
-    helper), so there's exactly one build→submit code path.
+    flow. The `create*`/`getAlgorandAddress` tools accept optional `primaryAddress`/`slot` parameters to
+    build against/from a specific seed/ARC-76 slot instead of the default identity (see BiatecOIDC's
+    "Multi-address signing" note).
   - `BusinessLogic/IBiatecWalletClient.cs` + `BiatecWalletClient.cs` — typed `HttpClient` wrapping BiatecOIDC's
     `POST /wallet/sign`/`GET /wallet/seeds`/`GET /wallet/address`/`GET /wallet/address/{primaryAddress}/{slot}`,
     forwarding the caller's bearer token; `WalletApiException` carries BiatecOIDC's `ProblemDetails` title/detail
     back to the tool
-  - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in transactions
-    (Algorand4 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material ever touches this
-    project
+  - `BusinessLogic/IDexQuoteProvider.cs` + `BiatecRouterQuoteProvider.cs`/`FolksRouterQuoteProvider.cs`/
+    `HaystackRouterQuoteProvider.cs` + `DexSwapAggregatorService.cs` — `createSwapTransaction`'s quote
+    comparison (see "DEX swap aggregation" under Architecture notes below for the scope decision on which
+    provider can actually build a transaction today)
+  - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in/asset-create
+    transactions (Algorand4 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material
+    ever touches this project
+  - `Helper/MultisigTransactionBuilder.cs` — derives a multisig account's address from
+    `(version, threshold, participantAddresses)`, builds the unsigned `SignedTransaction` "envelope" (a
+    `Transaction` plus an empty-signature `MultisigSignature`) each cosigner independently signs, and merges
+    N independently-signed copies via the Algorand4 SDK's `SignedTransaction.MergeMultisigTransactionBytes` -
+    see "Multisig transactions" under Architecture notes below
   - `Model/` — `AlgodConfiguration`, `CorsConfiguration`, `Configuration` (local `App:Host`),
     `OidcConfiguration` (`Oidc:Issuer`), `McpResourceConfiguration` (`Mcp:CanonicalResourceUri`),
     `WalletApiModels` (DTOs mirroring BiatecOIDC's `WalletModels.cs`, duplicated rather than referenced so the
@@ -138,7 +155,7 @@ dependency on `BiatecSelfCustodyCore`.
   - `OIDC_INTEGRATION_GUIDE.md`, `BIATEC_OIDC_LOGOUT_REQUIREMENTS.md`, `ENTRA_SETUP_GUIDE.md`
 - `BiatecMCPTests/` — NUnit + Moq tests for `BiatecMCP` (OAuth resource-server wiring via
   `Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory`, `AlgorandTransactionBuilder`, `BiatecWalletClient`,
-  the 5 MCP tools) **and** `BiatecSelfCustodyCore` (AES encryption, transfer policy, `CloudStorageProviderCatalog`,
+  the MCP tools) **and** `BiatecSelfCustodyCore` (AES encryption, transfer policy, `CloudStorageProviderCatalog`,
   `GoogleCloudStorageProvider`, `MicrosoftCloudStorageProvider`, plus a shared `FakeCloudStorageProvider` test
   double) — the latter group stays here even though the `BiatecMCP` *product* project no longer references
   `BiatecSelfCustodyCore`, since `BiatecOIDCTests` doesn't yet have its own copies and this is still the only
@@ -383,20 +400,54 @@ setup stage needs.
   contains **both** its own `client_id` and the resource URI (`JwtIssuerService.CreateAccessToken`'s RFC 8707
   handling) — this is what lets `BiatecMCP` validate tokens from *any* dynamically-registered client against one
   stable audience value via local JWT validation (`AddJwtBearer`, `Authority` = `Oidc:Issuer`), with no
-  per-request network call to BiatecOIDC; (4) the 5 tools (`MCP/BiatecMCP.cs`: `getAlgorandAddress`,
-  `listAlgorandAddresses`, `transferAsset`, `optIn`, `executeAlgorandTransaction`) forward that same bearer
-  token to BiatecOIDC's wallet REST API (`IBiatecWalletClient`/`BiatecWalletClient`) — `getAlgorandAddress`
-  (with no `slot`/`primaryAddress` given) reads the token's own `algorand_address` claim (falling back to
+  per-request network call to BiatecOIDC; (4) the tools (`MCP/BiatecMCP.cs`) forward that same bearer token
+  to BiatecOIDC's wallet REST API (`IBiatecWalletClient`/`BiatecWalletClient`) — `getAlgorandAddress` (with
+  no `slot`/`primaryAddress` given) reads the token's own `algorand_address` claim (falling back to
   `GET /wallet/seeds`'s primary seed); any non-default identity, or `listAlgorandAddresses`, hits
-  `GET /wallet/address`/`GET /wallet/address/{primaryAddress}/{slot?}` instead. `transferAsset`/`optIn` build
-  an *unsigned* transaction locally (`AlgorandTransactionBuilder`, Algorand4 SDK, no key material),
-  `POST /wallet/sign` it — forwarding `primaryAddress`/`slot` if given — (BiatecOIDC enforces the
-  `sign`/`rekey` claim and both spending-limit tiers there — `McpTransferLimitsConfiguration`/`TransferPolicy`
-  were removed from `BiatecMCP` entirely, since `/wallet/sign` already does this uniformly for every relying
-  party), then broadcast the signed bytes to Algod via the same private `SubmitSignedTransactionsAsync` helper
-  `executeAlgorandTransaction` (broadcast-only, no signing) also uses. Mounted at `/mcp` via
-  `ModelContextProtocol.AspNetCore` (`AddMcpServer().WithHttpTransport().WithToolsFromAssembly().AddAuthorizationFilters()`),
-  stateless HTTP transport.
+  `GET /wallet/address`/`GET /wallet/address/{primaryAddress}/{slot?}` instead. Wallet operations are three
+  separate, chainable tools rather than one monolithic call: `createPaymentTransaction`/
+  `createOptInTransaction`/`createAssetCreateTransaction`/`createSwapTransaction`/`createMultisigTransaction`
+  build an *unsigned* transaction locally (`AlgorandTransactionBuilder`/`MultisigTransactionBuilder`,
+  Algorand4 SDK, no key material touched, no `sign` claim required - building a proposal is harmless);
+  `signTransaction` forwards it to `POST /wallet/sign` — forwarding `primaryAddress`/`slot` if given —
+  (BiatecOIDC enforces the `sign`/`rekey` claim and both spending-limit tiers there —
+  `McpTransferLimitsConfiguration`/`TransferPolicy` were removed from `BiatecMCP` entirely, since
+  `/wallet/sign` already does this uniformly for every relying party) and requires the `sign` claim itself;
+  `executeAlgorandTransaction` broadcasts the signed bytes to Algod via a shared private
+  `SubmitSignedTransactionsAsync` helper, also requiring `sign`. `mergeMultisigTransactions` combines
+  independently-signed copies of a `createMultisigTransaction` envelope (no BiatecOIDC/Algod call - pure
+  local combination via the Algorand4 SDK). `createBridgeTransaction` is an architecture placeholder for a
+  future Aramid Finance bridge integration, always returning a "not implemented" error today. Every tool's
+  `[Description]` names the next tool in the intended chain, since MCP has no other side-channel for this.
+  Mounted at `/mcp` via `ModelContextProtocol.AspNetCore`
+  (`AddMcpServer().WithHttpTransport().WithToolsFromAssembly().AddAuthorizationFilters()`), stateless HTTP
+  transport.
+- **DEX swap aggregation**: `createSwapTransaction` fans a quote request out to three `IDexQuoteProvider`
+  implementations in parallel via `DexSwapAggregatorService` (`BiatecMCP/BusinessLogic/`) -
+  `BiatecRouterQuoteProvider` (the `BiatecRouterConnector` NuGet package, same one `BiatecOIDC` already
+  depends on for spend valuation - `Api.QuoteAsync` for quoting, `Api.RouteTxsAsync` for building a real
+  unsigned swap transaction group), `FolksRouterQuoteProvider` (raw HTTP against Folks Router's public REST
+  quote endpoint, `api.folksrouter.io`), and `HaystackRouterQuoteProvider` (a deliberate no-op placeholder -
+  Haystack Router's public REST contract couldn't be confirmed while building this, so it always reports "no
+  quote" rather than guessing at an endpoint). A provider that throws or returns no quote is excluded from
+  the comparison, never fatal. **Only Biatec Router's route can be turned into a real transaction today** -
+  if Folks or Haystack quotes better, `createSwapTransaction` still returns the full comparison but no
+  transaction, since those aggregators' transaction-building contracts aren't independently verified here and
+  fabricating that construction risks producing a subtly wrong transaction for a real money-moving operation.
+  Wiring in real transaction building for the other two is an additive follow-up once verified against a
+  testnet.
+- **Multisig transactions**: `MultisigTransactionBuilder` (`BiatecMCP/Helper/`) lets a multisig transaction be
+  proposed once and cosigned across independent sessions - `createMultisigTransaction` derives the multisig
+  account's address from `(version, threshold, participantAddresses)` (each participant identified by their
+  own normal Algorand address, which already *is* their ed25519 public key, base32-encoded), builds the inner
+  unsigned transaction with that address as `Sender`, and wraps it as a `SignedTransaction` envelope (the
+  `Transaction` plus an empty-signature `MultisigSignature` naming every participant) - the same envelope
+  every cosigner independently feeds into their own `signTransaction` call. `BiatecSelfCustodyCore`'s
+  `DriveService.SignTransactionAsync` already branches on `SignedTransaction.MSig != null` and signs a
+  **fresh** copy each call (not mutating in place) - exactly right for "collect N independent copies, then
+  merge" - so no BiatecOIDC-side change was needed for this. `mergeMultisigTransactions` combines the
+  collected copies via the Algorand4 SDK's `SignedTransaction.MergeMultisigTransactionBytes` once at least
+  `threshold` of them are present, ready for `executeAlgorandTransaction`.
 - **JWT issuer / OIDC provider**: `JwtIssuerService` + `JwtIssuerController` (`BiatecOIDC`) implement OIDC
   discovery (`/.well-known/openid-configuration`, `/.well-known/jwks.json`), `/authorize`, `/token`, `/userinfo`,
   `/introspect`, `/verify`. Supports both standard `response_type=code` and a legacy `returnUrl` direct

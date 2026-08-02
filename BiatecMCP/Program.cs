@@ -125,6 +125,23 @@ namespace BiatecMCP
                 client.BaseAddress = new Uri(oidcConfig.Issuer.TrimEnd('/') + "/");
             });
 
+            // DEX aggregator quote providers for createSwapTransaction - BiatecRouterQuoteProvider is the
+            // only one that can also build a real unsigned swap transaction (see its remarks);
+            // FolksRouterQuoteProvider/HaystackRouterQuoteProvider are quote-only. Registered individually
+            // (not just as IDexQuoteProvider) so DexSwapAggregatorService's IEnumerable<IDexQuoteProvider>
+            // constructor picks up all three, while createSwapTransaction can still resolve
+            // BiatecRouterQuoteProvider's own concrete type for BuildRouteTransactionsAsync.
+            builder.Services.AddHttpClient<BiatecRouterQuoteProvider>();
+            builder.Services.AddScoped<IDexQuoteProvider>(sp => sp.GetRequiredService<BiatecRouterQuoteProvider>());
+            builder.Services.AddHttpClient<FolksRouterQuoteProvider>(client =>
+            {
+                client.BaseAddress = new Uri("https://api.folksrouter.io/");
+            });
+            builder.Services.AddScoped<IDexQuoteProvider>(sp => sp.GetRequiredService<FolksRouterQuoteProvider>());
+            builder.Services.AddScoped<HaystackRouterQuoteProvider>();
+            builder.Services.AddScoped<IDexQuoteProvider>(sp => sp.GetRequiredService<HaystackRouterQuoteProvider>());
+            builder.Services.AddScoped<DexSwapAggregatorService>();
+
             // Configure MCP Server
             builder.Services.AddMcpServer()
                 .WithHttpTransport(options =>

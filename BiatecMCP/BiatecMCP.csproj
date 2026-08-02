@@ -19,6 +19,7 @@
          Swashbuckle.AspNetCore packages (or a BiatecSelfCustodyCore project reference) - this service no
          longer does its own identity/storage-provider sign-in, session pairing, or Swagger UI. -->
     <PackageReference Include="Algorand4" Version="4.7.4.2026071920" />
+    <PackageReference Include="BiatecRouterConnector" Version="1.0.0.2026011820" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.10" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
   </ItemGroup>
