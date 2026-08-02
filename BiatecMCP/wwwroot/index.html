@@ -716,6 +716,8 @@
             <div class="setup-tabs">
                 <button class="tab-button active" onclick="showTab('claude')">Claude Desktop</button>
                 <button class="tab-button" onclick="showTab('vscode')">Visual Studio Code</button>
+                <button class="tab-button" onclick="showTab('chatgpt')">ChatGPT Desktop</button>
+                <button class="tab-button" onclick="showTab('lmstudio')">LM Studio</button>
             </div>
 
             <div id="claude" class="tab-content active">
@@ -737,40 +739,26 @@
                         </button>
                         <pre>https://mcp.biatec.io/mcp</pre>
                     </div>
-                    <p>Or configure it explicitly via JSON:</p>
+                    <p>Or configure it explicitly by editing <code>claude_desktop_config.json</code> directly
+                    (<b>Settings</b> &rarr; <b>Developer</b> &rarr; <b>Edit Config</b> - on Windows this is
+                    <code>%APPDATA%\Claude\claude_desktop_config.json</code>, on macOS
+                    <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>):</p>
                     <div class="code-block">
                         <button class="copy-btn" onclick="copyCode(this)">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                             Copy
                         </button>
                         <pre>{
-    "servers": {
+    "mcpServers": {
         "Biatec": {
-            "command": "npx",
-            "cwd": "${input:cwd}",
-            "args": [
-                "mcp-remote",
-                "https://mcp.biatec.io/mcp",
-                "--transport",
-                "http-first"
-            ]
+            "url": "https://mcp.biatec.io/mcp"
         }
-    },
-    "inputs": [
-        {
-            "id": "cwd",
-            "type": "promptString",
-            "description": "Working Directory"
-        },
-        {
-            "id": "debugType",
-            "type": "promptString",
-            "description": "Debug Type"
-        }
-    ]
+    }
 }</pre>
                     </div>
-                    <p>Save your changes. The server will now be available for use in Claude Desktop.</p>
+                    <p>No <code>mcp-remote</code> proxy or local Node.js install needed - Claude Desktop speaks
+                    Streamable HTTP (and its OAuth 2.1 sign-in flow) directly to a <code>url</code>-only entry.
+                    Save the file and restart Claude Desktop. The server will now be available for use.</p>
                 </div>
                 <div class="step">
                     <h4><span class="step-num">4</span>Use the Integration</h4>
@@ -805,20 +793,17 @@
                             Copy
                         </button>
                         <pre>{
-  "mcpServers": {
+  "servers": {
     "Biatec": {
-      "command": "npx",
-      "args": [
-        "mcp-remote",
-        "https://mcp.biatec.io/mcp",
-        "--transport",
-        "http-first"
-      ]
+      "url": "https://mcp.biatec.io/mcp",
+      "type": "http"
     }
   }
 }</pre>
                     </div>
-                    <p>Save the file. Visual Studio Code will now recognize Biatec for Model Context Protocol operations.</p>
+                    <p>VS Code's built-in MCP client speaks Streamable HTTP directly - no <code>mcp-remote</code>
+                    proxy or local Node.js install needed. Save the file; VS Code will prompt you to trust and
+                    start the server, then recognize Biatec for Model Context Protocol operations.</p>
                 </div>
                 <div class="step">
                     <h4><span class="step-num">4</span>Use the Integration</h4>
@@ -832,6 +817,88 @@
                     <i>"pay to address ABCD...WXYZ 1 algo with note biatec"</i>, or
                     <i>"pay to address ABCD...WXYZ 1 algo with note biatec with my arc76 address SEED2...ADDR and slot 10"</i>
                     to sign with a specific seed/slot instead of the default identity.</p>
+                </div>
+            </div>
+
+            <div id="chatgpt" class="tab-content">
+                <div class="step">
+                    <h4><span class="step-num">1</span>Open ChatGPT (desktop app or chatgpt.com)</h4>
+                    <p>Custom MCP connectors currently require a ChatGPT Business, Enterprise, or Edu account
+                    with Developer Mode available.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">2</span>Enable Developer Mode</h4>
+                    <p>Go to <b>Settings</b> &rarr; <b>Connectors</b>, then toggle on <b>Developer Mode</b> -
+                    this unlocks adding custom MCP servers.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">3</span>Add the Biatec MCP Server</h4>
+                    <p>Still under <b>Settings</b> &rarr; <b>Connectors</b>, click <b>Create</b> and choose to
+                    add a custom MCP server, then fill in:</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>Name: Biatec
+MCP Server URL: https://mcp.biatec.io/mcp
+Authentication: OAuth</pre>
+                    </div>
+                    <p>Check <b>"I trust this application"</b> and save. ChatGPT will open a browser to sign in
+                    via BiatecOIDC (Google or Microsoft) and ask you to approve access - no separate pairing
+                    step, no manual token to paste.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">4</span>Enable the connector for your conversation</h4>
+                    <p>In a chat, open the <b>+</b>/connectors menu and enable <b>Biatec</b> so its tools are
+                    available to that conversation.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">5</span>Run your first prompt</h4>
+                    <p>For example: <i>"what is my algorand address"</i>. If an authentication prompt appears,
+                    log in and re-run the prompt after a successful login.</p>
+                </div>
+            </div>
+
+            <div id="lmstudio" class="tab-content">
+                <div class="step">
+                    <h4><span class="step-num">1</span>Open LM Studio</h4>
+                    <p>Start LM Studio on your computer (MCP support requires a recent version).</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">2</span>Open the MCP configuration file</h4>
+                    <p>Switch to the <b>Program</b> tab in the right-hand sidebar, click <b>Install</b> &rarr;
+                    <b>Edit mcp.json</b> - this opens LM Studio's <code>mcp.json</code> in its built-in editor.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">3</span>Add the Biatec MCP Server configuration</h4>
+                    <p>Insert the following into <code>mcp.json</code>:</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Copy
+                        </button>
+                        <pre>{
+  "mcpServers": {
+    "Biatec": {
+      "url": "https://mcp.biatec.io/mcp"
+    }
+  }
+}</pre>
+                    </div>
+                    <p>Save the file. LM Studio connects to Biatec directly over Streamable HTTP - no local
+                    proxy needed - and will walk you through the OAuth sign-in via BiatecOIDC (Google or
+                    Microsoft) the first time a Biatec tool is used.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">4</span>Enable the Biatec tools in a chat</h4>
+                    <p>In LM Studio's chat sidebar, make sure the <b>Biatec</b> MCP server's tools are toggled
+                    on for the model/conversation you're using.</p>
+                </div>
+                <div class="step">
+                    <h4><span class="step-num">5</span>Run your first prompt</h4>
+                    <p>For example: <i>"what is my algorand address"</i>. If an authentication prompt appears,
+                    log in and re-run the prompt after a successful login.</p>
                 </div>
             </div>
         </section>

@@ -77,9 +77,62 @@ https://mcp.biatec.io/mcp
 ```
 
 (stage: `https://stage.mcp.biatec.io/mcp`). Any client that implements the MCP Authorization spec's OAuth
-discovery flow (Claude Desktop, Claude.ai, recent VS Code MCP support, etc.) will handle steps 1–5 above
-automatically the first time it connects — there is no manual "pairing" step to complete separately, and no
-session ID to configure. If your client supports a raw MCP server URL field, that is all you need to enter.
+discovery flow (Claude Desktop, ChatGPT, VS Code, LM Studio, etc.) will handle steps 1–5 above automatically
+the first time it connects — there is no manual "pairing" step to complete separately, and no session ID to
+configure, no `mcp-remote` proxy, no local Node.js install. If your client supports a raw MCP server URL
+field, that is all you need to enter. The full interactive setup walkthrough (with copy-paste config) for each
+of the clients below is also on [the documentation site](https://mcp.biatec.io/#setup).
+
+### Visual Studio Code
+
+Add to `.vscode/mcp.json` (confirmed working):
+
+```json
+{
+  "servers": {
+    "Biatec": {
+      "url": "https://mcp.biatec.io/mcp",
+      "type": "http"
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Add to `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` on Windows,
+`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS — or `Settings → Connectors → Add
+custom connector` in the UI instead of editing the file directly):
+
+```json
+{
+  "mcpServers": {
+    "Biatec": {
+      "url": "https://mcp.biatec.io/mcp"
+    }
+  }
+}
+```
+
+### ChatGPT Desktop
+
+Requires a Business/Enterprise/Edu account with Developer Mode. `Settings → Connectors → toggle Developer
+Mode → Create`, then enter `https://mcp.biatec.io/mcp` as the MCP Server URL, authentication `OAuth`, and
+check "I trust this application".
+
+### LM Studio
+
+`Program` tab (right sidebar) → `Install` → `Edit mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "Biatec": {
+      "url": "https://mcp.biatec.io/mcp"
+    }
+  }
+}
+```
 
 ## Local development
 
