@@ -75,8 +75,10 @@ seed/slot, since that's a different concern (choosing which identity produces th
 `POST /wallet/{network}/{seedAddress}/{slot}/activate` route shape) plus the address being activated.
 
 - **`getAlgorandAddress`** — returns an Algorand address for the signed-in account. With no arguments, returns the
-  default identity (from the bearer token's own `algorand_address` claim, falling back to the primary seed from
-  `GET /wallet/seeds`). Pass `slot` (ARC-76 derivation index — `1` for the "second address", `2` for the "third",
+  default identity, always resolved via a live `GET /wallet/address/{seedAddress}/{slot}` call (the bearer
+  token's own `primary_seed_address` claim supplies the default seed selector, falling back to the primary
+  seed from `GET /wallet/seeds` if that claim is absent). Pass `slot` (ARC-76 derivation index — `1` for the
+  "second address", `2` for the "third",
   etc.) and/or `seedAddress` (a specific seed's identifying address, from `listAlgorandAddresses`) to derive a
   different address instead — this also registers the derived address for later `signTransaction`/
   `getAddressInfo` calls by address alone.

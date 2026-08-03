@@ -101,7 +101,7 @@ namespace BiatecOIDC.BusinessLogic
                 // WalletController) - granting them stamps a matching claim of the same name onto the
                 // issued access token; see JwtIssuerService.CreateAccessToken.
                 scopes_supported = new[] { "openid", "profile", "email", "sign", "manage-limits", "rekey" },
-                claims_supported = new[] { "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "email", "name", "preferred_username", "algorand_address", "biatec_idp", "sign", "manage-limits", "rekey" }
+                claims_supported = new[] { "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "email", "name", "preferred_username", "primary_seed_address", "biatec_idp", "sign", "manage-limits", "rekey" }
             };
         }
 
@@ -446,22 +446,31 @@ namespace BiatecOIDC.BusinessLogic
 
             var provider = user.FindFirst(AuthSchemeNames.IdpClaimType)?.Value;
 
-            string? algorandAddress = null;
+            // Identifies which seed is primary - not a derived, per-chain address. Deliberately *not*
+            // "algorand_address"/"evm_address" (two per-chain-family claims this used to carry, each
+            // requiring its own live ARC-76 derivation): BiatecMCP always resolves the actual address for a
+            // given slot - Algorand or EVM alike - via GET /wallet/address/{seedAddress}/{slot}, the same
+            // live call for both chain families, using this claim as the default seedAddress when the
+            // caller didn't name one explicitly. ResolveSeedAddressAsync(seedAddress: null) just reads
+            // whichever vault entry is IsPrimary (auto-creating a first seed if none exists yet) - no ARC-76
+            // derivation at all - so this is cheap and, unlike the old per-chain claims, always available
+            // whenever Drive/OneDrive access succeeds.
+            string? primarySeedAddress = null;
             try
             {
-                algorandAddress = await _driveService.GetAccountAddressAsync(email, provider ?? string.Empty);
+                primarySeedAddress = await _driveService.GetPrimarySeedAddressAsync(email, provider ?? string.Empty);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Unable to load Algorand account for {Email}. Continuing OIDC login without algorand_address claim.", email);
+                _logger.LogWarning(ex, "Unable to load the primary seed address for {Email}. Continuing OIDC login without primary_seed_address claim.", email);
             }
 
-            var shortIdentity = BuildIdentityDisplayName(email, algorandAddress);
+            var shortIdentity = BuildIdentityDisplayName(email, primarySeedAddress);
             var subject = ComputePairwiseSubject(client.ClientId, email);
 
             if (string.Equals(request.ResponseType, "id_token", StringComparison.Ordinal))
             {
-                var idToken = CreateIdToken(subject, client.ClientId, email, algorandAddress, shortIdentity, request.Nonce);
+                var idToken = CreateIdToken(subject, client.ClientId, email, primarySeedAddress, shortIdentity, request.Nonce);
                 var response = new Dictionary<string, string>
                 {
                     ["id_token"] = idToken,
@@ -498,7 +507,7 @@ namespace BiatecOIDC.BusinessLogic
                 Scope = request.Scope,
                 Nonce = request.Nonce,
                 Email = email,
-                AlgorandAddress = algorandAddress,
+                PrimarySeedAddress = primarySeedAddress,
                 Provider = provider,
                 Subject = subject,
                 ShortIdentity = shortIdentity,
@@ -589,7 +598,7 @@ namespace BiatecOIDC.BusinessLogic
                     client.ClientId,
                     codeRecord.Subject,
                     codeRecord.Email,
-                    codeRecord.AlgorandAddress,
+                    codeRecord.PrimarySeedAddress,
                     codeRecord.Provider,
                     codeRecord.ShortIdentity,
                     codeRecord.Nonce,
@@ -639,7 +648,7 @@ namespace BiatecOIDC.BusinessLogic
                     client.ClientId,
                     refreshRecord.Subject,
                     refreshRecord.Email,
-                    refreshRecord.AlgorandAddress,
+                    refreshRecord.PrimarySeedAddress,
                     refreshRecord.Provider,
                     refreshRecord.ShortIdentity,
                     nonce: null,
@@ -761,7 +770,7 @@ namespace BiatecOIDC.BusinessLogic
                 ["iat"] = result.Claims.TryGetValue(JwtRegisteredClaimNames.Iat, out var iat) ? iat : string.Empty,
                 ["iss"] = result.Claims.TryGetValue(JwtRegisteredClaimNames.Iss, out var iss) ? iss : string.Empty,
                 ["email"] = result.Claims.TryGetValue(ClaimTypes.Email, out var email) ? email : string.Empty,
-                ["algorand_address"] = result.Claims.TryGetValue("algorand_address", out var address) ? address : string.Empty
+                ["primary_seed_address"] = result.Claims.TryGetValue("primary_seed_address", out var address) ? address : string.Empty
             };
 
             return await Task.FromResult(response);
@@ -833,7 +842,7 @@ namespace BiatecOIDC.BusinessLogic
             string clientId,
             string subject,
             string email,
-            string? algorandAddress,
+            string? primarySeedAddress,
             string? provider,
             string shortIdentity,
             string? nonce,
@@ -843,8 +852,8 @@ namespace BiatecOIDC.BusinessLogic
             string? protectedProviderRefreshToken,
             bool includeRefreshToken)
         {
-            var accessToken = CreateAccessToken(subject, clientId, email, algorandAddress, provider, shortIdentity, scope, resource, protectedProviderAccessToken, protectedProviderRefreshToken);
-            var idToken = CreateIdToken(subject, clientId, email, algorandAddress, shortIdentity, nonce);
+            var accessToken = CreateAccessToken(subject, clientId, email, primarySeedAddress, provider, shortIdentity, scope, resource, protectedProviderAccessToken, protectedProviderRefreshToken);
+            var idToken = CreateIdToken(subject, clientId, email, primarySeedAddress, shortIdentity, nonce);
 
             string? refreshToken = null;
             if (includeRefreshToken)
@@ -856,7 +865,7 @@ namespace BiatecOIDC.BusinessLogic
                     ClientId = clientId,
                     Subject = subject,
                     Email = email,
-                    AlgorandAddress = algorandAddress,
+                    PrimarySeedAddress = primarySeedAddress,
                     Provider = provider,
                     ShortIdentity = shortIdentity,
                     Scope = scope,
@@ -888,7 +897,7 @@ namespace BiatecOIDC.BusinessLogic
             };
         }
 
-        private string CreateIdToken(string subject, string audience, string email, string? algorandAddress, string shortIdentity, string? nonce)
+        private string CreateIdToken(string subject, string audience, string email, string? primarySeedAddress, string shortIdentity, string? nonce)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.IdTokenLifetimeMinutes);
@@ -902,9 +911,9 @@ namespace BiatecOIDC.BusinessLogic
                 new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
             };
 
-            if (!string.IsNullOrWhiteSpace(algorandAddress))
+            if (!string.IsNullOrWhiteSpace(primarySeedAddress))
             {
-                claims.Add(new Claim("algorand_address", algorandAddress));
+                claims.Add(new Claim("primary_seed_address", primarySeedAddress));
             }
 
             if (!string.IsNullOrWhiteSpace(nonce))
@@ -944,7 +953,7 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         private static readonly string[] AlwaysGrantedScopes = { "openid", "profile", "email" };
 
-        private string CreateAccessToken(string subject, string clientId, string email, string? algorandAddress, string? provider, string shortIdentity, string scope, string? resource, string? protectedProviderAccessToken, string? protectedProviderRefreshToken)
+        private string CreateAccessToken(string subject, string clientId, string email, string? primarySeedAddress, string? provider, string shortIdentity, string scope, string? resource, string? protectedProviderAccessToken, string? protectedProviderRefreshToken)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.AccessTokenLifetimeMinutes);
@@ -959,9 +968,9 @@ namespace BiatecOIDC.BusinessLogic
                 new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
             };
 
-            if (!string.IsNullOrWhiteSpace(algorandAddress))
+            if (!string.IsNullOrWhiteSpace(primarySeedAddress))
             {
-                claims.Add(new Claim("algorand_address", algorandAddress));
+                claims.Add(new Claim("primary_seed_address", primarySeedAddress));
             }
 
             if (!string.IsNullOrWhiteSpace(provider))
@@ -1157,26 +1166,26 @@ namespace BiatecOIDC.BusinessLogic
             return configuredValue;
         }
 
-        private static string BuildShortIdentity(string algorandAddress)
+        private static string BuildShortIdentity(string primarySeedAddress)
         {
-            if (string.IsNullOrWhiteSpace(algorandAddress))
+            if (string.IsNullOrWhiteSpace(primarySeedAddress))
             {
                 return string.Empty;
             }
 
-            if (algorandAddress.Length <= 8)
+            if (primarySeedAddress.Length <= 8)
             {
-                return algorandAddress;
+                return primarySeedAddress;
             }
 
-            return $"{algorandAddress[..4]}{algorandAddress[^4..]}";
+            return $"{primarySeedAddress[..4]}{primarySeedAddress[^4..]}";
         }
 
-        private static string BuildIdentityDisplayName(string email, string? algorandAddress)
+        private static string BuildIdentityDisplayName(string email, string? primarySeedAddress)
         {
-            if (!string.IsNullOrWhiteSpace(algorandAddress))
+            if (!string.IsNullOrWhiteSpace(primarySeedAddress))
             {
-                return BuildShortIdentity(algorandAddress);
+                return BuildShortIdentity(primarySeedAddress);
             }
 
             var atIndex = email.IndexOf('@');
@@ -1242,7 +1251,7 @@ namespace BiatecOIDC.BusinessLogic
             public string Scope { get; set; } = string.Empty;
             public string? Nonce { get; set; }
             public string Email { get; set; } = string.Empty;
-            public string? AlgorandAddress { get; set; }
+            public string? PrimarySeedAddress { get; set; }
             public string? Provider { get; set; }
             public string Subject { get; set; } = string.Empty;
             public string ShortIdentity { get; set; } = string.Empty;
@@ -1278,7 +1287,7 @@ namespace BiatecOIDC.BusinessLogic
             public string ClientId { get; set; } = string.Empty;
             public string Subject { get; set; } = string.Empty;
             public string Email { get; set; } = string.Empty;
-            public string? AlgorandAddress { get; set; }
+            public string? PrimarySeedAddress { get; set; }
             public string? Provider { get; set; }
             public string ShortIdentity { get; set; } = string.Empty;
             public string Scope { get; set; } = "openid profile email";

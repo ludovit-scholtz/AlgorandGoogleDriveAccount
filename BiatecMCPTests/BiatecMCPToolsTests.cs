@@ -63,9 +63,13 @@ namespace BiatecMCPTests
             _httpContext.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
 
         [Test]
-        public async Task GetAccountAddress_AlgorandAddressClaimPresent_ReturnsItWithoutCallingWalletClient()
+        public async Task GetAccountAddress_PrimarySeedAddressClaimPresent_UsesItAsSeedSelectorWithoutListingSeeds()
         {
-            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            SetClaims(new Claim("primary_seed_address", "SOMESEED"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "SOMESEED", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "SOMEADDRESS", SeedAddress = "SOMESEED", Slot = 0 });
 
             var result = await CreateTool().GetAccountAddress();
 
@@ -77,7 +81,7 @@ namespace BiatecMCPTests
         [Test]
         public async Task GetAccountAddress_NoClaim_FallsBackToPrimarySeedFromWalletApi()
         {
-            SetClaims(); // no algorand_address claim
+            SetClaims(); // no primary_seed_address claim
             SetBearerToken("tok");
             _walletClient
                 .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
@@ -89,6 +93,9 @@ namespace BiatecMCPTests
                         new SeedResponse { Address = "PRIMARY", IsPrimary = true }
                     }
                 });
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "PRIMARY", SeedAddress = "PRIMARY", Slot = 0 });
 
             var result = await CreateTool().GetAccountAddress();
 
@@ -122,24 +129,10 @@ namespace BiatecMCPTests
         // ───────────────────────── Multi-address (ARC-76 slot) support ─────────────────────────
 
         [Test]
-        public async Task GetAccountAddress_DefaultSlotAndNoPrimaryAddress_UsesClaimFastPath()
+        public async Task GetAccountAddress_NonZeroSlot_UsesPrimarySeedAddressClaimAsSeedSelector()
         {
-            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
-
-            var result = await CreateTool().GetAccountAddress();
-
-            Assert.That(result.Address, Is.EqualTo("SOMEADDRESS"));
-            _walletClient.Verify(c => c.GetAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
-        }
-
-        [Test]
-        public async Task GetAccountAddress_NonZeroSlot_DerivesFromPrimarySeedViaWalletApi()
-        {
-            SetClaims(new Claim("algorand_address", "SOMEADDRESS")); // claim present but ignored - slot != 0
+            SetClaims(new Claim("primary_seed_address", "PRIMARY"));
             SetBearerToken("tok");
-            _walletClient
-                .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ListSeedsResponse { Seeds = { new SeedResponse { Address = "PRIMARY", IsPrimary = true } } });
             _walletClient
                 .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 1, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new DerivedAddressResponse { Address = "SECOND-ADDRESS", SeedAddress = "PRIMARY", Slot = 1 });
@@ -147,6 +140,7 @@ namespace BiatecMCPTests
             var result = await CreateTool().GetAccountAddress(slot: 1);
 
             Assert.That(result.Address, Is.EqualTo("SECOND-ADDRESS"));
+            _walletClient.Verify(c => c.ListSeedsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -221,7 +215,11 @@ namespace BiatecMCPTests
         [Test]
         public async Task GetCryptoAddress_AvmNetwork_DelegatesToAlgorandAddressResolution()
         {
-            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            SetClaims(new Claim("primary_seed_address", "SOMESEED"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "SOMESEED", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "SOMEADDRESS", SeedAddress = "SOMESEED", Slot = 0 });
             _networkResolver
                 .Setup(r => r.ResolveAsync("Algorand", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Algorand Mainnet", AvmChain = new AlgorandChain { GenesisId = "mainnet-v1.0" } });
@@ -231,7 +229,7 @@ namespace BiatecMCPTests
             Assert.That(result.Address, Is.EqualTo("SOMEADDRESS"));
             Assert.That(result.Family, Is.EqualTo("Avm"));
             Assert.That(result.Network, Is.EqualTo("Algorand Mainnet"));
-            _walletClient.Verify(c => c.GetAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            _walletClient.Verify(c => c.ListSeedsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -410,7 +408,7 @@ namespace BiatecMCPTests
         [Test]
         public async Task CreatePaymentTransaction_NoBearerTokenAndNoClaim_ReturnsUnauthorized()
         {
-            SetClaims(); // no algorand_address claim, no bearer token at all
+            SetClaims(); // no primary_seed_address claim, no bearer token at all
 
             var result = await CreateTool().CreatePaymentTransaction(receiverAccount: "SOME", amount: 1);
 
@@ -441,7 +439,7 @@ namespace BiatecMCPTests
         [Test]
         public async Task CreateOptInTransaction_ZeroAssetId_ReturnsInvalidRequest()
         {
-            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            SetClaims();
 
             var result = await CreateTool().CreateOptInTransaction(assetId: 0);
 
@@ -651,7 +649,7 @@ namespace BiatecMCPTests
         [Test]
         public async Task CreateBridgeTransaction_UnsupportedGenesisId_ReturnsInvalidRequest()
         {
-            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            SetClaims();
 
             var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 416101, "VOIRECIPIENT", "302189", network: "testnet-v1.0");
 
@@ -662,7 +660,11 @@ namespace BiatecMCPTests
         [Test]
         public async Task CreateBridgeTransaction_UnknownDestinationChain_ReturnsError()
         {
-            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            SetClaims(new Claim("primary_seed_address", "SOMEADDRESS"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "SOMEADDRESS", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "SOMEADDRESS", SeedAddress = "SOMEADDRESS", Slot = 0 });
             _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ValidAramidConfig());
 
             var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 999999, "SOMEADDR", "0");
@@ -673,7 +675,11 @@ namespace BiatecMCPTests
         [Test]
         public async Task CreateBridgeTransaction_RouteNotFound_ReturnsError()
         {
-            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            SetClaims(new Claim("primary_seed_address", "SOMEADDRESS"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "SOMEADDRESS", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "SOMEADDRESS", SeedAddress = "SOMEADDRESS", Slot = 0 });
             _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ValidAramidConfig());
 
             // Asset 12345 has no configured route to Voi in ValidAramidConfig().
@@ -688,7 +694,11 @@ namespace BiatecMCPTests
             // No Algod network is configured for "mainnet-v1.0" in this test's AlgodConfiguration, so the
             // call fails deterministically once it reaches that stage (ArgumentException) - proving config
             // fetch + route/chain resolution all succeeded first.
-            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            SetClaims(new Claim("primary_seed_address", "SOMEADDRESS"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "SOMEADDRESS", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "SOMEADDRESS", SeedAddress = "SOMEADDRESS", Slot = 0 });
             _aramidBridgeConfigProvider.Setup(p => p.GetConfigAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ValidAramidConfig());
 
             var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 416101, "VOIRECIPIENT", "302189");

@@ -137,6 +137,9 @@ dependency on `BiatecSelfCustodyCore`.
     `OidcConfiguration` (`Oidc:Issuer`), `McpResourceConfiguration` (`Mcp:CanonicalResourceUri`),
     `WalletApiModels` (DTOs mirroring BiatecOIDC's `WalletModels.cs`, duplicated rather than referenced so the
     two independently-deployed services share no compile-time coupling)
+  - `Generated/OidcApiClient.g.cs` — the NSwag-generated client wrapping every HTTP call to BiatecOIDC's
+    wallet API (see "Generated OIDC API client" under Architecture notes below for what it is and how to
+    regenerate it); `BusinessLogic/BiatecWalletClient.cs` is the only file that references it directly
   - `wwwroot/` — static pages: `index.html`, `privacy.html`, `terms.html`
 - `BiatecOIDC/` — the OIDC/JWT issuer web/API project (net10.0, `Microsoft.NET.Sdk.Web`)
   - `Controllers/JwtIssuerController.cs` — `/authorize` (+ `idp` fast track, + `resource` for RFC 8707), `/token`
@@ -166,8 +169,22 @@ dependency on `BiatecSelfCustodyCore`.
     (see "Multi-chain support" below), duplicated rather than shared via `BiatecSelfCustodyCore` per this
     repo's no-compile-time-coupling rule
   - `BusinessLogic/JwtIssuerService.cs` (+ `IJwtIssuerService`) — depends on `BiatecSelfCustodyCore`'s
-    `IDriveService` for the `algorand_address` claim; also stamps `biatec_idp`/`sign`/`manage-limits` claims
-    onto issued access tokens. `ResolveClientAsync(clientId)` checks statically-configured `JwtIssuer:Clients`
+    `IDriveService` for the `primary_seed_address` claim - the current primary seed's own identifying
+    (Algorand slot-0) address, resolved once at `/authorize` time (`IDriveService.GetPrimarySeedAddressAsync`,
+    a thin wrapper over `ICloudAccountRepository.ResolveSeedAddressAsync(seedAddress: null)` - no ARC-76
+    derivation, just whichever vault entry is `IsPrimary`) and cached through code exchange/every refresh,
+    same "resolve once, never recompute" treatment as before. Deliberately **not** a per-chain-family derived
+    address - an earlier version of this claim (`algorand_address`, later mirrored by a short-lived
+    `evm_address`) cached the *derived* address directly, which meant `BiatecMCP`'s EVM address lookup had no
+    equivalent fast path and always needed a live Drive-backed round trip, the actual root cause of a real
+    reported bug ("what is my Algorand address" succeeded off the claim while "what is my Ethereum address"
+    failed with a storage/seed error once the cached provider token had gone stale). The fix made both chain
+    families resolve identically instead of patching the asymmetry: `BiatecMCP` always derives the real
+    address via a live `GET /wallet/address/{seedAddress}/{slot}` call for both AVM and EVM (see
+    `ResolveDerivedAddressAsync` under "EVM (Ethereum-family) support" below), using `primary_seed_address`
+    only as the default *seed selector* when no explicit one is given - never as the address itself. Also
+    stamps `biatec_idp`/`sign`/`manage-limits` claims onto issued access tokens. `ResolveClientAsync(clientId)`
+    checks statically-configured `JwtIssuer:Clients`
     first, falling back to `IDynamicClientStore` (Redis-backed, RFC 7591-registered clients) — every client
     lookup in this file and `JwtIssuerController` goes through it, so a static entry always takes precedence
     over a same-`ClientId` dynamic one (how an operator hand-upgrades a self-registered MCP client's scopes)
@@ -474,10 +491,14 @@ setup stage needs.
   handling) — this is what lets `BiatecMCP` validate tokens from *any* dynamically-registered client against one
   stable audience value via local JWT validation (`AddJwtBearer`, `Authority` = `Oidc:Issuer`), with no
   per-request network call to BiatecOIDC; (4) the tools (`MCP/BiatecMCP.cs`) forward that same bearer token
-  to BiatecOIDC's wallet REST API (`IBiatecWalletClient`/`BiatecWalletClient`) — `getAlgorandAddress` (with
-  no `slot`/`seedAddress` given) reads the token's own `algorand_address` claim (falling back to
-  `GET /wallet/seeds`'s primary seed); `listAlgorandAddresses` lists every seed via `GET /wallet/seeds`; any
-  non-default identity hits `GET /wallet/address/{seedAddress}/{slot?}` instead - each such derive call also
+  to BiatecOIDC's wallet REST API (`IBiatecWalletClient`/`BiatecWalletClient`, internally wrapping the
+  NSwag-generated `Generated.OidcApiClient` - see the "Generated OIDC API client" note below) —
+  `getAlgorandAddress`/`getCryptoAddress` always derive the real address via a live
+  `GET /wallet/address/{seedAddress}/{slot?}` call (`ResolveDerivedAddressAsync`), using the bearer token's
+  own `primary_seed_address` claim as the default seed selector when none is given (falling back to
+  `GET /wallet/seeds`'s primary seed if that claim is absent); `listAlgorandAddresses` lists every seed via
+  `GET /wallet/seeds`; any non-default identity hits `GET /wallet/address/{seedAddress}/{slot?}` the same way
+  - each such derive call also
   activates the derived address(es) on BiatecOIDC's side (see "Address-centric wallet API and rekey support"
   below), so it's immediately usable by address alone afterwards. Wallet operations are three
   separate, chainable tools rather than one monolithic call: `createPaymentTransaction`/
@@ -505,6 +526,27 @@ setup stage needs.
   Mounted at `/mcp` via `ModelContextProtocol.AspNetCore`
   (`AddMcpServer().WithHttpTransport().WithToolsFromAssembly().AddAuthorizationFilters()`), stateless HTTP
   transport.
+- **Generated OIDC API client**: every HTTP call `BiatecMCP` makes to BiatecOIDC's wallet API goes through
+  `BiatecMCP/Generated/OidcApiClient.g.cs` - a client generated by the NSwag CLI (`nswag openapi2csclient`)
+  from BiatecOIDC's own published OpenAPI document, not hand-written request/response plumbing. Regenerate it
+  whenever `WalletController`'s request/response shapes change: build `BiatecOIDC`, generate a fresh spec with
+  `swagger tofile --output <path> BiatecOIDC/bin/Debug/net10.0/BiatecOIDC.dll v1` (`Swashbuckle.AspNetCore.Cli`
+  - this works without a live Redis/OAuth-configured environment, since Swagger generation only reflects over
+  controller/DTO types, never resolves a controller instance), then regenerate the client with
+  `nswag openapi2csclient /input:<spec> /classname:OidcApiClient /namespace:BiatecMCP.Generated
+  /output:Generated/OidcApiClient.g.cs /GenerateClientInterfaces:true /InjectHttpClient:true /UseBaseUrl:false
+  /GenerateExceptionClasses:true /ExceptionClass:OidcApiException /GenerateOptionalParameters:true
+  /ClientClassAccessModifier:public /JsonLibrary:SystemTextJson` (`/JsonLibrary:SystemTextJson` avoids pulling
+  in a Newtonsoft.Json dependency this project otherwise has no use for). This only produces typed
+  request/response methods for endpoints whose success response is annotated with `[ProducesResponseType]` in
+  `WalletController` - every wallet endpoint has one for exactly this reason; an endpoint without one still
+  generates, but as an untyped `Task` the generated client can't deserialize a response from.
+  `BusinessLogic/BiatecWalletClient.cs` wraps `Generated.OidcApiClient` behind the pre-existing
+  `IBiatecWalletClient` interface (translating its DTOs into this project's own `BiatecMCP.Model` types, and
+  `Generated.OidcApiException` into this project's own `WalletApiException`) so callers and their tests are
+  unaffected by the swap from hand-written to generated HTTP plumbing - the generated client's methods take no
+  bearer-token parameter (BiatecOIDC's OpenAPI document doesn't model per-call auth), so `BiatecWalletClient`
+  sets it as the shared `HttpClient`'s `Authorization` header immediately before each call instead.
 - **DEX swap aggregation**: `createSwapTransaction` fans a quote request out to three `IDexQuoteProvider`
   implementations in parallel via `DexSwapAggregatorService` (`BiatecMCP/BusinessLogic/`) -
   `BiatecRouterQuoteProvider` (the `BiatecRouterConnector` NuGet package, same one `BiatecOIDC` already
@@ -615,8 +657,11 @@ setup stage needs.
   just well-known chains). Backs three new, chain-family-agnostic MCP tools: `listSupportedNetworks`
   (every live AVM chain plus four well-known EVM chains - Ethereum/Gnosis/Arbitrum/Base, the ones named when
   this was built - for discovery; other public EVM chains resolve too, just aren't listed there),
-  `getCryptoAddress` (AVM family delegates straight to the existing `ResolveAlgorandAddressAsync` since an
-  AVM address is genesisId-independent; EVM family calls the new wallet-client methods), and
+  `getCryptoAddress` (AVM family delegates straight to the existing `ResolveAlgorandAddressAsync`, EVM family
+  to `ResolveEvmAddressAsync` - both now thin wrappers over one shared `ResolveDerivedAddressAsync` that
+  always derives via a live BiatecOIDC `GET /wallet/address/{seedAddress}/{slot}` call (see "JWT issuer /
+  OIDC provider"'s `primary_seed_address` claim note below for why there's deliberately no per-chain-family
+  claim shortcut for the address itself anymore - only the *seed selector* comes from a claim), and
   `getCryptoBalance` (AVM: `DefaultApi.AccountInformationAsync` against the resolved chain's algod, same
   pattern as `CheckDestinationLiquidityAsync`, native balance + ASA holdings capped at 50; EVM:
   `IPublicEvmRpcDataSource.TryGetBalanceAsync` against the resolved chain's live RPC, native token only - the

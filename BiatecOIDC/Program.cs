@@ -134,7 +134,7 @@ namespace BiatecOIDC
 
             // Self-custody storage providers (BiatecSelfCustodyCore/Providers) - see BiatecMCP/Program.cs
             // for why both apps register the same set: ICloudAccountRepository is what JwtIssuerService
-            // uses to resolve the algorand_address claim, regardless of which provider the user signed
+            // uses to resolve the primary_seed_address claim, regardless of which provider the user signed
             // in with. To add a new provider, mirror both the registrations below and the matching
             // AddOpenIdConnect(...) scheme block further down in both apps.
             builder.Services.AddHttpClient<GoogleCloudStorageProvider>();
@@ -236,7 +236,7 @@ namespace BiatecOIDC
                     options.CallbackPath = "/oidc/signin-google";
 
                     // Basic scopes - only request what's needed to identify the user and (optionally)
-                    // read their self-custody account address for the algorand_address claim.
+                    // read their self-custody account address for the primary_seed_address claim.
                     options.Scope.Clear();
                     options.Scope.Add("openid");
                     options.Scope.Add("profile");

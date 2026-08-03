@@ -24,7 +24,7 @@ namespace BiatecOIDC.Controllers
     /// OpenID Connect identity provider: discovery/JWKS, the authorize/token endpoints (standard
     /// <c>response_type=code</c> with optional PKCE, plus a legacy <c>returnUrl</c> direct <c>id_token</c>
     /// flow), userinfo, token introspection/verification, and RP-Initiated Logout. Issues RS256-signed
-    /// tokens carrying Algorand-identity claims (<c>algorand_address</c>) for whitelisted third-party
+    /// tokens carrying an identity claim (<c>primary_seed_address</c>) for whitelisted third-party
     /// clients registered under <c>JwtIssuer:Clients</c>.
     /// </summary>
     [ApiController]
@@ -1102,8 +1102,9 @@ namespace BiatecOIDC.Controllers
         /// <c>Authorization</c> header.
         /// </summary>
         /// <returns>
-        /// <c>sub</c>, <c>email</c>, <c>name</c>, <c>preferred_username</c>, and <c>algorand_address</c>
-        /// (omitted if the user never granted Drive access). 401 if the token is missing or invalid.
+        /// <c>sub</c>, <c>email</c>, <c>name</c>, <c>preferred_username</c>, and <c>primary_seed_address</c>
+        /// (omitted if the user never granted Drive/OneDrive access). 401 if the token is
+        /// missing or invalid.
         /// </returns>
         [AllowAnonymous]
         [RequiresBearerToken]
@@ -1126,7 +1127,7 @@ namespace BiatecOIDC.Controllers
             var sub = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
             var email = principal.FindFirstValue(ClaimTypes.Email);
             var name = principal.FindFirstValue(ClaimTypes.Name);
-            var algorandAddress = principal.FindFirstValue("algorand_address");
+            var primarySeedAddress = principal.FindFirstValue("primary_seed_address");
 
             return Ok(new
             {
@@ -1134,7 +1135,7 @@ namespace BiatecOIDC.Controllers
                 email,
                 name,
                 preferred_username = principal.FindFirstValue("preferred_username"),
-                algorand_address = algorandAddress
+                primary_seed_address = primarySeedAddress
             });
         }
 

@@ -23,6 +23,17 @@ namespace BiatecSelfCustodyCore.BusinessLogic
         /// <param name="seedAddress">Selects which seed to read (<c>null</c> = the vault's current primary seed).</param>
         /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
         Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0);
+
+        /// <summary>
+        /// The current primary seed's own identifying (Algorand slot-0) address - no ARC-76 derivation, just
+        /// whichever vault entry is <c>IsPrimary</c> (see <see cref="Repository.ICloudAccountRepository.ResolveSeedAddressAsync"/>
+        /// with a <c>null</c> selector), auto-creating a first seed if none exists yet. Used by
+        /// <c>JwtIssuerService</c> to populate the <c>primary_seed_address</c> claim - a stable seed
+        /// selector, not a per-chain derived address (BiatecMCP always derives the actual Algorand/EVM
+        /// address for a given slot via a live <c>GET /wallet/address/{seedAddress}/{slot}</c> call instead).
+        /// </summary>
+        Task<string> GetPrimarySeedAddressAsync(string email, string provider, string? accessToken = null);
+
         Task<string> GetAccessTokenAsync(string userEmail);
     }
 }

@@ -171,6 +171,24 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             }
         }
 
+        public async Task<string> GetPrimarySeedAddressAsync(string email, string provider, string? accessToken = null)
+        {
+            if (string.IsNullOrEmpty(email))
+            {
+                throw new ArgumentException("Email is required", nameof(email));
+            }
+
+            try
+            {
+                return await _cloudAccountRepository.ResolveSeedAddressAsync(email, provider, seedAddress: null, accessToken);
+            }
+            catch (Exception exc)
+            {
+                _logger?.LogError(exc, $"Error resolving the primary seed address for email: {email}");
+                throw;
+            }
+        }
+
         public async Task<string> GetAccessTokenAsync(string userEmail)
         {
             // This method would need to be implemented based on how you want to handle access tokens

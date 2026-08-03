@@ -110,6 +110,8 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpPost("{network}/{address}/sign")]
+        [ProducesResponseType(typeof(SignTransactionGroupResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
         public async Task<IActionResult> SignTransactionGroup(string network, string address, [FromBody] SignTransactionGroupRequest request)
         {
             var authError = TryAuthenticate(WalletScopes.Sign, out var principal);
@@ -310,6 +312,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("limits")]
+        [ProducesResponseType(typeof(SpendingLimitResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetSpendingLimit()
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
@@ -343,6 +346,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpPut("limits")]
+        [ProducesResponseType(typeof(SpendingLimitResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> UpdateSpendingLimit([FromBody] UpdateSpendingLimitRequest request)
         {
             var authError = TryAuthenticate(WalletScopes.ManageLimits, out var principal);
@@ -390,6 +394,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("{network}/{address}/limits")]
+        [ProducesResponseType(typeof(SpendingLimitResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetSpendingLimitForAddress(string network, string address)
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
@@ -436,6 +441,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpPut("{network}/{address}/limits")]
+        [ProducesResponseType(typeof(SpendingLimitResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> UpdateSpendingLimitForAddress(string network, string address, [FromBody] UpdateSpendingLimitRequest request)
         {
             var authError = TryAuthenticate(WalletScopes.ManageLimits, out var principal);
@@ -500,6 +506,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("address/{seedAddress}/{slot:int?}")]
+        [ProducesResponseType(typeof(DerivedAddressResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetAddress(string seedAddress, int? slot)
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
@@ -561,6 +568,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("active-addresses")]
+        [ProducesResponseType(typeof(ListActiveAddressesResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetActiveAddresses()
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
@@ -620,6 +628,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("{network}/{address}/info")]
+        [ProducesResponseType(typeof(AddressInfoResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetAddressInfo(string network, string address)
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
@@ -683,6 +692,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpPost("{network}/{seedAddress}/{slot:int}/activate")]
+        [ProducesResponseType(typeof(AddressInfoResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> ActivateAddress(string network, string seedAddress, int slot, [FromBody] ActivateAddressRequest request)
         {
             var authError = TryAuthenticate(WalletScopes.Sign, out var principal);
@@ -787,6 +797,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("limits/currencies")]
+        [ProducesResponseType(typeof(SupportedCurrenciesResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetSupportedCurrencies()
         {
             var authError = TryAuthenticate(requiredClaim: null, out _);
@@ -821,6 +832,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("seeds")]
+        [ProducesResponseType(typeof(ListSeedsResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> ListSeeds()
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
@@ -864,6 +876,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpPost("seeds")]
+        [ProducesResponseType(typeof(SeedResponse), StatusCodes.Status200OK)]
         public async Task<IActionResult> CreateSeed()
         {
             var authError = TryAuthenticate(WalletScopes.Rekey, out var principal);

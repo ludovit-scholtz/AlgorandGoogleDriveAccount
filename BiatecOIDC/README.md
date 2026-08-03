@@ -2,7 +2,7 @@
 
 An OpenID Connect identity provider that lets whitelisted third-party applications authenticate
 users via Biatec's Google or Microsoft Entra ID sign-in and receive signed JWTs carrying Algorand
-identity claims (`algorand_address`).
+identity claims (`primary_seed_address`).
 
 This service was split out of the original combined `AlgorandGoogleDriveAccount` project so the
 OIDC/JWT issuer can be deployed, scaled, and rolled out independently from the `BiatecMCP` MCP
@@ -22,7 +22,7 @@ to one value, so neither host's discovery document is broken by the other's exis
 
 It depends on the sibling `BiatecSelfCustodyCore` class library (also referenced by `BiatecMCP`)
 to read the user's self-custody Algorand account address (Google Drive or OneDrive, depending on
-which provider they signed in with) for the `algorand_address` claim.
+which provider they signed in with) for the `primary_seed_address` claim.
 
 ## Choosing a provider
 
@@ -54,7 +54,7 @@ compatibility with a legacy `returnUrl` direct `id_token` flow.
 ## Claims in issued tokens
 
 - `email`
-- `algorand_address` (optional - omitted if the user never granted Google Drive access)
+- `primary_seed_address` (optional - omitted if the user never granted Google Drive access)
 - `preferred_username` and `name` set to the short identity derived from Algorand address (first 4 + last 4 chars)
 - standard claims such as `sub`, `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`
 

@@ -142,7 +142,7 @@ namespace BiatecOIDCTests
             string scope = "openid profile email",
             string? nonce = null,
             string email = TestEmail,
-            string algorandAddress = TestAlgorandAddress,
+            string primarySeedAddress = TestAlgorandAddress,
             DateTimeOffset? expiresUtc = null,
             string? codeChallenge = null,
             string? codeChallengeMethod = null,
@@ -158,10 +158,10 @@ namespace BiatecOIDCTests
                 scope,
                 nonce,
                 email,
-                algorandAddress,
+                primarySeedAddress,
                 provider,
                 subject = "sub-value",
-                shortIdentity = "ABCD" + algorandAddress[^4..],
+                shortIdentity = "ABCD" + primarySeedAddress[^4..],
                 codeChallenge,
                 codeChallengeMethod,
                 resource,
@@ -178,7 +178,7 @@ namespace BiatecOIDCTests
             string clientId,
             string scope = "openid profile email",
             string email = TestEmail,
-            string algorandAddress = TestAlgorandAddress,
+            string primarySeedAddress = TestAlgorandAddress,
             DateTimeOffset? expiresUtc = null,
             string? provider = null,
             string? protectedProviderAccessToken = null,
@@ -190,9 +190,9 @@ namespace BiatecOIDCTests
                 clientId,
                 subject = "sub-value",
                 email,
-                algorandAddress,
+                primarySeedAddress,
                 provider,
-                shortIdentity = "ABCD" + algorandAddress[^4..],
+                shortIdentity = "ABCD" + primarySeedAddress[^4..],
                 scope,
                 protectedProviderAccessToken,
                 protectedProviderRefreshToken,
@@ -349,7 +349,7 @@ namespace BiatecOIDCTests
         {
             var claims = _doc.RootElement.GetProperty("claims_supported");
             var list = claims.EnumerateArray().Select(e => e.GetString()).ToList();
-            Assert.That(list, Does.Contain("algorand_address"));
+            Assert.That(list, Does.Contain("primary_seed_address"));
         }
     }
 
@@ -1025,7 +1025,7 @@ namespace BiatecOIDCTests
         {
             base.SetUp();
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
+                .Setup(d => d.GetPrimarySeedAddressAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(TestAlgorandAddress);
         }
 
@@ -1189,7 +1189,7 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task IdTokenFlow_TokenContainsAlgorandAddressClaim()
+        public async Task IdTokenFlow_TokenContainsPrimarySeedAddressClaim()
         {
             var request = new OidcAuthorizeRequest
             {
@@ -1207,7 +1207,7 @@ namespace BiatecOIDCTests
             Assert.That(result.Success, Is.True);
             var handler = new JwtSecurityTokenHandler();
             var jwt = handler.ReadJwtToken(result.Response!["id_token"]);
-            var address = jwt.Claims.FirstOrDefault(c => c.Type == "algorand_address")?.Value;
+            var address = jwt.Claims.FirstOrDefault(c => c.Type == "primary_seed_address")?.Value;
             Assert.That(address, Is.EqualTo(TestAlgorandAddress));
         }
 
@@ -1228,7 +1228,7 @@ namespace BiatecOIDCTests
         public async Task DriveServiceThrows_ContinuesWithoutAlgorandAddress()
         {
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
+                .Setup(d => d.GetPrimarySeedAddressAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ThrowsAsync(new InvalidOperationException("Drive unavailable"));
 
             var request = ValidCodeRequest();
@@ -1246,7 +1246,7 @@ namespace BiatecOIDCTests
         public async Task IdTokenFlow_WhenDriveUnavailable_DoesNotIncludeAlgorandAddressClaim()
         {
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
+                .Setup(d => d.GetPrimarySeedAddressAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ThrowsAsync(new InvalidOperationException("Drive unavailable"));
 
             var request = new OidcAuthorizeRequest
@@ -1265,7 +1265,7 @@ namespace BiatecOIDCTests
             Assert.That(result.Success, Is.True);
             var handler = new JwtSecurityTokenHandler();
             var jwt = handler.ReadJwtToken(result.Response!["id_token"]);
-            var address = jwt.Claims.FirstOrDefault(c => c.Type == "algorand_address")?.Value;
+            var address = jwt.Claims.FirstOrDefault(c => c.Type == "primary_seed_address")?.Value;
             Assert.That(address, Is.Null);
         }
     }
@@ -2187,7 +2187,7 @@ namespace BiatecOIDCTests
         private async Task<string> IssueRealAccessTokenAsync()
         {
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
+                .Setup(d => d.GetPrimarySeedAddressAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(TestAlgorandAddress);
 
             var code = "real-code";
@@ -2238,8 +2238,8 @@ namespace BiatecOIDCTests
             var result = Service.ValidateBearerAccessToken(token);
 
             Assert.That(result.IsValid, Is.True);
-            Assert.That(result.Claims!.ContainsKey("algorand_address"), Is.True);
-            Assert.That(result.Claims["algorand_address"].ToString(), Is.EqualTo(TestAlgorandAddress));
+            Assert.That(result.Claims!.ContainsKey("primary_seed_address"), Is.True);
+            Assert.That(result.Claims["primary_seed_address"].ToString(), Is.EqualTo(TestAlgorandAddress));
         }
 
         [Test]
@@ -2351,7 +2351,7 @@ namespace BiatecOIDCTests
         private async Task<string> IssueRealAccessTokenAsync()
         {
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
+                .Setup(d => d.GetPrimarySeedAddressAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(TestAlgorandAddress);
 
             var code = "introspect-code";
@@ -2398,8 +2398,8 @@ namespace BiatecOIDCTests
 
             var introspection = await Service.IntrospectAsync(token);
 
-            Assert.That(introspection.ContainsKey("algorand_address"), Is.True);
-            Assert.That(introspection["algorand_address"].ToString(), Is.EqualTo(TestAlgorandAddress));
+            Assert.That(introspection.ContainsKey("primary_seed_address"), Is.True);
+            Assert.That(introspection["primary_seed_address"].ToString(), Is.EqualTo(TestAlgorandAddress));
         }
 
         [Test]
@@ -2429,7 +2429,7 @@ namespace BiatecOIDCTests
         {
             base.SetUp();
             MockDriveService
-                .Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>()))
+                .Setup(d => d.GetPrimarySeedAddressAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(TestAlgorandAddress);
         }
 
@@ -2489,7 +2489,7 @@ namespace BiatecOIDCTests
             var handler = new JwtSecurityTokenHandler();
             var jwt = handler.ReadJwtToken(tokens.AccessToken);
 
-            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "algorand_address")?.Value, Is.EqualTo(TestAlgorandAddress));
+            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "primary_seed_address")?.Value, Is.EqualTo(TestAlgorandAddress));
         }
 
         [Test]
@@ -2519,7 +2519,7 @@ namespace BiatecOIDCTests
             var handler = new JwtSecurityTokenHandler();
             var jwt = handler.ReadJwtToken(tokens.IdToken);
 
-            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "algorand_address")?.Value, Is.EqualTo(TestAlgorandAddress));
+            Assert.That(jwt.Claims.FirstOrDefault(c => c.Type == "primary_seed_address")?.Value, Is.EqualTo(TestAlgorandAddress));
         }
 
         [Test]
@@ -2745,7 +2745,7 @@ namespace BiatecOIDCTests
         [Test]
         public async Task GenuineSelfIssuedIdToken_ReturnsAudience()
         {
-            MockDriveService.Setup(d => d.GetAccountAddressAsync(TestEmail, It.IsAny<string>())).ReturnsAsync(TestAlgorandAddress);
+            MockDriveService.Setup(d => d.GetPrimarySeedAddressAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>())).ReturnsAsync(TestAlgorandAddress);
 
             var request = ValidCodeRequest("test-nonce");
             request.ResponseType = "id_token";

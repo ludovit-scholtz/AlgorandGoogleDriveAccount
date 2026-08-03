@@ -76,8 +76,8 @@ After logout at Biatec:
 ## Login Behavior When Drive Consent Is Denied
 
 - OIDC login still succeeds for `openid profile email`.
-- Algorand-specific claim `algorand_address` is omitted until Drive consent is granted.
-- Relying parties must treat `algorand_address` as optional and request additional permissions only before Drive-backed operations.
+- Algorand-specific claim `primary_seed_address` is omitted until Drive consent is granted.
+- Relying parties must treat `primary_seed_address` as optional and request additional permissions only before Drive-backed operations.
 
 ## Non-Goals (Current Scope)
 

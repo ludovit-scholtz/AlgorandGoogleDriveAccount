@@ -232,8 +232,11 @@ ID token and access token contain these relevant claims:
 
 - `sub`: pairwise subject per client and email.
 - `email`: authenticated Google email.
-- `name` and `preferred_username`: shortened Algorand identity (first 4 + last 4 chars from account address).
-- `algorand_address`: full Algorand account address.
+- `name` and `preferred_username`: shortened identity (first 4 + last 4 chars of the primary seed address).
+- `primary_seed_address`: the current primary seed's own identifying (Algorand slot-0) address — a *seed
+  selector*, not a derived per-chain address. To get an actual signing address (Algorand or Ethereum-family)
+  for a given slot, call `GET /wallet/address/{seedAddress}/{slot?}` (defaulting `seedAddress` to this claim
+  if you don't already know which seed you want) — the same call for both chain families.
 - Standard claims: `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`.
 
 Access tokens additionally carry, when applicable:
@@ -253,8 +256,8 @@ Important behavior for Drive consent:
 
 - Login no longer fails when Google Drive access is denied.
 - Tokens are still issued for `openid profile email` authentication.
-- `algorand_address` is optional and omitted when Drive access is unavailable.
-- Integrator apps should treat `algorand_address` as nullable and request incremental consent only when Drive-backed actions are needed.
+- `primary_seed_address` is optional and omitted when Drive access is unavailable.
+- Integrator apps should treat `primary_seed_address` as nullable and request incremental consent only when Drive-backed actions are needed.
 
 ## Scope handling
 
@@ -925,7 +928,7 @@ Requirements:
 - Start login by redirecting to /authorize with client_id, redirect_uri, response_type=code, scope=openid profile email, state, nonce.
 - Handle callback, validate state, exchange code at /token with client_secret_basic.
 - Validate id_token using jwks from jwks_uri (RS256, kid aware).
-- Map claims: email, preferred_username, algorand_address.
+- Map claims: email, preferred_username, primary_seed_address.
 - Store refresh_token securely and implement token refresh with grant_type=refresh_token.
 - Add middleware/guard to reject invalid issuer, audience, signature, and expired tokens.
 - Add unit tests for callback state validation and id_token signature validation.

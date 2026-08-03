@@ -37,10 +37,14 @@ external integration doc — for implementation work, this file plus the source 
 
 ## Claims issued
 
-`email`, `algorand_address` (**optional** — omitted if the user denied Drive/OneDrive consent; treat as optional,
-request storage scope only right before storage-backed operations; resolved from Google Drive or OneDrive
-depending on the signed-in principal's `biatec_idp` claim, see `AuthSchemeNames`), `preferred_username`/`name`
-(first 4 + last 4 chars of the Algorand address), plus standard `sub`, `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`.
+`email`, `primary_seed_address` (**optional** — omitted if the user denied Drive/OneDrive consent; treat as
+optional, request storage scope only right before storage-backed operations; the current primary seed's own
+identifying address, resolved via `IDriveService.GetPrimarySeedAddressAsync` — no ARC-76 derivation, just
+whichever vault entry is `IsPrimary` — depending on the signed-in principal's `biatec_idp` claim, see
+`AuthSchemeNames`; this is a *seed selector*, not a per-chain derived address — see `JwtIssuerService.cs`'s
+remarks on why an earlier `algorand_address`/`evm_address` claim pair was replaced by this one),
+`preferred_username`/`name` (first 4 + last 4 chars of the primary seed address), plus standard `sub`, `iss`,
+`aud`, `exp`, `iat`, `nbf`, `jti`.
 
 Access tokens (not ID tokens) additionally carry, when applicable:
 - `biatec_idp` — which provider (`Google`/`Microsoft`) the wallet is stored under, same value as the cookie
@@ -438,8 +442,8 @@ every dynamically-registered (RFC 7591) client, e.g. an MCP client that self-reg
 `client_id` is never in `Current.Clients`, only in `IDynamicClientStore` (Redis) - which this synchronous
 validation path deliberately does not query. Without the `ProtectedResources` half, a dynamically-registered
 client's otherwise-legitimate token (correct signature, issuer, not expired) would fail here the instant it's
-forwarded to *any* BiatecOIDC endpoint - the real-world symptom was BiatecMCP's `getAlgorandAddress`/`listAlgorandAddresses`
-working (they read the `algorand_address` claim locally, no call to BiatecOIDC) while anything that actually had
+forwarded to *any* BiatecOIDC endpoint - the real-world symptom was BiatecMCP's `listAlgorandAddresses`
+working (it reads `GET /wallet/seeds` and nothing else) while anything that actually had
 to call `GET /wallet/address/{seedAddress}/{slot}`, `GET /wallet/seeds`, or `POST /wallet/{network}/{address}/sign` failed with
 `invalid_token` for VS Code's MCP client specifically (self-registered, not statically configured). The resource
 URI is only ever added to a token's `aud` by this server itself, at issuance, when `CreateAccessToken` validates

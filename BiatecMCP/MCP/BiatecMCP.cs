@@ -6,6 +6,7 @@ using Algorand;
 using Algorand.Algod;
 using BiatecMCP.BusinessLogic;
 using BiatecMCP.Helper;
+using BiatecMCP.Model;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 
@@ -1309,60 +1310,52 @@ namespace BiatecMCP.MCP
         }
 
         /// <summary>
-        /// Resolves an Algorand address for signing/reporting. For the default identity (<paramref name="slot"/>
-        /// <c>0</c>, no <paramref name="seedAddress"/>), first tries the already-validated bearer
-        /// token's own <c>algorand_address</c> claim (no extra network call - see BiatecOIDC's
-        /// <c>JwtIssuerService.CreateAccessToken</c>), falling back to <c>GET /wallet/seeds</c> (the
-        /// primary seed's address) if that claim is absent - e.g. because storage-provider consent was
-        /// granted after this specific token was issued. For any non-default identity, resolves via
-        /// BiatecOIDC's <c>GET /wallet/address/{seedAddress}/{slot}</c> - <paramref name="seedAddress"/>
-        /// itself defaults to the vault's current primary seed (via <c>GET /wallet/seeds</c>) if not given,
-        /// since only <paramref name="slot"/> was requested. Returns <c>null</c> (never throws) if no
-        /// address is available at all.
+        /// Resolves an Algorand address for signing/reporting - a thin wrapper over
+        /// <see cref="ResolveDerivedAddressAsync"/>. Returns <c>null</c> (never throws) if no address is
+        /// available at all.
         /// </summary>
         private async Task<string?> ResolveAlgorandAddressAsync(string? bearerToken = null, int slot = 0, string? seedAddress = null)
         {
-            if (slot == 0 && seedAddress == null)
-            {
-                var claimAddress = _httpContextAccessor.HttpContext?.User?.FindFirstValue("algorand_address");
-                if (!string.IsNullOrWhiteSpace(claimAddress))
-                {
-                    return claimAddress;
-                }
-            }
-
-            var token = bearerToken ?? GetBearerToken();
-
-            if (seedAddress == null)
-            {
-                var seeds = await _walletClient.ListSeedsAsync(token);
-                var primary = seeds.Seeds.FirstOrDefault(s => s.IsPrimary) ?? seeds.Seeds.FirstOrDefault();
-                if (primary == null)
-                {
-                    return null;
-                }
-
-                if (slot == 0)
-                {
-                    return primary.Address;
-                }
-
-                seedAddress = primary.Address;
-            }
-
-            var derived = await _walletClient.GetAddressAsync(token, seedAddress, slot);
-            return derived.Address;
+            var derived = await ResolveDerivedAddressAsync(bearerToken, slot, seedAddress);
+            return derived?.Address;
         }
 
         /// <summary>
-        /// Resolves an EVM address for reporting - same shape as <see cref="ResolveAlgorandAddressAsync"/>,
-        /// minus the token-claim fast path (no <c>evm_address</c> claim exists on tokens today, so this
-        /// always calls BiatecOIDC's wallet API). Returns <c>null</c> (never throws) if no address is
-        /// available at all.
+        /// Resolves an EVM address for reporting - a thin wrapper over
+        /// <see cref="ResolveDerivedAddressAsync"/>, same live-derivation call as
+        /// <see cref="ResolveAlgorandAddressAsync"/> (both chain families are derived together in one
+        /// <c>GET /wallet/address/{seedAddress}/{slot}</c> call - see that method's remarks for why there is
+        /// deliberately no separate per-chain-family claim shortcut). Returns <c>null</c> (never throws) if
+        /// no address is available at all.
         /// </summary>
         private async Task<string?> ResolveEvmAddressAsync(string? bearerToken = null, int slot = 0, string? seedAddress = null)
         {
+            var derived = await ResolveDerivedAddressAsync(bearerToken, slot, seedAddress);
+            return derived?.EvmAddress;
+        }
+
+        /// <summary>
+        /// Derives the Algorand *and* EVM address at <paramref name="slot"/> for the seed identified by
+        /// <paramref name="seedAddress"/>, always via a live BiatecOIDC <c>GET /wallet/address/{seedAddress}/{slot}</c>
+        /// call - the same call, resolved the same way, regardless of chain family. There is deliberately no
+        /// per-chain-family claim-based shortcut here (BiatecOIDC used to stamp an <c>algorand_address</c>
+        /// claim - and, briefly, a mirrored <c>evm_address</c> one - directly onto the token so the default
+        /// identity's *address* could be read without a network call; that asymmetry, before the mirrored
+        /// claim existed, was the root cause of a real reported bug where "what is my Algorand address"
+        /// succeeded off the claim while "what is my Ethereum address" failed outright, since it had no
+        /// claim shortcut and so always needed a live Drive-backed call that could fail if the cached
+        /// provider token had gone stale). Both chain families now resolve identically: only the *seed
+        /// selector* is ever read from a claim - the bearer token's own <c>primary_seed_address</c> claim
+        /// (set by BiatecOIDC's <c>JwtIssuerService</c>) - and only when <paramref name="seedAddress"/> isn't
+        /// given, falling back to <c>GET /wallet/seeds</c>'s primary seed if the claim is absent (e.g. a
+        /// token issued before this claim existed, or storage-provider consent granted afterwards). Returns
+        /// <c>null</c> (never throws) if no seed is available at all.
+        /// </summary>
+        private async Task<DerivedAddressResponse?> ResolveDerivedAddressAsync(string? bearerToken, int slot, string? seedAddress)
+        {
             var token = bearerToken ?? GetBearerToken();
+
+            seedAddress ??= _httpContextAccessor.HttpContext?.User?.FindFirstValue("primary_seed_address");
 
             if (seedAddress == null)
             {
@@ -1376,8 +1369,7 @@ namespace BiatecMCP.MCP
                 seedAddress = primary.Address;
             }
 
-            var derived = await _walletClient.GetAddressAsync(token, seedAddress, slot);
-            return derived.EvmAddress;
+            return await _walletClient.GetAddressAsync(token, seedAddress, slot);
         }
 
         /// <summary>
