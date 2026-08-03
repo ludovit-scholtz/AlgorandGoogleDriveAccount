@@ -71,36 +71,41 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — 11 MCP tools split into three chainable steps (build → sign → execute) rather than
+  - `MCP/BiatecMCP.cs` — 14 MCP tools split into three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast: `getAlgorandAddress`,
-    `listAlgorandAddresses`, `getBridgeConfiguration` (read-only); `createPaymentTransaction`,
-    `createOptInTransaction`, `createAssetCreateTransaction`, `createSwapTransaction`,
-    `createBridgeTransaction` (a real [Aramid Finance](https://aramid.finance) bridge integration - see
-    "Aramid bridge integration" below), `createMultisigTransaction` (build-only, no `sign` claim needed -
-    see "Multisig transactions" below); `signTransaction` (new, standalone - forwards to BiatecOIDC's
-    `POST /wallet/sign`, requires `sign`), `mergeMultisigTransactions` (combines independently-signed
-    multisig copies, no BiatecOIDC/Algod call); `executeAlgorandTransaction` (broadcasts already-signed
-    transactions, requires `sign`). Every tool's `[Description]` names the next tool in the chain, since MCP
-    has no other side-channel for teaching the connected agent the intended protocol. All forward the
-    caller's own bearer token to BiatecOIDC rather than touching any key material - see "MCP server" under
-    Architecture notes below for the full request flow. The `create*`/`getAlgorandAddress` tools accept
-    optional `primaryAddress`/`slot` parameters to build against/from a specific seed/ARC-76 slot instead of
-    the default identity (see BiatecOIDC's "Multi-address signing" note). Every `genesisId` parameter across
-    these tools resolves against the dynamic, liveness-verified `IAlgorandChainRegistry` (see "Multi-chain
-    support" below) when it isn't one of the locally-configured `Algod:Networks` entries.
+    `listAlgorandAddresses`, `getBridgeConfiguration`, `listSupportedNetworks`, `getCryptoAddress`,
+    `getCryptoBalance` (read-only - the last three are chain-family-agnostic, see "EVM (Ethereum-family)
+    support" below); `createPaymentTransaction`, `createOptInTransaction`, `createAssetCreateTransaction`,
+    `createSwapTransaction`, `createBridgeTransaction` (a real [Aramid Finance](https://aramid.finance)
+    bridge integration - see "Aramid bridge integration" below), `createMultisigTransaction` (build-only, no
+    `sign` claim needed - see "Multisig transactions" below); `signTransaction` (new, standalone - forwards
+    to BiatecOIDC's `POST /wallet/sign`, requires `sign`), `mergeMultisigTransactions` (combines
+    independently-signed multisig copies, no BiatecOIDC/Algod call); `executeAlgorandTransaction` (broadcasts
+    already-signed transactions, requires `sign`). Every tool's `[Description]` names the next tool in the
+    chain, since MCP has no other side-channel for teaching the connected agent the intended protocol. All
+    forward the caller's own bearer token to BiatecOIDC rather than touching any key material - see "MCP
+    server" under Architecture notes below for the full request flow. The `create*`/`getAlgorandAddress`
+    tools accept optional `primaryAddress`/`slot` parameters to build against/from a specific seed/ARC-76
+    slot instead of the default identity (see BiatecOIDC's "Multi-address signing" note). Every `genesisId`
+    parameter across these tools resolves against the dynamic, liveness-verified `IAlgorandChainRegistry`
+    (see "Multi-chain support" below) when it isn't one of the locally-configured `Algod:Networks` entries.
   - `BusinessLogic/IBiatecWalletClient.cs` + `BiatecWalletClient.cs` — typed `HttpClient` wrapping BiatecOIDC's
-    `POST /wallet/sign`/`GET /wallet/seeds`/`GET /wallet/address`/`GET /wallet/address/{primaryAddress}/{slot}`,
-    forwarding the caller's bearer token; `WalletApiException` carries BiatecOIDC's `ProblemDetails` title/detail
-    back to the tool
+    `POST /wallet/sign`/`GET /wallet/seeds`/`GET /wallet/address`/`GET /wallet/address/{primaryAddress}/{slot}`/
+    `GET /wallet/evm/address`/`GET /wallet/evm/address/{primaryAddress}/{slot}`, forwarding the caller's
+    bearer token; `WalletApiException` carries BiatecOIDC's `ProblemDetails` title/detail back to the tool
   - `BusinessLogic/IDexQuoteProvider.cs` + `BiatecRouterQuoteProvider.cs`/`FolksRouterQuoteProvider.cs`/
     `HaystackRouterQuoteProvider.cs` + `DexSwapAggregatorService.cs` — `createSwapTransaction`'s quote
     comparison (see "DEX swap aggregation" under Architecture notes below for the scope decision on which
     provider can actually build a transaction today)
   - `BusinessLogic/AlgorandChainRegistryModels.cs`, `IPublicAlgodDataSource.cs`/`PublicAlgodDataSource.cs`,
-    `IAlgorandChainRegistry.cs`/`AlgorandChainRegistry.cs` — the dynamic multi-chain registry (see
+    `IAlgorandChainRegistry.cs`/`AlgorandChainRegistry.cs` — the dynamic multi-chain (AVM) registry (see
     "Multi-chain support" below); a separate, independently-implemented copy exists under `BiatecOIDC/`,
     per this repo's no-compile-time-coupling rule
+  - `BusinessLogic/EvmChainRegistryModels.cs`, `IPublicEvmRpcDataSource.cs`/`PublicEvmRpcDataSource.cs`,
+    `IEvmChainRegistry.cs`/`EvmChainRegistry.cs`, `INetworkResolver.cs`/`NetworkResolver.cs` — the EVM
+    (Ethereum-family) chain registry and the AVM/EVM-unifying network-name resolver (see "EVM
+    (Ethereum-family) support" below); `BiatecOIDC` has no copy of these - see that note for why
   - `BusinessLogic/IAramidBridgeConfigProvider.cs`/`AramidBridgeConfigProvider.cs`,
     `AramidBridgeModels.cs`, `Helper/AramidBridgeCalculator.cs` — Aramid Finance's live bridge
     configuration/fee math (see "Aramid bridge integration" below); backs both `getBridgeConfiguration` and
@@ -125,10 +130,14 @@ dependency on `BiatecSelfCustodyCore`.
     one button per provider registered in the catalog), `/authorize/challenge`, `/authorize/callback` (verifies
     storage-write access via `catalog.Resolve(idp).HasWriteAccessAsync(...)` before finalizing)
   - `Controllers/WalletController.cs` — `/wallet/sign` (`sign` claim), `/wallet/limits` get (identity only)/put
-    (`manage-limits` claim), `/wallet/limits/currencies` (identity only); same manual bearer-token pattern as
-    `JwtIssuerController`'s `/userinfo` (not `[Authorize]` — see `.claude/skills/biatec-oidc-jwt/SKILL.md`)
+    (`manage-limits` claim), `/wallet/limits/currencies` (identity only), `/wallet/evm/address` +
+    `/wallet/evm/address/{primaryAddress}/{slot?}` (identity only - EVM address derivation, see "EVM
+    (Ethereum-family) support" below); same manual bearer-token pattern as `JwtIssuerController`'s
+    `/userinfo` (not `[Authorize]` — see `.claude/skills/biatec-oidc-jwt/SKILL.md`)
   - `Controllers/ChainsController.cs` + `Model/ChainsModels.cs` — `GET /chains`, `[AllowAnonymous]`, no bearer
     token needed - the public, liveness-checked Algorand chain registry (see "Multi-chain support" below)
+  - `wwwroot/chains.html` — the public per-chain-family feature matrix page (see "EVM (Ethereum-family)
+    support" below); purely static, fetches `GET /chains` client-side, no dedicated backend code
   - `BusinessLogic/AlgorandChainRegistryModels.cs`, `IPublicAlgodDataSource.cs`/`PublicAlgodDataSource.cs`,
     `IAlgorandChainRegistry.cs`/`AlgorandChainRegistry.cs` — an independent copy of `BiatecMCP`'s own registry
     (see "Multi-chain support" below), duplicated rather than shared via `BiatecSelfCustodyCore` per this
@@ -487,6 +496,56 @@ setup stage needs.
   which chains this deployment currently considers usable; the response deliberately omits each node's own
   auth token/header (`AlgodApiToken`/`AlgodApiTokenHeader`), unlike `BiatecMCP`'s internal copy which needs
   them to actually call the node.
+- **EVM (Ethereum-family) support**: every Biatec seed already has an Ethereum-family identity, not just an
+  Algorand one - `AlgorandARC76AccountDotNet.ARC76.GetEVMEmailAccount(email, mnemonic, slot)` derives an
+  independent secp256k1 keypair (`Nethereum.Signer.EthECKey`, already transitively available - no new
+  package reference needed) from the exact same mnemonic/email/slot `ARC76.GetEmailAccount` uses for
+  Algorand. No new seed, consent flow, or storage format was needed; `CloudAccountRepository`/
+  `ICloudAccountRepository` (`BiatecSelfCustodyCore`) just gained `DeriveEvmAddressAsync`, mirroring
+  `DeriveAddressAsync` exactly (same `ResolveSeedEntryAsync` seed lookup) but calling
+  `.GetEVMEmailAccount(...).GetPublicAddress()` instead. `WalletController` exposes this as `GET
+  /wallet/evm/address` / `GET /wallet/evm/address/{primaryAddress}/{slot?}` (mirroring the AVM address
+  endpoints) - there is deliberately no per-EVM-chain concept at this layer, since one EVM address is valid
+  across every EVM chain (unlike Algorand's per-`genesisId` split), so **`BiatecOIDC` has no EVM chain
+  registry at all**. Scope today is address + native-balance only - no EVM transaction building/signing/
+  broadcasting, no ERC-20 balances (both explicitly out of scope; see `BiatecMCP.cs`'s `getCryptoBalance`
+  remarks).
+
+  Chain-specific RPC discovery, needed only for balance queries, lives entirely in `BiatecMCP`:
+  `IEvmChainRegistry`/`EvmChainRegistry` (`BiatecMCP/BusinessLogic/`) resolves EVM chains from
+  [chainid.network's public chain list](https://chainid.network/chains.json) - unlike
+  `IAlgorandChainRegistry`'s eager whole-list liveness check (affordable only because that list has ~7
+  entries), this list has ~2,700 entries, so liveness is verified **lazily, per requested chain only**
+  (`TryGetChainAsync(chainId)`/`TryGetChainByNameAsync(name)`), with a short per-chain result cache (a few
+  minutes) on top of the ~10-minute raw-list cache. `IPublicEvmRpcDataSource`/`PublicEvmRpcDataSource` is the
+  same interface-seam/real-HTTP-impl split as `IPublicAlgodDataSource` - raw JSON-RPC (`eth_chainId` for
+  liveness, `eth_getBalance` for balance) via plain `HttpClient` POSTs, no Nethereum.Web3/RPC package needed.
+  Name matching strips a trailing " Mainnet"/" One" before comparing (so "Ethereum" matches chains.json's
+  "Ethereum Mainnet" and "Arbitrum" matches "Arbitrum One") - this alone covers every chain name the wallet
+  needs without a hardcoded alias table.
+
+  `INetworkResolver`/`NetworkResolver` (`BiatecMCP/BusinessLogic/`) unifies both registries behind one
+  `network` string parameter: locally-configured `Algod:Networks` first (same precedence `GetAlgodSettings`
+  already applies, independently reimplemented here rather than refactoring that method), then live AVM
+  genesis-id/name match, then numeric EVM chain id, then EVM name match (covering the whole public list, not
+  just well-known chains). Backs three new, chain-family-agnostic MCP tools: `listSupportedNetworks`
+  (every live AVM chain plus four well-known EVM chains - Ethereum/Gnosis/Arbitrum/Base, the ones named when
+  this was built - for discovery; other public EVM chains resolve too, just aren't listed there),
+  `getCryptoAddress` (AVM family delegates straight to the existing `ResolveAlgorandAddressAsync` since an
+  AVM address is genesisId-independent; EVM family calls the new wallet-client methods), and
+  `getCryptoBalance` (AVM: `DefaultApi.AccountInformationAsync` against the resolved chain's algod, same
+  pattern as `CheckDestinationLiquidityAsync`, native balance + ASA holdings capped at 50; EVM:
+  `IPublicEvmRpcDataSource.TryGetBalanceAsync` against the resolved chain's live RPC, native token only - the
+  wei amount is carried as a decimal string, `NativeBalanceBaseUnits`, never `ulong`, since a real wei balance
+  can exceed `ulong.MaxValue`).
+
+  `BiatecOIDC/wwwroot/chains.html` (linked from `index.html`'s nav) is the "nice graphical" per-chain-family
+  capability matrix: purely static HTML/CSS/JS, fetches the existing `GET /chains` client-side for the live
+  AVM rows and renders a small hardcoded EVM chain list (the same four well-known ones) for the EVM rows - no
+  new backend code. Per the capability rules as of this feature: every AVM chain supports address/balance/
+  sign/rekey; only Algorand mainnet supports spending limits (Biatec Router isn't deployed to other AVM
+  chains yet); every EVM chain supports address/balance (native token only) but not sign/limits/rekey yet
+  (sending EVM transactions is planned; rekey has no EVM equivalent at all).
 - **Aramid bridge integration**: `createBridgeTransaction` bridges assets off Algorand via
   [Aramid Finance](https://aramid.finance), per its published AI-agent integration guide
   (`https://raw.githubusercontent.com/AramidFinance/docs/refs/heads/main/docs/developers/ai-agent-integration.md`).
@@ -552,8 +611,10 @@ setup stage needs.
   `(primaryAddress, slot)`'s own bucket via optional `primaryAddress`/`slot` query params — see "Multi-address
   signing" above and "Two-tier spending limits" below), `GET /wallet/limits/currencies`
   (every currency a limit can be set in, with its current USD rate), `GET /wallet/address` +
-  `GET /wallet/address/{primaryAddress}/{slot?}`, and `GET`/`POST /wallet/seeds` +
-  `PUT /wallet/seeds/primary` (the multi-seed vault — see the bullet above). `POST /wallet/sign` and
+  `GET /wallet/address/{primaryAddress}/{slot?}` (+ their EVM-family counterparts, `GET /wallet/evm/address` +
+  `GET /wallet/evm/address/{primaryAddress}/{slot?}` — see "EVM (Ethereum-family) support" below), and
+  `GET`/`POST /wallet/seeds` + `PUT /wallet/seeds/primary` (the multi-seed vault — see the bullet above).
+  `POST /wallet/sign` and
   `PUT /wallet/limits` are gated on a dedicated claim of the same name as the scope (`sign`/`manage-limits`),
   stamped onto the access token by `JwtIssuerService.CreateAccessToken` only when that scope was granted **and**
   the client's `AllowedScopes` allowlists it — existing clients don't get these implicitly; `GET /wallet/limits`,

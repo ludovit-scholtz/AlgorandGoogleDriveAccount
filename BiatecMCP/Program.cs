@@ -155,6 +155,14 @@ namespace BiatecMCP
             builder.Services.AddScoped<IPublicAlgodDataSource, PublicAlgodDataSource>();
             builder.Services.AddScoped<IAlgorandChainRegistry, AlgorandChainRegistry>();
 
+            // EVM (Ethereum-family) chain discovery - lazy per-chain liveness verification against
+            // https://chainid.network/chains.json (unlike AlgorandChainRegistry's eager whole-list check,
+            // affordable only because that list is tiny - see EvmChainRegistry's remarks), plus the
+            // network-name resolver that unifies both chain families for getCryptoAddress/getCryptoBalance.
+            builder.Services.AddScoped<IPublicEvmRpcDataSource, PublicEvmRpcDataSource>();
+            builder.Services.AddScoped<IEvmChainRegistry, EvmChainRegistry>();
+            builder.Services.AddScoped<INetworkResolver, NetworkResolver>();
+
             // Configure MCP Server
             builder.Services.AddMcpServer()
                 .WithHttpTransport(options =>

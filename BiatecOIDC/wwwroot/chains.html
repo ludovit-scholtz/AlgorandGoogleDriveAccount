@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Biatec OIDC — which blockchains are supported today, and what's supported on each: address derivation, balance queries, signing, spending limits, and rekey.">
+    <title>Biatec OIDC — Supported Chains &amp; Feature Matrix</title>
+    <link rel="icon" href="/logo-biatec.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-0: #05060d;
+            --bg-1: #0a0d1a;
+            --bg-2: #10142a;
+            --panel: rgba(18, 22, 42, 0.6);
+            --panel-border: rgba(140, 160, 255, 0.14);
+            --text-0: #eef1fb;
+            --text-1: #aab1cf;
+            --text-2: #6d759a;
+            --accent-cyan: #4de3ff;
+            --accent-violet: #9b7bff;
+            --accent-green: #35e6a4;
+            --accent-pink: #ff6bd6;
+            --accent-amber: #ffb84d;
+            --font-display: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+            --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: var(--font-display);
+            color: var(--text-0);
+            background: var(--bg-0);
+            min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        .aurora {
+            position: fixed;
+            inset: 0;
+            z-index: -2;
+            background:
+                radial-gradient(60vw 60vw at 12% 8%, rgba(77, 227, 255, 0.16), transparent 60%),
+                radial-gradient(55vw 55vw at 88% 18%, rgba(155, 123, 255, 0.18), transparent 60%),
+                radial-gradient(70vw 70vw at 50% 100%, rgba(53, 230, 164, 0.10), transparent 60%),
+                linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 45%, var(--bg-2) 100%);
+        }
+
+        .grid-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            background-image:
+                linear-gradient(rgba(140, 160, 255, 0.055) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(140, 160, 255, 0.055) 1px, transparent 1px);
+            background-size: 44px 44px;
+            mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 30%, transparent 90%);
+        }
+
+        a { color: inherit; }
+
+        .glow-text {
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet) 55%, var(--accent-pink));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .navbar {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+            background: rgba(6, 8, 18, 0.55);
+            backdrop-filter: blur(18px) saturate(140%);
+            -webkit-backdrop-filter: blur(18px) saturate(140%);
+            border-bottom: 1px solid var(--panel-border);
+        }
+
+        .nav-container {
+            max-width: 1240px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.9rem 2rem;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+
+        .logo img { height: 26px; width: auto; display: block; }
+
+        .nav-links {
+            display: flex;
+            list-style: none;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .nav-links a {
+            text-decoration: none;
+            color: var(--text-1);
+            font-weight: 500;
+            font-size: 0.92rem;
+            transition: color 0.25s ease;
+        }
+
+        .nav-links a:hover { color: var(--text-0); }
+
+        .container {
+            max-width: 1240px;
+            margin: 0 auto;
+            padding: 9rem 2rem 4rem;
+        }
+
+        .hero {
+            text-align: center;
+            margin-bottom: 3.5rem;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 1rem;
+            border-radius: 999px;
+            border: 1px solid var(--panel-border);
+            background: var(--panel);
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--accent-cyan);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin-bottom: 1.75rem;
+        }
+
+        .hero h1 {
+            font-size: clamp(2.2rem, 5vw, 3.6rem);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+            margin-bottom: 1.2rem;
+        }
+
+        .hero p.subtitle {
+            font-size: clamp(1rem, 1.5vw, 1.15rem);
+            color: var(--text-1);
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        section { margin: 4rem 0; }
+
+        .section-head { max-width: 720px; margin: 0 auto 2rem; text-align: center; }
+        .section-head .kicker {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--accent-violet);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 0.6rem;
+        }
+        .section-head h2 { font-size: clamp(1.5rem, 2.6vw, 2rem); font-weight: 700; margin-bottom: 0.6rem; }
+        .section-head p { color: var(--text-1); }
+
+        .table-wrap { overflow-x: auto; border-radius: 16px; }
+
+        .ref-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .ref-table th, .ref-table td {
+            text-align: left;
+            padding: 0.9rem 1.2rem;
+            font-size: 0.88rem;
+            border-bottom: 1px solid var(--panel-border);
+            white-space: nowrap;
+        }
+
+        .ref-table th {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-2);
+            background: rgba(255,255,255,0.02);
+        }
+
+        .ref-table td { color: var(--text-1); }
+        .ref-table td .mono { font-family: var(--font-mono); color: var(--accent-cyan); font-size: 0.85em; }
+        .ref-table tr:last-child td { border-bottom: none; }
+
+        .feat { font-family: var(--font-mono); font-size: 0.95em; }
+        .feat-yes { color: var(--accent-green); }
+        .feat-no { color: var(--text-2); }
+        .feat-partial { color: var(--accent-amber); }
+        .feat-note { display: block; color: var(--text-2); font-size: 0.72rem; font-family: var(--font-display); white-space: normal; margin-top: 0.15rem; }
+
+        .loading-row td { color: var(--text-2); font-style: italic; }
+
+        .callout {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-start;
+            background: linear-gradient(180deg, rgba(77, 227, 255, 0.08), var(--panel) 70%);
+            border: 1px solid rgba(77, 227, 255, 0.3);
+            border-radius: 16px;
+            padding: 1.25rem 1.5rem;
+            margin-top: 2rem;
+        }
+        .callout .callout-icon { font-size: 1.3rem; flex-shrink: 0; }
+        .callout p { color: var(--text-1); font-size: 0.9rem; margin: 0; }
+        .callout strong { color: var(--text-0); }
+        .callout code { font-family: var(--font-mono); color: var(--accent-cyan); }
+
+        .footer {
+            border-top: 1px solid var(--panel-border);
+            padding: 2.5rem 0 3rem;
+            text-align: center;
+            color: var(--text-2);
+        }
+        .footer-links { margin-bottom: 1rem; }
+        .footer-links a {
+            color: var(--text-1);
+            text-decoration: none;
+            margin: 0 1rem;
+            font-size: 0.9rem;
+            transition: color 0.25s ease;
+        }
+        .footer-links a:hover { color: var(--accent-cyan); }
+        .footer p { font-size: 0.82rem; }
+    </style>
+</head>
+<body>
+    <div class="aurora"></div>
+    <div class="grid-overlay"></div>
+
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="logo">
+                <img src="/logo-biatec.png" alt="Biatec logo">
+                <span>Biatec OIDC</span>
+            </div>
+            <ul class="nav-links">
+                <li><a href="/">Docs</a></li>
+                <li><a href="/#wallet-api">Wallet API</a></li>
+                <li><a href="/chains">GET /chains</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section class="hero">
+            <div class="eyebrow">Supported chains</div>
+            <h1>What's supported, <span class="glow-text">per chain</span></h1>
+            <p class="subtitle">
+                Every Biatec self-custody account already has both an Algorand-family (AVM) identity and an
+                Ethereum-family (EVM) identity, derived from the same seed. Not every capability is available on
+                every chain yet — this page tracks exactly what is.
+            </p>
+        </section>
+
+        <section id="avm-chains">
+            <div class="section-head">
+                <div class="kicker">Algorand-family (AVM)</div>
+                <h2>Live, currently-supported AVM chains</h2>
+                <p>Sourced live from <a href="/chains"><code style="font-family:var(--font-mono);color:var(--accent-cyan);">GET /chains</code></a> — every chain in the public genesis registry with at least one currently-live, genesis-hash-matching public algod node.</p>
+            </div>
+            <div class="table-wrap">
+                <table class="ref-table" id="avmTable">
+                    <thead>
+                        <tr>
+                            <th>Chain</th>
+                            <th>Genesis ID</th>
+                            <th>Address</th>
+                            <th>Balance</th>
+                            <th>Send / Sign</th>
+                            <th>Spending limits</th>
+                            <th>Rekey</th>
+                        </tr>
+                    </thead>
+                    <tbody id="avmTableBody">
+                        <tr class="loading-row"><td colspan="7">Loading live chain list from /chains…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="evm-chains">
+            <div class="section-head">
+                <div class="kicker">Ethereum-family (EVM)</div>
+                <h2>Well-known EVM chains</h2>
+                <p>Every seed's EVM address is the same across every EVM chain — these four are just the ones most commonly asked for. Any other public chain (by name or numeric chain id) also works for address/balance lookups via BiatecMCP's tools.</p>
+            </div>
+            <div class="table-wrap">
+                <table class="ref-table" id="evmTable">
+                    <thead>
+                        <tr>
+                            <th>Chain</th>
+                            <th>Chain ID</th>
+                            <th>Address</th>
+                            <th>Balance</th>
+                            <th>Send / Sign</th>
+                            <th>Spending limits</th>
+                            <th>Rekey</th>
+                        </tr>
+                    </thead>
+                    <tbody id="evmTableBody"></tbody>
+                </table>
+            </div>
+            <div class="callout">
+                <span class="callout-icon">ℹ️</span>
+                <p>
+                    EVM support today covers <strong>address derivation and native-token balance queries only</strong> —
+                    sending/signing EVM transactions is planned but not yet implemented. Spending limits aren't
+                    applicable yet (no signing), and rekey has no EVM equivalent (it's an Algorand protocol
+                    feature). Query balances and addresses via BiatecMCP's <code>getCryptoAddress</code>/
+                    <code>getCryptoBalance</code> tools — see <code>listSupportedNetworks</code> for the full,
+                    live list of chains it currently supports.
+                </p>
+            </div>
+        </section>
+
+        <footer class="footer">
+            <div class="footer-links">
+                <a href="/">Docs</a>
+                <a href="/swagger">OpenAPI</a>
+                <a href="https://google.biatec.io/privacy.html">Privacy Policy</a>
+                <a href="https://google.biatec.io/terms.html">Terms of Service</a>
+            </div>
+            <p>&copy; 2026 Biatec (Scholtz &amp; Company, j.s.a.). All rights reserved.</p>
+        </footer>
+    </div>
+
+    <script>
+        const YES = '<span class="feat feat-yes">&#10003;</span>';
+        const NO_PLANNED = '<span class="feat feat-partial">&#8212;<span class="feat-note">planned</span></span>';
+        const NO_NA = '<span class="feat feat-no">&#8212;<span class="feat-note">n/a</span></span>';
+
+        const WELL_KNOWN_EVM_CHAINS = [
+            { name: 'Ethereum', chainId: 1 },
+            { name: 'Gnosis', chainId: 100 },
+            { name: 'Arbitrum One', chainId: 42161 },
+            { name: 'Base', chainId: 8453 }
+        ];
+
+        function renderEvmTable() {
+            const body = document.getElementById('evmTableBody');
+            body.innerHTML = WELL_KNOWN_EVM_CHAINS.map(chain => `
+                <tr>
+                    <td>${chain.name}</td>
+                    <td class="mono">${chain.chainId}</td>
+                    <td>${YES}</td>
+                    <td>${YES}<span class="feat-note">native token only</span></td>
+                    <td>${NO_PLANNED}</td>
+                    <td>${NO_PLANNED}</td>
+                    <td>${NO_NA}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function renderAvmTable() {
+            const body = document.getElementById('avmTableBody');
+            try {
+                const response = await fetch('/chains');
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status);
+                }
+                const data = await response.json();
+                const chains = (data.chains || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+                if (chains.length === 0) {
+                    body.innerHTML = '<tr class="loading-row"><td colspan="7">No chains currently live.</td></tr>';
+                    return;
+                }
+
+                body.innerHTML = chains.map(chain => {
+                    const isMainnet = chain.genesisId === 'mainnet-v1.0';
+                    return `
+                        <tr>
+                            <td>${chain.name}</td>
+                            <td class="mono">${chain.genesisId}</td>
+                            <td>${YES}</td>
+                            <td>${YES}</td>
+                            <td>${YES}</td>
+                            <td>${isMainnet ? YES : NO_PLANNED}</td>
+                            <td>${YES}</td>
+                        </tr>
+                    `;
+                }).join('');
+            } catch (err) {
+                body.innerHTML = '<tr class="loading-row"><td colspan="7">Could not load the live chain list right now — try refreshing.</td></tr>';
+            }
+        }
+
+        renderEvmTable();
+        renderAvmTable();
+    </script>
+</body>
+</html>

@@ -178,6 +178,63 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task ListEvmAddressesAsync_ForwardsBearerTokenAndParsesResponse()
+        {
+            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new ListEvmAddressesResponse
+                {
+                    Addresses =
+                    {
+                        new EvmAddressResponse { Address = "0xEVM1", IsPrimary = false },
+                        new EvmAddressResponse { Address = "0xEVM2", IsPrimary = true }
+                    }
+                })
+            });
+            var client = CreateClient(handler, out var captured);
+
+            var result = await client.ListEvmAddressesAsync("the-bearer-token");
+
+            Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
+            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/evm/address"));
+            Assert.That(captured.LastRequest.Headers.Authorization!.Parameter, Is.EqualTo("the-bearer-token"));
+            Assert.That(result.Addresses, Has.Count.EqualTo(2));
+            Assert.That(result.Addresses.Single(a => a.IsPrimary).Address, Is.EqualTo("0xEVM2"));
+        }
+
+        [Test]
+        public async Task GetEvmAddressAsync_ForwardsBearerTokenAndParsesResponse()
+        {
+            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new DerivedEvmAddressResponse { Address = "0xDERIVED", PrimaryAddress = "ADDR1", Slot = 3 })
+            });
+            var client = CreateClient(handler, out var captured);
+
+            var result = await client.GetEvmAddressAsync("the-bearer-token", "ADDR1", 3);
+
+            Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
+            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/evm/address/ADDR1/3"));
+            Assert.That(result.Address, Is.EqualTo("0xDERIVED"));
+        }
+
+        [Test]
+        public void GetEvmAddressAsync_UnknownSeed_ThrowsWalletApiException()
+        {
+            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent(
+                    """{"title":"seed_not_found","detail":"No seed with address 'X' exists."}""",
+                    Encoding.UTF8, "application/problem+json")
+            });
+            var client = CreateClient(handler, out _);
+
+            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.GetEvmAddressAsync("token", "X", 0));
+
+            Assert.That(ex!.ErrorCode, Is.EqualTo("seed_not_found"));
+        }
+
+        [Test]
         public async Task ListSeedsAsync_ForwardsBearerTokenAndParsesResponse()
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)

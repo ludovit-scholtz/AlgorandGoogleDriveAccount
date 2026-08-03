@@ -151,4 +151,34 @@ namespace BiatecOIDC.Model
         /// <summary>The ARC-76 derivation slot that was used, echoed back.</summary>
         public int Slot { get; set; }
     }
+
+    /// <summary>One seed's EVM address, as returned by <c>GET /wallet/evm/address</c>. Same seed as <see cref="AddressResponse"/> - just derived via <c>ARC76.GetEVMEmailAccount</c> instead of <c>ARC76.GetEmailAccount</c>, so it's the same address across every EVM chain.</summary>
+    public class EvmAddressResponse
+    {
+        /// <summary>This seed's EVM address (slot 0), <c>"0x..."</c>.</summary>
+        public string Address { get; set; } = string.Empty;
+
+        /// <summary>Whether this is the seed currently used for normal signing (<c>POST /wallet/sign</c>) when no <c>PrimaryAddress</c> is given.</summary>
+        public bool IsPrimary { get; set; }
+    }
+
+    /// <summary>Response body for <c>GET /wallet/evm/address</c>.</summary>
+    public class ListEvmAddressesResponse
+    {
+        /// <summary>Every seed's EVM address in the caller's vault. Exactly one has <see cref="EvmAddressResponse.IsPrimary"/> set.</summary>
+        public List<EvmAddressResponse> Addresses { get; set; } = new();
+    }
+
+    /// <summary>Response body for <c>GET /wallet/evm/address/{primaryAddress}/{slot?}</c>.</summary>
+    public class DerivedEvmAddressResponse
+    {
+        /// <summary>The derived EVM address at <see cref="Slot"/> for the seed identified by <see cref="PrimaryAddress"/>.</summary>
+        public string Address { get; set; } = string.Empty;
+
+        /// <summary>The seed's identifying (Algorand slot-0) address, echoed back.</summary>
+        public string PrimaryAddress { get; set; } = string.Empty;
+
+        /// <summary>The ARC-76 derivation slot that was used, echoed back.</summary>
+        public int Slot { get; set; }
+    }
 }

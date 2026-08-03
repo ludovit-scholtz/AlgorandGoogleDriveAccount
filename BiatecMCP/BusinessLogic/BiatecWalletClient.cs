@@ -89,6 +89,36 @@ namespace BiatecMCP.BusinessLogic
                 ?? new DerivedAddressResponse();
         }
 
+        public async Task<ListEvmAddressesResponse> ListEvmAddressesAsync(string bearerToken, CancellationToken cancellationToken = default)
+        {
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, "wallet/evm/address");
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+            using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw await BuildExceptionAsync(response, cancellationToken);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ListEvmAddressesResponse>(cancellationToken)
+                ?? new ListEvmAddressesResponse();
+        }
+
+        public async Task<DerivedEvmAddressResponse> GetEvmAddressAsync(string bearerToken, string primaryAddress, int slot, CancellationToken cancellationToken = default)
+        {
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, $"wallet/evm/address/{Uri.EscapeDataString(primaryAddress)}/{slot}");
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+            using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw await BuildExceptionAsync(response, cancellationToken);
+            }
+
+            return await response.Content.ReadFromJsonAsync<DerivedEvmAddressResponse>(cancellationToken)
+                ?? new DerivedEvmAddressResponse();
+        }
+
         private static async Task<WalletApiException> BuildExceptionAsync(HttpResponseMessage response, CancellationToken cancellationToken)
         {
             ProblemDetails? problem = null;

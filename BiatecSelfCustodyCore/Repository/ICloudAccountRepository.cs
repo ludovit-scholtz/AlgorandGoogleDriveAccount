@@ -58,6 +58,17 @@ namespace BiatecSelfCustodyCore.Repository
         Task<string> DeriveAddressAsync(string email, string provider, string? primaryAddress, int slot, string? accessToken = null);
 
         /// <summary>
+        /// Derives (without signing or mutating anything) the EVM address at <paramref name="slot"/> for the
+        /// seed identified by <paramref name="primaryAddress"/> (<c>null</c> = the vault's current primary
+        /// seed) - the same mnemonic used for <see cref="DeriveAddressAsync"/>, just derived via
+        /// <c>ARC76.GetEVMEmailAccount</c> instead of <c>ARC76.GetEmailAccount</c>, so every existing seed
+        /// already has an EVM identity without any new consent flow or storage format. Throws
+        /// <see cref="InvalidOperationException"/> if <paramref name="primaryAddress"/> is given but no seed
+        /// in the vault has that address.
+        /// </summary>
+        Task<string> DeriveEvmAddressAsync(string email, string provider, string? primaryAddress, int slot, string? accessToken = null);
+
+        /// <summary>
         /// Resolves and validates a seed selector to its identifying address, without deriving any
         /// slot address - <c>null</c> resolves to the vault's current primary seed (auto-creating the
         /// first seed if the vault is empty, same side effect as <see cref="LoadAccountAsync"/>); a

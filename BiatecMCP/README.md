@@ -43,6 +43,20 @@ falls back to this dynamically discovered, liveness-verified registry, cached in
 same registry backs `createBridgeTransaction`'s destination-liquidity check (below) and BiatecOIDC's public
 `GET /chains` endpoint.
 
+## EVM (Ethereum-family) support
+
+Every Biatec account already has an Ethereum-family identity too, derived from the exact same seed as its
+Algorand identity — no separate sign-in or consent needed. `getCryptoAddress`/`getCryptoBalance` work across
+both chain families (Algorand-family and Ethereum-family) via one `network` parameter — pass `"Algorand"`,
+`"Voi"`, `"Aramid"`, `"Ethereum"`, `"Gnosis"`, `"Arbitrum"`, `"Base"`, or any other public chain name/id; call
+`listSupportedNetworks` to see what's currently resolvable. EVM chain RPCs are discovered from
+[chainid.network's public chain list](https://chainid.network/chains.json), verified live only for the
+specific chain asked about (not the whole ~2,700-chain list). **EVM support today covers address derivation
+and native-token balance queries only** — sending/signing EVM transactions, ERC-20 token balances, spending
+limits, and rekey are not yet available on EVM chains (rekey has no EVM equivalent at all). See
+[BiatecOIDC's supported-chains page](https://oidc.biatec.io/chains.html) for the full per-chain-family
+capability matrix.
+
 ## Available MCP tools
 
 Wallet operations are three separate, chainable steps — **build** an unsigned transaction, **sign** it, then
@@ -58,6 +72,17 @@ request is handled as three chained tool calls automatically.
   different address instead.
 - **`listAlgorandAddresses`** — lists every seed's identifying address in the account, and which one is primary.
   Use an address from here as `primaryAddress` on the other tools.
+- **`listSupportedNetworks`** — lists every blockchain network currently usable with `getCryptoAddress`/
+  `getCryptoBalance`: every live Algorand-family chain, plus a few well-known Ethereum-family chains
+  (Ethereum, Gnosis, Arbitrum, Base). Other public EVM chains not listed here also work by name or numeric
+  chain id. No authentication required.
+- **`getCryptoAddress`** — returns the signed-in account's address on a given `network` (Algorand-family
+  *or* Ethereum-family — both derived from the same seed). An Algorand-family address is the same across
+  every AVM chain; an Ethereum-family address is the same across every EVM chain — `network` just picks
+  which family's address to return.
+- **`getCryptoBalance`** — returns the native-currency balance (and, on Algorand-family chains, ASA
+  holdings) for an address on a given `network`. Omit `address` to check the signed-in account's own
+  address. EVM balances are the native gas token only (e.g. ETH) — ERC-20 token balances aren't supported.
 - **`createPaymentTransaction`** — builds an unsigned native-ALGO payment or ASA transfer. An empty
   `receiverAccount` builds a self-transfer. Does not sign or broadcast.
 - **`createOptInTransaction`** — builds an unsigned ASA opt-in (a zero-amount self-transfer). Does not sign or
@@ -103,6 +128,12 @@ request is handled as three chained tool calls automatically.
 - *"what is my algorand address"* → `getAlgorandAddress()`
 - *"what is my second address"* → `getAlgorandAddress(slot=1)`
 - *"list all my algorand addresses"* → `listAlgorandAddresses()`
+- *"what networks can I use"* → `listSupportedNetworks()`
+- *"what is my ethereum address"* → `getCryptoAddress(network="Ethereum")`
+- *"what is my address on Voi"* → `getCryptoAddress(network="Voi")` — same as `getAlgorandAddress()`, since an
+  Algorand-family address is the same across every AVM chain.
+- *"how much ETH do I have"* → `getCryptoBalance(network="Ethereum")`
+- *"check the balance of 0xABCD...WXYZ on Arbitrum"* → `getCryptoBalance(network="Arbitrum", address="0xABCD...WXYZ")`
 - *"pay to address ABCD...WXYZ 1 algo with note biatec"* → `createPaymentTransaction(receiverAccount="ABCD...WXYZ",
   amount=1000000, note="biatec")` → `signTransaction(...)` → `executeAlgorandTransaction(...)` — three chained
   calls, signing with the default identity (primary seed, slot 0).

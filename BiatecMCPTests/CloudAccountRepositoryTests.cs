@@ -304,6 +304,69 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task DeriveEvmAddressAsync_DiffersFromAlgorandAddressForSameSeedAndSlot()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var algorandAddress = await repository.DeriveAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var evmAddress = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", null, 0, "token");
+
+            Assert.That(evmAddress, Does.StartWith("0x"));
+            Assert.That(evmAddress, Is.Not.EqualTo(algorandAddress));
+        }
+
+        [Test]
+        public async Task DeriveEvmAddressAsync_IsDeterministicForTheSameSeedAndSlot()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var first = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var second = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", null, 0, "token");
+
+            Assert.That(second, Is.EqualTo(first));
+        }
+
+        [Test]
+        public async Task DeriveEvmAddressAsync_NonZeroSlot_DiffersFromSlotZero()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var slot0 = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var slot1 = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", null, 1, "token");
+
+            Assert.That(slot1, Is.Not.EqualTo(slot0));
+        }
+
+        [Test]
+        public async Task DeriveEvmAddressAsync_SpecificSeed_DerivesFromThatSeed()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+            var secondSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
+
+            var derivedFromPrimary = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var derivedFromSecond = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", secondSeed.PrimaryAddress, 0, "token");
+
+            Assert.That(derivedFromSecond, Is.Not.EqualTo(derivedFromPrimary));
+        }
+
+        [Test]
+        public void DeriveEvmAddressAsync_UnknownPrimaryAddress_ThrowsInvalidOperationException()
+        {
+            var repository = CreateRepository();
+
+            Assert.That(async () =>
+                {
+                    await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+                    await repository.DeriveEvmAddressAsync(TestEmail, "Fake", "NOTAREALADDRESS", 0, "token");
+                },
+                Throws.InvalidOperationException);
+        }
+
+        [Test]
         public async Task ResolveSeedAddressAsync_NullSelector_ReturnsCurrentPrimarySeedAddress()
         {
             var repository = CreateRepository();

@@ -30,5 +30,14 @@ namespace BiatecMCP.BusinessLogic
         /// <paramref name="primaryAddress"/>. Throws <see cref="WalletApiException"/> (e.g. <c>seed_not_found</c>) on failure.
         /// </summary>
         Task<DerivedAddressResponse> GetAddressAsync(string bearerToken, string primaryAddress, int slot, CancellationToken cancellationToken = default);
+
+        /// <summary>Lists every seed's EVM address in the caller's vault, and which one is primary. Throws <see cref="WalletApiException"/> on failure.</summary>
+        Task<ListEvmAddressesResponse> ListEvmAddressesAsync(string bearerToken, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Derives the EVM address at <paramref name="slot"/> for the seed identified by
+        /// <paramref name="primaryAddress"/>. Throws <see cref="WalletApiException"/> (e.g. <c>seed_not_found</c>) on failure.
+        /// </summary>
+        Task<DerivedEvmAddressResponse> GetEvmAddressAsync(string bearerToken, string primaryAddress, int slot, CancellationToken cancellationToken = default);
     }
 }

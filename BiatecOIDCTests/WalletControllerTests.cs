@@ -751,5 +751,100 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
         }
+
+        [Test]
+        public async Task ListEvmAddresses_ReturnsDerivedEvmAddressesWithIsPrimary()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new List<SeedSummary>
+                {
+                    new("ADDR1", DateTimeOffset.UtcNow, true),
+                    new("ADDR2", DateTimeOffset.UtcNow, false)
+                });
+            _mockAccountRepository
+                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("0xEVM1");
+            _mockAccountRepository
+                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR2", 0, It.IsAny<string?>()))
+                .ReturnsAsync("0xEVM2");
+
+            var result = await _controller.ListEvmAddresses();
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as ListEvmAddressesResponse;
+            Assert.That(response!.Addresses, Has.Count.EqualTo(2));
+            Assert.That(response.Addresses[0].Address, Is.EqualTo("0xEVM1"));
+            Assert.That(response.Addresses[0].IsPrimary, Is.True);
+            Assert.That(response.Addresses[1].Address, Is.EqualTo("0xEVM2"));
+            Assert.That(response.Addresses[1].IsPrimary, Is.False);
+        }
+
+        [Test]
+        public async Task ListEvmAddresses_NoBearerToken_ReturnsUnauthorized()
+        {
+            var result = await _controller.ListEvmAddresses();
+
+            Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
+        }
+
+        [Test]
+        public async Task GetEvmAddress_KnownSeed_ReturnsDerivedAddress()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 2, It.IsAny<string?>()))
+                .ReturnsAsync("0xDERIVED");
+
+            var result = await _controller.GetEvmAddress("ADDR1", 2);
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as DerivedEvmAddressResponse;
+            Assert.That(response!.Address, Is.EqualTo("0xDERIVED"));
+            Assert.That(response.PrimaryAddress, Is.EqualTo("ADDR1"));
+            Assert.That(response.Slot, Is.EqualTo(2));
+        }
+
+        [Test]
+        public async Task GetEvmAddress_NoSlotGiven_DefaultsToZero()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("0xDERIVED");
+
+            var result = await _controller.GetEvmAddress("ADDR1", null);
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockAccountRepository.Verify(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()), Times.Once);
+        }
+
+        [Test]
+        public async Task GetEvmAddress_UnknownSeed_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "NOTAREALADDRESS", 0, It.IsAny<string?>()))
+                .ThrowsAsync(new InvalidOperationException("No seed with address 'NOTAREALADDRESS' exists for this account."));
+
+            var result = await _controller.GetEvmAddress("NOTAREALADDRESS", null);
+
+            Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task GetEvmAddress_NoBearerToken_ReturnsUnauthorized()
+        {
+            var result = await _controller.GetEvmAddress("ADDR1", null);
+
+            Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
+        }
     }
 }

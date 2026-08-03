@@ -113,6 +113,36 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
+        public async Task<string> DeriveEvmAddressAsync(string email, string provider, string? primaryAddress, int slot, string? accessToken = null)
+        {
+            var storageProvider = _catalog.Resolve(provider);
+
+            try
+            {
+                var context = await ResolveContextAsync(storageProvider, accessToken);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, primaryAddress);
+
+                return AlgorandARC76AccountDotNet.ARC76.GetEVMEmailAccount(email, seed.Mnemonic, slot).GetPublicAddress();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deriving an EVM address from {Provider} for email {Email}", storageProvider.Name, email);
+                throw new InvalidOperationException($"Error deriving an EVM address from {storageProvider.Name}.");
+            }
+        }
+
         public async Task<string> ResolveSeedAddressAsync(string email, string provider, string? primaryAddress, string? accessToken = null)
         {
             var storageProvider = _catalog.Resolve(provider);

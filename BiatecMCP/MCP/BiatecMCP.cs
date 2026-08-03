@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
+using System.Numerics;
 using System.Security.Claims;
 using Algorand;
 using Algorand.Algod;
@@ -30,12 +31,17 @@ namespace BiatecMCP.MCP
         private const string NoAlgorandAddressMessage =
             "This account has no Algorand address yet. Complete storage-provider consent by signing in through BiatecOIDC first.";
 
+        private const string NoEvmAddressMessage =
+            "This account has no EVM address yet. Complete storage-provider consent by signing in through BiatecOIDC first.";
+
         private readonly IBiatecWalletClient _walletClient;
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly IOptionsMonitor<Model.AlgodConfiguration> _algodConfig;
         private readonly DexSwapAggregatorService _dexSwapAggregator;
         private readonly IAramidBridgeConfigProvider _aramidBridgeConfigProvider;
         private readonly IAlgorandChainRegistry _chainRegistry;
+        private readonly INetworkResolver _networkResolver;
+        private readonly IPublicEvmRpcDataSource _evmRpcDataSource;
         private readonly ILogger<BiatecMCP> _logger;
 
         public BiatecMCP(
@@ -45,6 +51,8 @@ namespace BiatecMCP.MCP
             DexSwapAggregatorService dexSwapAggregator,
             IAramidBridgeConfigProvider aramidBridgeConfigProvider,
             IAlgorandChainRegistry chainRegistry,
+            INetworkResolver networkResolver,
+            IPublicEvmRpcDataSource evmRpcDataSource,
             ILogger<BiatecMCP> logger)
         {
             _walletClient = walletClient;
@@ -53,6 +61,8 @@ namespace BiatecMCP.MCP
             _dexSwapAggregator = dexSwapAggregator;
             _aramidBridgeConfigProvider = aramidBridgeConfigProvider;
             _chainRegistry = chainRegistry;
+            _networkResolver = networkResolver;
+            _evmRpcDataSource = evmRpcDataSource;
             _logger = logger;
         }
 
@@ -120,6 +130,203 @@ namespace BiatecMCP.MCP
             catch (Exception ex)
             {
                 return new ListAlgorandAddressesResponse { Error = SanitizeForToolResponse(ex, nameof(ListAlgorandAddresses)) };
+            }
+        }
+
+        public class ListSupportedNetworksResponse
+        {
+            public List<NetworkSummary> Networks { get; set; } = new();
+            public string Error { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "listSupportedNetworks"),
+         Description("Lists every blockchain network currently usable with getCryptoAddress/getCryptoBalance - every live Algorand-family (AVM) chain (Algorand, Voi, Aramid, ...) plus a few well-known Ethereum-family (EVM) chains (Ethereum, Gnosis, Arbitrum, Base). Call this first to see valid 'network' values. Other public EVM chains not listed here also work by name or numeric chain id. No authentication required.")]
+        public async Task<ListSupportedNetworksResponse> ListSupportedNetworks()
+        {
+            try
+            {
+                var networks = await _networkResolver.ListNetworksAsync();
+                return new ListSupportedNetworksResponse { Networks = networks.ToList() };
+            }
+            catch (Exception ex)
+            {
+                return new ListSupportedNetworksResponse { Error = SanitizeForToolResponse(ex, nameof(ListSupportedNetworks)) };
+            }
+        }
+
+        public class GetCryptoAddressResponse
+        {
+            public string Network { get; set; } = string.Empty;
+            public string Family { get; set; } = string.Empty;
+            public string Address { get; set; } = string.Empty;
+            public string Error { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "getCryptoAddress"),
+         Description("Returns the signed-in Biatec account's address on the given blockchain network - Algorand-family (AVM) and Ethereum-family (EVM) chains are both supported, derived from the same seed. See listSupportedNetworks for valid 'network' values (e.g. 'Algorand', 'Voi', 'Aramid', 'Ethereum', 'Gnosis', 'Arbitrum', 'Base'). An Algorand-family address is the same across every AVM chain; an Ethereum-family address is the same across every EVM chain - 'network' only picks which family's address to derive.")]
+        public async Task<GetCryptoAddressResponse> GetCryptoAddress(
+            [Description("Which network to derive the address for. Call listSupportedNetworks to see valid values.")] string network,
+            [Description("ARC-76 derivation slot. 0 = the default/first address, 1 = the 'second address', etc.")] int slot = 0,
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to derive from instead of the primary seed.")] string? primaryAddress = null)
+        {
+            try
+            {
+                var resolved = await _networkResolver.ResolveAsync(network);
+                if (resolved == null)
+                {
+                    return new GetCryptoAddressResponse { Network = network, Error = $"Unknown network '{network}'. Call listSupportedNetworks to see valid values." };
+                }
+
+                if (resolved.Family == ChainFamily.Avm)
+                {
+                    var address = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                    if (string.IsNullOrWhiteSpace(address))
+                    {
+                        return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Error = NoAlgorandAddressMessage };
+                    }
+
+                    return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Address = address };
+                }
+
+                var evmAddress = await ResolveEvmAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                if (string.IsNullOrWhiteSpace(evmAddress))
+                {
+                    return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Evm), Error = NoEvmAddressMessage };
+                }
+
+                return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Evm), Address = evmAddress };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new GetCryptoAddressResponse { Network = network, Error = ex.Message };
+            }
+            catch (WalletApiException ex)
+            {
+                return new GetCryptoAddressResponse { Network = network, Error = ex.Message };
+            }
+            catch (Exception ex)
+            {
+                return new GetCryptoAddressResponse { Network = network, Error = SanitizeForToolResponse(ex, nameof(GetCryptoAddress)) };
+            }
+        }
+
+        public class AssetBalanceEntry
+        {
+            public ulong AssetId { get; set; }
+            public ulong Amount { get; set; }
+        }
+
+        public class GetCryptoBalanceResponse
+        {
+            public string Network { get; set; } = string.Empty;
+            public string Family { get; set; } = string.Empty;
+            public string Address { get; set; } = string.Empty;
+            public string NativeCurrencySymbol { get; set; } = string.Empty;
+            public decimal NativeBalance { get; set; }
+
+            /// <summary>Exact base-unit balance (µAlgo or wei) as a decimal string - a wei balance can exceed <c>ulong.MaxValue</c>, so this is never a numeric type.</summary>
+            public string NativeBalanceBaseUnits { get; set; } = string.Empty;
+
+            /// <summary>AVM only - the address's ASA holdings, capped at 50 (see <see cref="AssetsTruncated"/>). Always <c>null</c> for an EVM network.</summary>
+            public List<AssetBalanceEntry>? Assets { get; set; }
+            public bool AssetsTruncated { get; set; }
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        private const int MaxAssetsInBalanceResponse = 50;
+
+        [McpServerTool(Name = "getCryptoBalance"),
+         Description("Returns the native-currency balance (and, on Algorand-family chains, ASA holdings) for an address on the given blockchain network - see listSupportedNetworks for valid 'network' values. Omit 'address' to check the signed-in account's own address on that network. EVM balances are the native gas token only (e.g. ETH) - ERC-20 token balances are not supported.")]
+        public async Task<GetCryptoBalanceResponse> GetCryptoBalance(
+            [Description("Which network to query. Call listSupportedNetworks to see valid values.")] string network,
+            [Description("Address to check the balance of. Omit to check the signed-in account's own address on this network.")] string? address = null,
+            [Description("A specific seed's identifying address to use when 'address' is omitted.")] string? primaryAddress = null,
+            [Description("ARC-76 derivation slot to use when 'address' is omitted. Defaults to 0.")] int slot = 0)
+        {
+            try
+            {
+                var resolved = await _networkResolver.ResolveAsync(network);
+                if (resolved == null)
+                {
+                    return new GetCryptoBalanceResponse { Network = network, Error = $"Unknown network '{network}'. Call listSupportedNetworks to see valid values." };
+                }
+
+                if (resolved.Family == ChainFamily.Avm)
+                {
+                    var resolvedAddress = address ?? await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                    if (string.IsNullOrWhiteSpace(resolvedAddress))
+                    {
+                        return new GetCryptoBalanceResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Error = NoAlgorandAddressMessage };
+                    }
+
+                    using var httpClient = HttpClientConfigurator.ConfigureHttpClient(resolved.AvmChain!.AlgodApiAddress, resolved.AvmChain.AlgodApiToken);
+                    var algodApi = new DefaultApi(httpClient);
+                    var account = await algodApi.AccountInformationAsync(resolvedAddress);
+
+                    var allAssets = account.Assets ?? new List<Algorand.Algod.Model.AssetHolding>();
+                    var assets = allAssets.Take(MaxAssetsInBalanceResponse).Select(a => new AssetBalanceEntry { AssetId = a.AssetId, Amount = a.Amount }).ToList();
+
+                    return new GetCryptoBalanceResponse
+                    {
+                        Network = resolved.DisplayName,
+                        Family = nameof(ChainFamily.Avm),
+                        Address = resolvedAddress,
+                        NativeCurrencySymbol = "ALGO",
+                        NativeBalance = account.Amount / 1_000_000m,
+                        NativeBalanceBaseUnits = account.Amount.ToString(CultureInfo.InvariantCulture),
+                        Assets = assets,
+                        AssetsTruncated = allAssets.Count > MaxAssetsInBalanceResponse
+                    };
+                }
+
+                var evmAddress = address ?? await ResolveEvmAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                if (string.IsNullOrWhiteSpace(evmAddress))
+                {
+                    return new GetCryptoBalanceResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Evm), Error = NoEvmAddressMessage };
+                }
+
+                var balance = await _evmRpcDataSource.TryGetBalanceAsync(resolved.EvmChain!.RpcUrl, evmAddress);
+                if (balance == null)
+                {
+                    return new GetCryptoBalanceResponse
+                    {
+                        Network = resolved.DisplayName,
+                        Family = nameof(ChainFamily.Evm),
+                        Address = evmAddress,
+                        Error = "Could not reach a live RPC node for this chain to check the balance right now. Try again shortly.",
+                        ErrorType = "RpcUnavailable"
+                    };
+                }
+
+                var divisor = BigInteger.Pow(10, resolved.EvmChain.NativeCurrencyDecimals);
+                var humanBalance = (decimal)balance.Value / (decimal)divisor;
+
+                return new GetCryptoBalanceResponse
+                {
+                    Network = resolved.DisplayName,
+                    Family = nameof(ChainFamily.Evm),
+                    Address = evmAddress,
+                    NativeCurrencySymbol = resolved.EvmChain.NativeCurrencySymbol,
+                    NativeBalance = humanBalance,
+                    NativeBalanceBaseUnits = balance.Value.ToString(CultureInfo.InvariantCulture)
+                };
+            }
+            catch (Algorand.ApiException<Algorand.Algod.Model.ErrorResponse> ex)
+            {
+                return new GetCryptoBalanceResponse { Network = network, Error = ex.Result.Message, ErrorType = ex.GetType().ToString() };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new GetCryptoBalanceResponse { Network = network, Error = ex.Message };
+            }
+            catch (WalletApiException ex)
+            {
+                return new GetCryptoBalanceResponse { Network = network, Error = ex.Message };
+            }
+            catch (Exception ex)
+            {
+                return new GetCryptoBalanceResponse { Network = network, Error = SanitizeForToolResponse(ex, nameof(GetCryptoBalance)) };
             }
         }
 
@@ -1004,6 +1211,32 @@ namespace BiatecMCP.MCP
             }
 
             var derived = await _walletClient.GetAddressAsync(token, primaryAddress, slot);
+            return derived.Address;
+        }
+
+        /// <summary>
+        /// Resolves an EVM address for reporting - same shape as <see cref="ResolveAlgorandAddressAsync"/>,
+        /// minus the token-claim fast path (no <c>evm_address</c> claim exists on tokens today, so this
+        /// always calls BiatecOIDC's wallet API). Returns <c>null</c> (never throws) if no address is
+        /// available at all.
+        /// </summary>
+        private async Task<string?> ResolveEvmAddressAsync(string? bearerToken = null, int slot = 0, string? primaryAddress = null)
+        {
+            var token = bearerToken ?? GetBearerToken();
+
+            if (primaryAddress == null)
+            {
+                var seeds = await _walletClient.ListSeedsAsync(token);
+                var primary = seeds.Seeds.FirstOrDefault(s => s.IsPrimary) ?? seeds.Seeds.FirstOrDefault();
+                if (primary == null)
+                {
+                    return null;
+                }
+
+                primaryAddress = primary.Address;
+            }
+
+            var derived = await _walletClient.GetEvmAddressAsync(token, primaryAddress, slot);
             return derived.Address;
         }
 

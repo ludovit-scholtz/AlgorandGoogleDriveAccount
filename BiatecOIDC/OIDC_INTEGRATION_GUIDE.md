@@ -72,6 +72,14 @@ for a given client (don't mix the two for the same integration).
 - `GET /wallet/address/{primaryAddress}/{slot?}`
   - Derives (without signing anything) the ARC-76 address at `slot` (default `0`) for the seed identified
     by `primaryAddress`. Only requires being authenticated.
+- `GET /wallet/evm/address`
+  - Lists every seed's EVM (Ethereum-family) address in the caller's vault, and which one is primary - same
+    seeds as `GET /wallet/address`, just derived via `ARC76.GetEVMEmailAccount` instead of
+    `ARC76.GetEmailAccount`, so it's the same address across every EVM chain. Only requires being
+    authenticated. See "EVM (Ethereum-family) support" below.
+- `GET /wallet/evm/address/{primaryAddress}/{slot?}`
+  - Derives (without signing anything) the EVM address at `slot` (default `0`) for the seed identified by
+    `primaryAddress`. Only requires being authenticated.
 - `GET /wallet/limits`
   - Reads the caller's own daily/weekly/monthly spending limits. Only requires being authenticated
     (`openid`) - no `manage-limits` scope needed to read your own limits. Accepts optional
@@ -116,6 +124,25 @@ A chain only appears here if it's both listed in the public registry *and* curre
 liveness snapshot (cached ~10 minutes server-side), not a static allowlist. Use it to validate a `genesisId`
 before passing it to `POST /wallet/sign` or any other genesisId-accepting call, instead of hardcoding a list
 that can silently go stale if a chain's public infrastructure changes.
+
+## EVM (Ethereum-family) support
+
+Every account already has an Ethereum-family identity, not just an Algorand one - the same underlying seed
+derives both, via the `AlgorandARC76Account` package's `ARC76.GetEVMEmailAccount` (the Ethereum-family
+counterpart of `ARC76.GetEmailAccount`). No new consent flow or storage format was needed for this. Unlike
+Algorand's `genesisId`-per-network split, there is **no per-EVM-chain concept at this API layer** - one EVM
+address (per seed/slot) is valid across every EVM chain (Ethereum, Gnosis, Arbitrum, Base, ...), so
+`GET /wallet/evm/address`/`GET /wallet/evm/address/{primaryAddress}/{slot?}` (above) take no chain parameter
+at all.
+
+Scope today is address derivation only - EVM transaction building/signing/broadcasting is not implemented
+(BiatecMCP's `getCryptoBalance` tool queries EVM balances directly against a public RPC, without ever
+involving this API, since that needs no key material).
+
+See [the supported-chains page](https://oidc.biatec.io/chains.html) for the full capability matrix, and this
+repo's `CLAUDE.md` for the deeper architecture writeup (`IEvmChainRegistry`, `INetworkResolver`, etc., all in
+`BiatecMCP` - BiatecOIDC itself has no EVM chain registry, since chain-specific RPC discovery is only needed
+for balance queries).
 
 ## Important Claims in Tokens
 

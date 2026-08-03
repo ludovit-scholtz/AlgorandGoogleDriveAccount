@@ -342,6 +342,90 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
+        /// Lists every seed's EVM address in the caller's vault, and which one is primary. Same seeds as
+        /// <see cref="ListAddresses"/> - just derived via <c>ARC76.GetEVMEmailAccount</c> instead of
+        /// <c>ARC76.GetEmailAccount</c>, so it's the same address across every EVM chain (Ethereum, Gnosis,
+        /// Arbitrum, Base, ...) - there is no per-chain concept at this layer.
+        /// </summary>
+        /// <response code="200">The caller's seed EVM addresses.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpGet("evm/address")]
+        public async Task<IActionResult> ListEvmAddresses()
+        {
+            var authError = TryAuthenticate(requiredClaim: null, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            try
+            {
+                var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.ListSeedsAsync(email, provider, token));
+                var addresses = new List<EvmAddressResponse>();
+                foreach (var seed in seeds)
+                {
+                    var evmAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                        token => _accountRepository.DeriveEvmAddressAsync(email, provider, seed.PrimaryAddress, 0, token));
+                    addresses.Add(new EvmAddressResponse { Address = evmAddress, IsPrimary = seed.IsPrimary });
+                }
+
+                return Ok(new ListEvmAddressesResponse { Addresses = addresses });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Derives (without signing anything) the EVM address at <paramref name="slot"/> for the seed
+        /// identified by <paramref name="primaryAddress"/> (see <see cref="ListEvmAddresses"/>).
+        /// </summary>
+        /// <param name="primaryAddress">The seed's own identifying (Algorand slot-0) address.</param>
+        /// <param name="slot">ARC-76 derivation index within that seed. Defaults to <c>0</c>.</param>
+        /// <response code="200">The derived EVM address.</response>
+        /// <response code="400">No seed with that address exists in the caller's vault.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpGet("evm/address/{primaryAddress}/{slot:int?}")]
+        public async Task<IActionResult> GetEvmAddress(string primaryAddress, int? slot)
+        {
+            var authError = TryAuthenticate(requiredClaim: null, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+            var resolvedSlot = slot ?? 0;
+
+            try
+            {
+                var address = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.DeriveEvmAddressAsync(email, provider, primaryAddress, resolvedSlot, token));
+                return Ok(new DerivedEvmAddressResponse { Address = address, PrimaryAddress = primaryAddress, Slot = resolvedSlot });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "seed_not_found", Detail = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
         /// Lists every currency a spending limit can be configured in, with its current USD exchange rate.
         /// Rates come from the Czech National Bank's daily fixing and are cached, so they reflect the most
         /// recent published fixing rather than a live market feed.

@@ -27,6 +27,8 @@ namespace BiatecMCPTests
         private Mock<IDexQuoteProvider> _biatecRouterQuoteProvider = null!;
         private Mock<IAramidBridgeConfigProvider> _aramidBridgeConfigProvider = null!;
         private Mock<IAlgorandChainRegistry> _chainRegistry = null!;
+        private Mock<INetworkResolver> _networkResolver = null!;
+        private Mock<IPublicEvmRpcDataSource> _evmRpcDataSource = null!;
 
         [SetUp]
         public void SetUp()
@@ -41,6 +43,8 @@ namespace BiatecMCPTests
             _chainRegistry = new Mock<IAlgorandChainRegistry>();
             _chainRegistry.Setup(r => r.TryGetChainAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync((AlgorandChain?)null);
             _chainRegistry.Setup(r => r.TryGetChainByAramidIdAsync(It.IsAny<long>(), It.IsAny<CancellationToken>())).ReturnsAsync((AlgorandChain?)null);
+            _networkResolver = new Mock<INetworkResolver>();
+            _evmRpcDataSource = new Mock<IPublicEvmRpcDataSource>();
         }
 
         private BiatecMCP.MCP.BiatecMCP CreateTool(DexSwapAggregatorService? aggregator = null) =>
@@ -48,6 +52,8 @@ namespace BiatecMCPTests
                 aggregator ?? new DexSwapAggregatorService(new[] { _biatecRouterQuoteProvider.Object }),
                 _aramidBridgeConfigProvider.Object,
                 _chainRegistry.Object,
+                _networkResolver.Object,
+                _evmRpcDataSource.Object,
                 NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
 
         private void SetBearerToken(string token) =>
@@ -181,6 +187,142 @@ namespace BiatecMCPTests
             var result = await CreateTool().ListAlgorandAddresses();
 
             Assert.That(result.Error, Does.Contain("bearer token"));
+        }
+
+        // ───────────────────────── listSupportedNetworks / getCryptoAddress / getCryptoBalance ─────────────────────────
+
+        [Test]
+        public async Task ListSupportedNetworks_ReturnsResolversNetworkList()
+        {
+            _networkResolver
+                .Setup(r => r.ListNetworksAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new List<NetworkSummary>
+                {
+                    new() { Name = "Algorand Mainnet", Family = "Avm", Id = "mainnet-v1.0", NativeCurrencySymbol = "ALGO" },
+                    new() { Name = "Ethereum", Family = "Evm", Id = "1", NativeCurrencySymbol = "ETH" }
+                });
+
+            var result = await CreateTool().ListSupportedNetworks();
+
+            Assert.That(result.Networks, Has.Count.EqualTo(2));
+            Assert.That(result.Error, Is.Empty);
+        }
+
+        [Test]
+        public async Task GetCryptoAddress_UnknownNetwork_ReturnsClearError()
+        {
+            _networkResolver.Setup(r => r.ResolveAsync("NotAThing", It.IsAny<CancellationToken>())).ReturnsAsync((ResolvedNetwork?)null);
+
+            var result = await CreateTool().GetCryptoAddress("NotAThing");
+
+            Assert.That(result.Error, Does.Contain("Unknown network"));
+        }
+
+        [Test]
+        public async Task GetCryptoAddress_AvmNetwork_DelegatesToAlgorandAddressResolution()
+        {
+            SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Algorand", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Algorand Mainnet", AvmChain = new AlgorandChain { GenesisId = "mainnet-v1.0" } });
+
+            var result = await CreateTool().GetCryptoAddress("Algorand");
+
+            Assert.That(result.Address, Is.EqualTo("SOMEADDRESS"));
+            Assert.That(result.Family, Is.EqualTo("Avm"));
+            Assert.That(result.Network, Is.EqualTo("Algorand Mainnet"));
+            _walletClient.Verify(c => c.ListEvmAddressesAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task GetCryptoAddress_EvmNetwork_CallsEvmWalletClient()
+        {
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum Mainnet", EvmChain = new EvmChain { ChainId = 1, Name = "Ethereum Mainnet" } });
+            _walletClient
+                .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ListSeedsResponse { Seeds = { new SeedResponse { Address = "PRIMARY", IsPrimary = true } } });
+            _walletClient
+                .Setup(c => c.GetEvmAddressAsync("tok", "PRIMARY", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedEvmAddressResponse { Address = "0xEVM" });
+
+            var result = await CreateTool().GetCryptoAddress("Ethereum");
+
+            Assert.That(result.Address, Is.EqualTo("0xEVM"));
+            Assert.That(result.Family, Is.EqualTo("Evm"));
+            Assert.That(result.Network, Is.EqualTo("Ethereum Mainnet"));
+        }
+
+        [Test]
+        public async Task GetCryptoBalance_UnknownNetwork_ReturnsClearError()
+        {
+            _networkResolver.Setup(r => r.ResolveAsync("NotAThing", It.IsAny<CancellationToken>())).ReturnsAsync((ResolvedNetwork?)null);
+
+            var result = await CreateTool().GetCryptoBalance("NotAThing");
+
+            Assert.That(result.Error, Does.Contain("Unknown network"));
+        }
+
+        [Test]
+        public async Task GetCryptoBalance_EvmNetwork_ExplicitAddress_NoWalletApiCallNeeded()
+        {
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork
+                {
+                    Family = ChainFamily.Evm,
+                    DisplayName = "Ethereum Mainnet",
+                    EvmChain = new EvmChain { ChainId = 1, Name = "Ethereum Mainnet", RpcUrl = "https://eth.example.com", NativeCurrencySymbol = "ETH", NativeCurrencyDecimals = 18 }
+                });
+            _evmRpcDataSource
+                .Setup(d => d.TryGetBalanceAsync("https://eth.example.com", "0xSOMEADDR", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(System.Numerics.BigInteger.Parse("1500000000000000000"));
+
+            var result = await CreateTool().GetCryptoBalance("Ethereum", address: "0xSOMEADDR");
+
+            Assert.That(result.Error, Is.Empty);
+            Assert.That(result.Address, Is.EqualTo("0xSOMEADDR"));
+            Assert.That(result.NativeCurrencySymbol, Is.EqualTo("ETH"));
+            Assert.That(result.NativeBalance, Is.EqualTo(1.5m));
+            Assert.That(result.NativeBalanceBaseUnits, Is.EqualTo("1500000000000000000"));
+            _walletClient.Verify(c => c.ListSeedsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task GetCryptoBalance_EvmNetwork_RpcUnreachable_ReturnsClearError()
+        {
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork
+                {
+                    Family = ChainFamily.Evm,
+                    DisplayName = "Ethereum Mainnet",
+                    EvmChain = new EvmChain { ChainId = 1, Name = "Ethereum Mainnet", RpcUrl = "https://eth.example.com", NativeCurrencySymbol = "ETH", NativeCurrencyDecimals = 18 }
+                });
+            _evmRpcDataSource
+                .Setup(d => d.TryGetBalanceAsync("https://eth.example.com", "0xSOMEADDR", It.IsAny<CancellationToken>()))
+                .ReturnsAsync((System.Numerics.BigInteger?)null);
+
+            var result = await CreateTool().GetCryptoBalance("Ethereum", address: "0xSOMEADDR");
+
+            Assert.That(result.ErrorType, Is.EqualTo("RpcUnavailable"));
+        }
+
+        [Test]
+        public async Task GetCryptoBalance_AvmNetwork_NoAddressResolvable_ReturnsClearError()
+        {
+            SetClaims();
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Algorand", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Algorand Mainnet", AvmChain = new AlgorandChain { GenesisId = "mainnet-v1.0" } });
+            _walletClient.Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>())).ReturnsAsync(new ListSeedsResponse());
+
+            var result = await CreateTool().GetCryptoBalance("Algorand");
+
+            Assert.That(result.Error, Does.Contain("no Algorand address"));
         }
 
         // ───────────────────────── createPaymentTransaction / createOptInTransaction (no sign claim needed - build only) ─────────────────────────
