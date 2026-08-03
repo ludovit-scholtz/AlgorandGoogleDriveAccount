@@ -93,6 +93,14 @@ namespace BiatecOIDC
             // alone treats an unedited template as "configured".
             var entraConfigured = IsConfiguredValue(entraConfig.ClientId) && IsConfiguredValue(entraConfig.ClientSecret);
 
+            // Test/dev-only mock cloud storage provider - see MOCK_TESTING.md. Never enabled by default;
+            // an operator must explicitly set CloudServices:Mock:Enabled and configure at least one
+            // account. Deliberately not referenced anywhere in the public integration docs.
+            var mockCloudConfig = new MockCloudServiceConfiguration();
+            builder.Configuration.GetSection("CloudServices:Mock").Bind(mockCloudConfig);
+            builder.Services.Configure<MockCloudServiceConfiguration>(builder.Configuration.GetSection("CloudServices:Mock"));
+            var mockCloudEnabled = mockCloudConfig.Enabled && mockCloudConfig.Accounts.Count > 0;
+
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
             builder.Configuration.GetSection("Cors").Bind(corsConfig);
@@ -143,6 +151,12 @@ namespace BiatecOIDC
             {
                 builder.Services.AddHttpClient<MicrosoftCloudStorageProvider>();
                 builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<MicrosoftCloudStorageProvider>());
+            }
+            if (mockCloudEnabled)
+            {
+                builder.Services.AddSingleton<MockCloudStorage>();
+                builder.Services.AddScoped<MockCloudStorageProvider>();
+                builder.Services.AddScoped<ICloudStorageProvider>(sp => sp.GetRequiredService<MockCloudStorageProvider>());
             }
             builder.Services.AddScoped<ICloudStorageProviderCatalog, CloudStorageProviderCatalog>();
             builder.Services.AddScoped<ICloudAccountRepository, CloudAccountRepository>();
@@ -372,6 +386,35 @@ namespace BiatecOIDC
             else
             {
                 logger.LogWarning("No CORS origins configured. Using default policy based on environment.");
+            }
+
+            // Re-seed every configured mock test account's vault (see MOCK_TESTING.md) on every startup -
+            // the mock provider's storage is purely in-memory, so this is what makes a configured ARC-76
+            // secret deterministically come back to the same address across restarts, without relying on
+            // anything ever actually being persisted.
+            if (mockCloudEnabled)
+            {
+                using var seedScope = app.Services.CreateScope();
+                var accountRepository = seedScope.ServiceProvider.GetRequiredService<ICloudAccountRepository>();
+                foreach (var account in mockCloudConfig.Accounts)
+                {
+                    if (string.IsNullOrWhiteSpace(account.ScopeId) || string.IsNullOrWhiteSpace(account.Email) || string.IsNullOrWhiteSpace(account.Mnemonic))
+                    {
+                        logger.LogWarning("Skipping an incompletely-configured CloudServices:Mock:Accounts entry (ScopeId/Email/Mnemonic must all be set).");
+                        continue;
+                    }
+
+                    try
+                    {
+                        var accessToken = MockCloudStorageProvider.BuildMockAccessToken(account.Email);
+                        var address = accountRepository.SeedTestVaultAsync(account.Email, MockCloudStorageProvider.ProviderName, account.Mnemonic, accessToken).GetAwaiter().GetResult();
+                        logger.LogInformation("Seeded mock test account '{ScopeId}' ({Address}).", account.ScopeId, address);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Failed to seed mock test account '{ScopeId}'.", account.ScopeId);
+                    }
+                }
             }
 
             app.UseSwagger(options =>

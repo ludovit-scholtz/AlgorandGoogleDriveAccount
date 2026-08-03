@@ -118,5 +118,19 @@ namespace BiatecSelfCustodyCore.Repository
         /// generation if necessary), so the copy is always the canonical, most-current form.
         /// </summary>
         Task<(string FileName, byte[] EncryptedBytes)> GetEncryptedVaultForBackupAsync(string email, string provider, string? accessToken = null);
+
+        /// <summary>
+        /// Test/dev-only: ensures a seed with exactly <paramref name="mnemonic"/> exists in the vault for
+        /// <paramref name="email"/>/<paramref name="provider"/> - unlike <see cref="CreateSeedAsync"/>,
+        /// which always generates a fresh random mnemonic, this seeds a caller-supplied one so the
+        /// resulting address is deterministic and reproducible. Idempotent: if a seed whose slot-0 address
+        /// already matches what <paramref name="mnemonic"/> derives to is present, does nothing and just
+        /// returns that address; otherwise adds it (primary only if it's the vault's very first seed).
+        /// Used exclusively by <c>BiatecOIDC</c>'s mock cloud-storage testing feature (see
+        /// <c>BiatecOIDC/MOCK_TESTING.md</c>) to re-seed configured test accounts on every app start,
+        /// since that feature's storage is in-memory and reset on restart.
+        /// </summary>
+        /// <returns>The (possibly newly-created) seed's identifying (slot-0) address.</returns>
+        Task<string> SeedTestVaultAsync(string email, string provider, string mnemonic, string? accessToken = null);
     }
 }

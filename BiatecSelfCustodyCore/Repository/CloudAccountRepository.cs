@@ -387,6 +387,50 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
+        public async Task<string> SeedTestVaultAsync(string email, string provider, string mnemonic, string? accessToken = null)
+        {
+            var storageProvider = _catalog.Resolve(provider);
+
+            try
+            {
+                var context = await ResolveContextAsync(storageProvider, accessToken);
+                var vault = await LoadVaultOrEmptyAsync(email, storageProvider, context);
+
+                var expectedAddress = AlgorandArc76.GetEmailAccount(email, mnemonic, slot: 0).Address.EncodeAsString();
+                var existing = vault.Seeds.FirstOrDefault(s => string.Equals(s.SeedAddress, expectedAddress, StringComparison.Ordinal));
+                if (existing != null)
+                {
+                    return existing.SeedAddress;
+                }
+
+                var baselineRawBytes = await DownloadActiveRawBytesAsync(storageProvider, context);
+                var entry = BuildSeedEntry(email, mnemonic, isPrimary: vault.Seeds.Count == 0);
+                vault.Seeds.Add(entry);
+
+                await SaveVaultWithConcurrencyCheckAsync(storageProvider, context, email, vault, baselineRawBytes);
+
+                _logger.LogInformation("Seeded the test vault with a configured mnemonic ({Address}) for {Email}.", entry.SeedAddress, email);
+                return entry.SeedAddress;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error seeding the test vault on {Provider} for email {Email}", storageProvider.Name, email);
+                throw new InvalidOperationException($"Error seeding the test vault on {storageProvider.Name}.");
+            }
+        }
+
         private static string BuildActiveFileName(VaultContext context) =>
             context.FileNameTemplate.Replace("%AESID%", AesEncryptionHelper.MakeAesId(AesKeyRingResolver.KeyBytes(context.ActiveKey), AesKeyRingResolver.IvBytes(context.ActiveKey)));
 

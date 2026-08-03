@@ -3,6 +3,7 @@ using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Controllers;
 using BiatecOIDC.Model;
 using BiatecSelfCustodyCore.Providers;
+using BiatecSelfCustodyCore.Repository;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -546,7 +547,9 @@ namespace BiatecOIDCTests
             // own comment), while AuthorizeConsent/AuthorizeCallback use the plain
             // HttpContext.GetTokenAsync - both need to observe the same providerAccessToken in tests.
             var providerCatalog = new CloudStorageProviderCatalog(new ICloudStorageProvider[] { new FakeCloudStorageProvider(providerAccessToken) });
-            var controller = new JwtIssuerController(jwtIssuerService, cache, providerCatalog);
+            var accountRepository = Mock.Of<ICloudAccountRepository>();
+            var mockConfig = Mock.Of<Microsoft.Extensions.Options.IOptionsMonitor<MockCloudServiceConfiguration>>(m => m.CurrentValue == new MockCloudServiceConfiguration());
+            var controller = new JwtIssuerController(jwtIssuerService, cache, providerCatalog, accountRepository, mockConfig);
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Scheme = "https";
             httpContext.Request.Host = new HostString("google.biatec.io");

@@ -455,6 +455,66 @@ namespace BiatecMCPTests
             Assert.DoesNotThrow(() => CreateRepository(Environments.Development));
         }
 
+        // ───────────────────────── SeedTestVaultAsync (mock cloud storage testing feature) ─────────────────────────
+
+        private const string TestMnemonic =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon " +
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        [Test]
+        public async Task SeedTestVaultAsync_NewVault_CreatesEntryAsPrimaryAndReturnsItsAddress()
+        {
+            var repository = CreateRepository();
+
+            var address = await repository.SeedTestVaultAsync(TestEmail, "Fake", TestMnemonic, "token");
+
+            var seeds = await repository.ListSeedsAsync(TestEmail, "Fake", "token");
+            Assert.That(seeds, Has.Count.EqualTo(1));
+            Assert.That(seeds[0].SeedAddress, Is.EqualTo(address));
+            Assert.That(seeds[0].IsPrimary, Is.True);
+        }
+
+        [Test]
+        public async Task SeedTestVaultAsync_DeterministicAddress_MatchesDirectArc76Derivation()
+        {
+            var repository = CreateRepository();
+
+            var seededAddress = await repository.SeedTestVaultAsync(TestEmail, "Fake", TestMnemonic, "token");
+            var derivedAddress = await repository.DeriveAddressAsync(TestEmail, "Fake", seedAddress: null, slot: 0, "token");
+
+            Assert.That(seededAddress, Is.EqualTo(derivedAddress));
+        }
+
+        [Test]
+        public async Task SeedTestVaultAsync_CalledTwiceWithSameMnemonic_IsIdempotent()
+        {
+            var repository = CreateRepository();
+
+            var first = await repository.SeedTestVaultAsync(TestEmail, "Fake", TestMnemonic, "token");
+            var second = await repository.SeedTestVaultAsync(TestEmail, "Fake", TestMnemonic, "token");
+
+            Assert.That(second, Is.EqualTo(first));
+            var seeds = await repository.ListSeedsAsync(TestEmail, "Fake", "token");
+            Assert.That(seeds, Has.Count.EqualTo(1));
+        }
+
+        [Test]
+        public async Task SeedTestVaultAsync_AfterRestart_RecreatesSameAddress()
+        {
+            // Simulates the mock provider's storage being wiped by an app restart (it's purely in-memory)
+            // - re-seeding from the same configured mnemonic against a *fresh* provider/repository instance
+            // must reproduce the exact same address, which is the whole point of this feature.
+            var repository = CreateRepository();
+            var addressBeforeRestart = await repository.SeedTestVaultAsync(TestEmail, "Fake", TestMnemonic, "token");
+
+            _fakeProvider = new PersistentFakeCloudStorageProvider("ambient-token");
+            _mockCatalog.Setup(c => c.Resolve(It.IsAny<string>())).Returns(_fakeProvider);
+            var repositoryAfterRestart = CreateRepository();
+            var addressAfterRestart = await repositoryAfterRestart.SeedTestVaultAsync(TestEmail, "Fake", TestMnemonic, "token");
+
+            Assert.That(addressAfterRestart, Is.EqualTo(addressBeforeRestart));
+        }
+
         /// <summary>
         /// In-memory <see cref="ICloudStorageProvider"/> test double that actually persists uploaded bytes
         /// (and honors deletes) across calls, with call counters so migration behavior can be asserted.

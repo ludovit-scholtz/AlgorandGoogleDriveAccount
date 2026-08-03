@@ -10,6 +10,7 @@ using BiatecOIDC.Swagger;
 using BiatecSelfCustodyCore.BusinessLogic;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
+using BiatecSelfCustodyCore.Repository;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
@@ -17,6 +18,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Options;
 
 namespace BiatecOIDC.Controllers
 {
@@ -38,12 +40,21 @@ namespace BiatecOIDC.Controllers
         private readonly IJwtIssuerService _jwtIssuerService;
         private readonly IDistributedCache _cache;
         private readonly ICloudStorageProviderCatalog _providerCatalog;
+        private readonly ICloudAccountRepository _accountRepository;
+        private readonly IOptionsMonitor<MockCloudServiceConfiguration> _mockConfig;
 
-        public JwtIssuerController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, ICloudStorageProviderCatalog providerCatalog)
+        public JwtIssuerController(
+            IJwtIssuerService jwtIssuerService,
+            IDistributedCache cache,
+            ICloudStorageProviderCatalog providerCatalog,
+            ICloudAccountRepository accountRepository,
+            IOptionsMonitor<MockCloudServiceConfiguration> mockConfig)
         {
             _jwtIssuerService = jwtIssuerService;
             _cache = cache;
             _providerCatalog = providerCatalog;
+            _accountRepository = accountRepository;
+            _mockConfig = mockConfig;
         }
 
         /// <summary>
@@ -161,6 +172,11 @@ namespace BiatecOIDC.Controllers
         /// Fast track: <c>"google"</c> or <c>"microsoft"</c> skips the provider-picker page and challenges
         /// that provider directly. Omit to show the picker.
         /// </param>
+        /// <param name="scopeId">
+        /// Test/dev-only (see <c>MOCK_TESTING.md</c>): combined with <c>idp=Mock</c>, skips the mock
+        /// account picker too and signs in directly as the configured account with this
+        /// <c>CloudServices:Mock:Accounts[].ScopeId</c>. Ignored for any other <paramref name="idp"/>.
+        /// </param>
         /// <returns>
         /// A redirect to the provider picker or straight to sign-in, to the client's redirect URI with the
         /// result, or an error.
@@ -179,7 +195,8 @@ namespace BiatecOIDC.Controllers
             [FromQuery(Name = "code_challenge")] string? codeChallenge,
             [FromQuery(Name = "code_challenge_method")] string? codeChallengeMethod,
             [FromQuery(Name = "resource")] string? resource,
-            [FromQuery(Name = "idp")] string? idp)
+            [FromQuery(Name = "idp")] string? idp,
+            [FromQuery(Name = "scopeId")] string? scopeId = null)
         {
             var authRequest = new OidcAuthorizeRequest
             {
@@ -220,7 +237,7 @@ namespace BiatecOIDC.Controllers
 
                 if (!string.IsNullOrWhiteSpace(idp))
                 {
-                    return AuthorizeChallenge(requestId, idp!, retried: false);
+                    return await AuthorizeChallenge(requestId, idp!, retried: false, scopeId: scopeId);
                 }
 
                 return RedirectToAction(nameof(SelectProvider), new { requestId });
@@ -651,11 +668,26 @@ namespace BiatecOIDC.Controllers
         /// Set when re-challenging after <see cref="AuthorizeCallback"/> found storage-write access was
         /// missing - forces a fresh consent screen requesting that scope again.
         /// </param>
+        /// <param name="scopeId">
+        /// Test/dev-only, only meaningful when <paramref name="idp"/> is <c>"Mock"</c> - see
+        /// <see cref="Authorize"/>'s remarks.
+        /// </param>
         [AllowAnonymous]
         [HttpGet("authorize/challenge")]
-        public IActionResult AuthorizeChallenge([FromQuery] string requestId, [FromQuery] string idp, [FromQuery] bool retried = false)
+        public async Task<IActionResult> AuthorizeChallenge([FromQuery] string requestId, [FromQuery] string idp, [FromQuery] bool retried = false, [FromQuery] string? scopeId = null)
         {
             var provider = _providerCatalog.Resolve(idp);
+
+            // Test/dev-only mock provider (see MOCK_TESTING.md): no real external IDP to redirect to -
+            // either sign in directly as the named scopeId (fast track), or show the mock account picker
+            // so the caller can choose which configured test account to sign in as.
+            if (string.Equals(provider.Name, MockCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase))
+            {
+                return string.IsNullOrWhiteSpace(scopeId)
+                    ? RedirectToAction(nameof(MockSelectAccount), new { requestId })
+                    : await MockSignIn(requestId, scopeId!);
+            }
+
             var callbackUrl = Url.Action(nameof(AuthorizeCallback), "JwtIssuer", new { requestId, retried }, Request.Scheme);
 
             var properties = new AuthenticationProperties
@@ -670,6 +702,114 @@ namespace BiatecOIDC.Controllers
             }
 
             return Challenge(properties, provider.Name);
+        }
+
+        /// <summary>
+        /// Test/dev-only (see <c>MOCK_TESTING.md</c>): picker page listing every configured
+        /// <c>CloudServices:Mock:Accounts</c> entry by its <c>ScopeId</c>, reached from
+        /// <see cref="AuthorizeChallenge"/> when <c>idp=Mock</c> was chosen without a <c>scopeId</c> fast
+        /// track. Not part of the public OIDC contract, and deliberately not linked from any public-facing
+        /// documentation. 404s if the mock provider isn't registered (i.e. not enabled/configured).
+        /// </summary>
+        [AllowAnonymous]
+        [HttpGet("authorize/mock-select-account")]
+        public IActionResult MockSelectAccount([FromQuery] string requestId)
+        {
+            if (!_providerCatalog.All.Any(p => string.Equals(p.Name, MockCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase)))
+            {
+                return NotFound();
+            }
+
+            var accounts = _mockConfig.CurrentValue.Accounts;
+            var buttonsHtml = new StringBuilder();
+            foreach (var account in accounts)
+            {
+                var url = Url.Action(nameof(MockSignIn), "JwtIssuer", new { requestId, scopeId = account.ScopeId }, Request.Scheme);
+                buttonsHtml.Append($"""
+                    <a class="provider-button" href="{WebUtility.HtmlEncode(url)}">
+                        <span class="provider-label">{WebUtility.HtmlEncode(account.ScopeId)} <small>({WebUtility.HtmlEncode(account.Email)})</small></span>
+                        <span class="provider-arrow">&rarr;</span>
+                    </a>
+                    """);
+            }
+
+            var bodyHtml = accounts.Count > 0
+                ? $"""<div class="provider-list">{buttonsHtml}</div>"""
+                : """
+                    <div class="callout">
+                        <span class="callout-icon">&#9888;&#65039;</span>
+                        <p><strong>No mock test accounts are configured.</strong> Set <code>CloudServices:Mock:Accounts</code>.</p>
+                    </div>
+                    """;
+
+            var html = $"""
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Select test account - Biatec (Mock)</title>
+                    <style>{SelectProviderStyles}</style>
+                </head>
+                <body>
+                    <div class="aurora"></div>
+                    <div class="grid-overlay"></div>
+                    <div class="picker-shell">
+                        <div class="picker-card">
+                            <div class="eyebrow"><span class="dot"></span> Test/dev sign-in</div>
+                            <h1>Select a <span class="glow-text">mock test account</span></h1>
+                            <p class="subtitle">Not a real identity provider - configured under <code>CloudServices:Mock:Accounts</code>.</p>
+                            {bodyHtml}
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """;
+
+            return Content(html, "text/html; charset=utf-8", Encoding.UTF8);
+        }
+
+        /// <summary>
+        /// Test/dev-only (see <c>MOCK_TESTING.md</c>): signs in directly as the configured mock account
+        /// named <paramref name="scopeId"/> - no external redirect, no consent screen for the mock
+        /// provider itself. Ensures that account's seed vault exists in the mock in-memory storage (seeded
+        /// from its configured ARC-76 mnemonic - idempotent, so calling this repeatedly is harmless),
+        /// establishes the same cookie session a real provider's <c>OnTokenValidated</c> would, then
+        /// resumes exactly like a real sign-in via <see cref="AuthorizeCallback"/>.
+        /// </summary>
+        [AllowAnonymous]
+        [HttpGet("authorize/mock-sign-in")]
+        public async Task<IActionResult> MockSignIn([FromQuery] string requestId, [FromQuery] string scopeId)
+        {
+            var account = _mockConfig.CurrentValue.Accounts.FirstOrDefault(a => string.Equals(a.ScopeId, scopeId, StringComparison.Ordinal));
+            if (account == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "unknown_mock_scope_id", Detail = $"No CloudServices:Mock:Accounts entry has ScopeId '{scopeId}'." });
+            }
+
+            try
+            {
+                var accessToken = MockCloudStorageProvider.BuildMockAccessToken(account.Email);
+                await _accountRepository.SeedTestVaultAsync(account.Email, MockCloudStorageProvider.ProviderName, account.Mnemonic, accessToken);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "mock_seed_failed", Detail = ex.Message });
+            }
+
+            var claims = new List<Claim>
+            {
+                new(ClaimTypes.Email, account.Email),
+                new(ClaimTypes.NameIdentifier, "mock-" + account.ScopeId),
+                new(ClaimTypes.Name, account.ScopeId)
+            };
+            var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+            var principal = new ClaimsPrincipal(identity);
+            CloudStorageProviderClaims.Stamp(principal, MockCloudStorageProvider.ProviderName);
+
+            await HttpContext.SignInAsync(principal);
+
+            return RedirectToAction(nameof(AuthorizeCallback), new { requestId, retried = false });
         }
 
         /// <summary>
@@ -720,7 +860,7 @@ namespace BiatecOIDC.Controllers
                 if (!string.IsNullOrEmpty(accessToken) && !await provider.HasWriteAccessAsync(accessToken))
                 {
                     var retryRequestId = await _jwtIssuerService.StorePendingAuthorizeRequestAsync(validation.NormalizedRequest);
-                    return AuthorizeChallenge(retryRequestId, provider.Name, retried: true);
+                    return await AuthorizeChallenge(retryRequestId, provider.Name, retried: true);
                 }
             }
 

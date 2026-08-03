@@ -226,6 +226,7 @@ dependency on `BiatecSelfCustodyCore`.
   - `wwwroot/index.html` — the OIDC/wallet API documentation site, served at `/` (reachable on `oidc.biatec.io`'s
     own Ingress; not reachable via the `google.biatec.io` alias, which only carves out this app's protocol paths)
   - `OIDC_INTEGRATION_GUIDE.md`, `BIATEC_OIDC_LOGOUT_REQUIREMENTS.md`, `ENTRA_SETUP_GUIDE.md`
+  - `MOCK_TESTING.md` — internal-only: a mock `ICloudStorageProvider` (`BiatecSelfCustodyCore/Providers/MockCloudStorageProvider.cs`/`MockCloudStorage.cs`) that runs the *real* OIDC authorize/token flow against deterministic ARC-76 test accounts configured under `CloudServices:Mock` (disabled by default), so other apps can be tested end-to-end without a real Google/Microsoft sign-in. Deliberately never linked from the public integration docs — see that file before touching `CloudServices:Mock`, `MockCloudStorageProvider.cs`, `ICloudAccountRepository.SeedTestVaultAsync`, or the `Mock*`-prefixed members on `JwtIssuerController`.
 - `BiatecMCPTests/` — NUnit + Moq tests for `BiatecMCP` (OAuth resource-server wiring via
   `Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory`, `AlgorandTransactionBuilder`, `BiatecWalletClient`,
   the MCP tools) **and** `BiatecSelfCustodyCore` (AES encryption, transfer policy, `CloudStorageProviderCatalog`,
