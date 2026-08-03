@@ -1,7 +1,14 @@
 using Algorand;
 using Algorand.Algod.Model.Transactions;
+using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Logging;
+using Nethereum.Signer;
+using EvmAccessListItem = Nethereum.Model.AccessListItem;
+using EvmISignedTransaction = Nethereum.Model.ISignedTransaction;
+using EvmLegacyTransactionChainId = Nethereum.Model.LegacyTransactionChainId;
+using EvmSignature = Nethereum.Model.Signature;
+using EvmTransaction1559 = Nethereum.Model.Transaction1559;
 
 namespace BiatecSelfCustodyCore.BusinessLogic
 {
@@ -79,6 +86,70 @@ namespace BiatecSelfCustodyCore.BusinessLogic
                     throw new Exception("Unable to parse or sign transaction data", innerExc);
                 }
             }
+        }
+
+        public async Task<byte[]> SignEvmTransactionAsync(string email, EvmUnsignedTransaction transaction, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)
+        {
+            if (string.IsNullOrEmpty(email))
+            {
+                throw new ArgumentException("Email is required", nameof(email));
+            }
+
+            if (transaction == null)
+            {
+                throw new ArgumentException("Transaction data is required", nameof(transaction));
+            }
+
+            // Nethereum's transaction types can only be safely built from their own field-based
+            // constructors - their raw-byte constructors (and TransactionFactory.CreateTransaction(byte[]))
+            // decode an already-*signed* transaction (used to recover its sender), they don't accept an
+            // unsigned one to sign. EIP-1559 (MaxFeePerGas/MaxPriorityFeePerGas given) signs with a 0/1
+            // "y parity" byte, independent of chain id (a first-class field on the transaction itself, not
+            // something the signature encodes); legacy + EIP-155 (GasPrice given) instead encodes the chain
+            // id into v.
+            EvmISignedTransaction signedTransaction;
+            EthECDSASignature signature;
+            var key = await _cloudAccountRepository.LoadEvmAccountAsync(email, slot, provider, accessToken, seedAddress);
+            try
+            {
+                if (transaction.MaxFeePerGas.HasValue || transaction.MaxPriorityFeePerGas.HasValue)
+                {
+                    var typedTx = new EvmTransaction1559(
+                        transaction.ChainId,
+                        transaction.Nonce,
+                        transaction.MaxPriorityFeePerGas ?? 0,
+                        transaction.MaxFeePerGas ?? 0,
+                        transaction.GasLimit,
+                        transaction.To,
+                        transaction.Value,
+                        transaction.Data,
+                        new List<EvmAccessListItem>());
+                    signature = key.SignAndCalculateYParityV(typedTx.RawHash);
+                    signedTransaction = typedTx;
+                }
+                else
+                {
+                    var legacyTx = new EvmLegacyTransactionChainId(
+                        transaction.To,
+                        transaction.Value,
+                        transaction.Nonce,
+                        transaction.GasPrice ?? 0,
+                        transaction.GasLimit,
+                        transaction.Data,
+                        transaction.ChainId);
+                    signature = key.SignAndCalculateV(legacyTx.RawHash, transaction.ChainId);
+                    signedTransaction = legacyTx;
+                }
+            }
+            catch (Exception exc) when (exc is not ArgumentException)
+            {
+                _logger?.LogDebug(exc, "Failed to build EVM transaction data.");
+                throw new FormatException("Unable to parse EVM transaction data.", exc);
+            }
+
+            _logger?.LogInformation($"EvmAccountSign:{key.GetPublicAddress()}");
+            signedTransaction.SetSignature(new EvmSignature(signature.R, signature.S, signature.V));
+            return signedTransaction.GetRLPEncoded();
         }
 
         public async Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)

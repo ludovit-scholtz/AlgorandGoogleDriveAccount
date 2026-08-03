@@ -1,3 +1,5 @@
+using BiatecSelfCustodyCore.Model;
+
 namespace BiatecOIDC.BusinessLogic
 {
     /// <summary>
@@ -34,5 +36,24 @@ namespace BiatecOIDC.BusinessLogic
         /// <exception cref="FormatException">A transaction could not be decoded.</exception>
         /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
         Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? seedAddress = null, int slot = 0);
+
+        /// <summary>
+        /// Signs one or more unsigned EVM (Ethereum-family) transactions via the shared self-custody
+        /// signing path (<see cref="BiatecSelfCustodyCore.BusinessLogic.IDriveService.SignEvmTransactionAsync"/>).
+        /// Unlike <see cref="SignTransactionGroupAsync"/>, this does **not** price or spending-limit-check
+        /// anything - EVM native-currency spending limits aren't implemented yet (same current scope as
+        /// every AVM chain other than Algorand mainnet - see <c>chains.html</c>'s capability matrix), so
+        /// there is nothing to enforce here today.
+        /// </summary>
+        /// <param name="email">The wallet owner (from the caller's validated OIDC access token).</param>
+        /// <param name="provider">The cloud storage provider the account is stored under.</param>
+        /// <param name="unsignedTransactions">One or more unsigned EVM transactions.</param>
+        /// <param name="accessToken">The caller-supplied provider access token used to read/decrypt the self-custody account file.</param>
+        /// <param name="seedAddress">Selects which seed signs (<c>null</c> = the vault's current primary seed).</param>
+        /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
+        /// <returns>The RLP-encoded, fully-signed transactions, in the same order as the input.</returns>
+        /// <exception cref="FormatException">A transaction could not be built/signed.</exception>
+        /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
+        Task<IReadOnlyList<byte[]>> SignEvmTransactionGroupAsync(string email, string provider, IReadOnlyList<EvmUnsignedTransaction> unsignedTransactions, string? accessToken, string? seedAddress = null, int slot = 0);
     }
 }

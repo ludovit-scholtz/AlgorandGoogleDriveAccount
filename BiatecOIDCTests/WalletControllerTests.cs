@@ -184,19 +184,119 @@ namespace BiatecOIDCTests
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
         }
 
+        private static string BuildEvmTransactionBase64(string? gasPrice = "20000000000", string? maxFeePerGas = null, string? maxPriorityFeePerGas = null)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(new EvmTransactionRequest
+            {
+                ChainId = "1",
+                Nonce = "0",
+                To = "0x13f022d72158410433cbd66f5dd8bf6d2d0999c",
+                Value = "1000000000000000000",
+                Data = string.Empty,
+                GasLimit = "21000",
+                GasPrice = gasPrice,
+                MaxFeePerGas = maxFeePerGas,
+                MaxPriorityFeePerGas = maxPriorityFeePerGas
+            });
+            return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
+        }
+
         [Test]
-        public async Task SignTransactionGroup_EvmNetwork_ReturnsNotImplemented()
+        public async Task SignTransactionGroup_EvmNetwork_CallsWalletServiceAndReturnsOk()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("provider-token");
+            _mockNetworkResolver.Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+            var signedBytes = new byte[] { 1, 2, 3 };
+            _mockWalletService
+                .Setup(w => w.SignEvmTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<EvmUnsignedTransaction>>(), "provider-token", TestAddress, 0))
+                .ReturnsAsync(new List<byte[]> { signedBytes });
+
+            var result = await Sign(new SignTransactionGroupRequest { Transactions = new List<string> { BuildEvmTransactionBase64() } }, network: "ethereum");
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as SignTransactionGroupResponse;
+            Assert.That(response!.SignedTransactions, Is.EqualTo(new List<string> { Convert.ToBase64String(signedBytes) }));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_EvmNetwork_UnknownAddress_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver.Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+            _mockAddressActivationService
+                .Setup(s => s.TryResolveAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), "0xNOTKNOWN", It.IsAny<CancellationToken>()))
+                .ReturnsAsync((AddressActivationEntry?)null);
+
+            var result = await Sign(new SignTransactionGroupRequest { Transactions = new List<string> { BuildEvmTransactionBase64() } }, network: "ethereum", address: "0xNOTKNOWN");
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            var problem = objectResult.Value as ProblemDetails;
+            Assert.That(problem!.Title, Is.EqualTo("address_not_active"));
+            _mockWalletService.Verify(w => w.SignEvmTransactionGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<EvmUnsignedTransaction>>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_EvmNetwork_UndecodableTransaction_ReturnsBadRequestWithoutCallingWalletService()
         {
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token", new Claim("sign", "true"));
             _mockNetworkResolver.Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
 
-            var result = await Sign(new SignTransactionGroupRequest { Transactions = new List<string> { "AA==" } }, network: "ethereum");
+            var result = await Sign(new SignTransactionGroupRequest { Transactions = new List<string> { Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("not json")) } }, network: "ethereum");
 
             var objectResult = result as ObjectResult;
             Assert.That(objectResult, Is.Not.Null);
-            Assert.That(objectResult!.StatusCode, Is.EqualTo(501));
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            var problem = objectResult.Value as ProblemDetails;
+            Assert.That(problem!.Title, Is.EqualTo("invalid_request"));
+            _mockWalletService.Verify(w => w.SignEvmTransactionGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<EvmUnsignedTransaction>>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_EvmNetwork_BothFeeShapesGiven_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver.Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+
+            var result = await Sign(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { BuildEvmTransactionBase64(gasPrice: "20000000000", maxFeePerGas: "30000000000") }
+            }, network: "ethereum");
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_EvmNetwork_WalletServiceThrowsFormatException_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver.Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+            _mockWalletService
+                .Setup(w => w.SignEvmTransactionGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<EvmUnsignedTransaction>>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ThrowsAsync(new FormatException("Unable to sign EVM transaction."));
+
+            var result = await Sign(new SignTransactionGroupRequest { Transactions = new List<string> { BuildEvmTransactionBase64() } }, network: "ethereum");
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            var problem = objectResult.Value as ProblemDetails;
+            Assert.That(problem!.Title, Is.EqualTo("invalid_request"));
         }
 
         [Test]

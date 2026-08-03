@@ -26,7 +26,7 @@ namespace BiatecMCP.BusinessLogic
                 Transactions = unsignedTransactions.Select(Convert.ToBase64String).ToList()
             };
 
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"wallet/sign/{Uri.EscapeDataString(network)}/{Uri.EscapeDataString(address)}")
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"wallet/{Uri.EscapeDataString(network)}/{Uri.EscapeDataString(address)}/sign")
             {
                 Content = JsonContent.Create(request)
             };

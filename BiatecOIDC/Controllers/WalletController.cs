@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using Algorand;
 using Algorand.Algod;
 using BiatecOIDC.BusinessLogic;
@@ -78,31 +79,37 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
-        /// Signs an Algorand transaction group as <paramref name="address"/>. The group's total USD value
+        /// Signs a transaction group as <paramref name="address"/> on <paramref name="network"/> - Algorand-family
+        /// (AVM) and Ethereum-family (EVM) chains are both supported. For AVM, the group's total USD value
         /// (every payment/asset-transfer in it, priced via the Biatec Router) is checked against the
-        /// caller's daily/weekly/monthly spending limits before anything is signed.
+        /// caller's daily/weekly/monthly spending limits before anything is signed; EVM native-currency
+        /// spending limits aren't implemented yet, so no such check happens for an EVM group (see
+        /// <see cref="IWalletService.SignEvmTransactionGroupAsync"/>'s remarks).
         /// </summary>
-        /// <param name="network">Which chain <paramref name="address"/> belongs to (e.g. <c>algorand</c>, <c>voi</c>) - see <c>GET /chains</c>.</param>
+        /// <param name="network">Which chain <paramref name="address"/> belongs to (e.g. <c>algorand</c>, <c>voi</c>, <c>ethereum</c>, <c>arbitrum</c>) - see <c>GET /chains</c>.</param>
         /// <param name="address">
         /// Which identity signs - a seed's own primary address, an address previously derived via
         /// <c>GET /wallet/address/{seedAddress}/{slot}</c>, or an address activated via
         /// <c>POST /wallet/{network}/{address}/activate</c> (e.g. after an on-chain rekey to a
         /// Biatec-controlled key).
         /// </param>
-        /// <param name="request">The transactions to sign (base64 msgpack).</param>
-        /// <returns>The signed transactions (base64 msgpack), in the same order as the request.</returns>
-        /// <response code="200">All transactions were within limit and signed successfully.</response>
-        /// <response code="400">The request was malformed, a transaction could not be decoded, a
+        /// <param name="request">
+        /// The transactions to sign - base64-encoded msgpack for an AVM <paramref name="network"/>, or
+        /// base64-encoded RLP for an EVM one (the type - legacy, EIP-2930, EIP-1559, EIP-7702 - is read off
+        /// the wire, same as <c>Nethereum.Model.TransactionFactory.CreateTransaction</c>).
+        /// </param>
+        /// <returns>The signed transactions, in the same encoding as the request, in the same order.</returns>
+        /// <response code="200">All transactions were within limit (AVM) and signed successfully.</response>
+        /// <response code="400">The request was malformed, a transaction could not be decoded, an AVM
         /// transaction's sender doesn't match <paramref name="address"/>, or <paramref name="address"/> is
         /// unknown (never derived or activated).</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
         /// <response code="403">The token lacks the <c>sign</c> claim, lacks the <c>rekey</c> claim while the
-        /// group contains a rekey transaction, or the group exceeds the caller's spending limit.</response>
-        /// <response code="501"><paramref name="network"/> is an EVM chain - signing isn't supported there yet.</response>
+        /// group contains an AVM rekey transaction, or the group exceeds the caller's spending limit.</response>
         /// <response code="503">A spent asset's USD value, or the caller's limit currency's exchange rate, could not be determined.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
-        [HttpPost("sign/{network}/{address}")]
+        [HttpPost("{network}/{address}/sign")]
         public async Task<IActionResult> SignTransactionGroup(string network, string address, [FromBody] SignTransactionGroupRequest request)
         {
             var authError = TryAuthenticate(WalletScopes.Sign, out var principal);
@@ -115,11 +122,6 @@ namespace BiatecOIDC.Controllers
             if (resolvedNetwork == null)
             {
                 return BadRequest(new ProblemDetails { Title = "unknown_network", Detail = $"Unknown network '{network}'. See GET /chains for currently-supported networks." });
-            }
-
-            if (resolvedNetwork.Family == ChainFamily.Evm)
-            {
-                return StatusCode(StatusCodes.Status501NotImplemented, new ProblemDetails { Title = "sign_not_supported", Detail = "Signing EVM transactions is not supported yet." });
             }
 
             if (request.Transactions == null || request.Transactions.Count == 0)
@@ -135,6 +137,11 @@ namespace BiatecOIDC.Controllers
             catch (FormatException)
             {
                 return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Each transaction must be base64-encoded." });
+            }
+
+            if (resolvedNetwork.Family == ChainFamily.Evm)
+            {
+                return await SignEvmTransactionGroupAsync(principal!, network, address, decodedTransactions);
             }
 
             var infos = new List<AlgorandTransferInfo>();
@@ -229,6 +236,69 @@ namespace BiatecOIDC.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unexpected error signing transaction group for {Email}.", email);
+                return StatusCode(StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "server_error", Detail = "Unable to sign the transaction group." });
+            }
+        }
+
+        /// <summary>
+        /// EVM branch of <see cref="SignTransactionGroup"/> - no <see cref="AlgorandTransactionInspector"/>
+        /// (that's AVM-msgpack-specific), no sender/rekey checks (an unsigned EVM transaction carries no
+        /// sender field at all - the sender is *derived* from whichever key signs it, unlike Algorand's
+        /// explicit <c>snd</c> field - and EVM has no rekey concept), and no spending-limit enforcement (not
+        /// implemented for EVM yet - see <see cref="IWalletService.SignEvmTransactionGroupAsync"/>).
+        /// </summary>
+        private async Task<IActionResult> SignEvmTransactionGroupAsync(ClaimsPrincipal principal, string network, string address, List<byte[]> decodedTransactions)
+        {
+            var email = principal.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            if (signer == null)
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Title = "address_not_active",
+                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate it via POST /wallet/{network}/{address}/activate first."
+                });
+            }
+
+            List<EvmUnsignedTransaction> unsignedTransactions;
+            try
+            {
+                unsignedTransactions = decodedTransactions
+                    .Select(tx => EvmTransactionRequestParser.Parse(JsonSerializer.Deserialize<EvmTransactionRequest>(tx) ?? throw new FormatException("Empty EVM transaction request.")))
+                    .ToList();
+            }
+            catch (Exception ex) when (ex is FormatException or JsonException)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = $"Unable to parse EVM transaction request: {ex.Message}" });
+            }
+
+            try
+            {
+                var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _walletService.SignEvmTransactionGroupAsync(email, provider, unsignedTransactions, token, signer.Value.SeedAddress, signer.Value.Slot));
+                return Ok(new SignTransactionGroupResponse
+                {
+                    SignedTransactions = signed.Select(Convert.ToBase64String).ToList()
+                });
+            }
+            catch (FormatException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "seed_not_found", Detail = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error signing an EVM transaction group for {Email}.", email);
                 return StatusCode(StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "server_error", Detail = "Unable to sign the transaction group." });
             }
         }
@@ -451,7 +521,7 @@ namespace BiatecOIDC.Controllers
                 // A slot-0 AVM address is already its own seed's identifying address (recognized for free,
                 // without ever touching the activation registry - see ResolveSignerAsync). Only a non-zero
                 // slot needs an explicit entry so it becomes resolvable by address alone later (e.g. from
-                // POST /wallet/sign/{network}/{address}).
+                // POST /wallet/{network}/{address}/sign).
                 if (resolvedSlot != 0)
                 {
                     await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
@@ -533,7 +603,7 @@ namespace BiatecOIDC.Controllers
         /// entry point for AVM rekey support: rekey an external account to one of this account's addresses
         /// (see <c>GET /wallet/address/{seedAddress}/{slot}</c> for candidates, or mint a fresh one via
         /// <c>POST /wallet/seeds</c>), confirm the rekey transaction on-chain, then call this so
-        /// <c>POST /wallet/sign/{network}/{address}</c> recognizes <paramref name="address"/> going forward.
+        /// <c>POST /wallet/{network}/{address}/sign</c> recognizes <paramref name="address"/> going forward.
         /// For a native address (one that's exactly the derived address for that seed/slot already), this
         /// just registers it immediately - the same thing <c>GET /wallet/address/{seedAddress}/{slot}</c>
         /// already does automatically, so calling this for a native address is rarely necessary.

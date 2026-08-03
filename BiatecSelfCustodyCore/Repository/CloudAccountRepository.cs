@@ -83,6 +83,36 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
+        public async Task<Nethereum.Signer.EthECKey> LoadEvmAccountAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null)
+        {
+            var storageProvider = _catalog.Resolve(provider);
+
+            try
+            {
+                var context = await ResolveContextAsync(storageProvider, accessToken);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
+
+                return AlgorandARC76AccountDotNet.ARC76.GetEVMEmailAccount(email, seed.Mnemonic, slot);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading an EVM account from {Provider} for email {Email}", storageProvider.Name, email);
+                throw new InvalidOperationException($"Error loading an EVM account from {storageProvider.Name}.");
+            }
+        }
+
         public async Task<string> DeriveAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null)
         {
             var storageProvider = _catalog.Resolve(provider);

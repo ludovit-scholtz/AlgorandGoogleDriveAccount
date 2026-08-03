@@ -11,7 +11,7 @@ Biatec — two independently deployed ASP.NET Core 10 services:
 - **BiatecOIDC** is an OpenID Connect identity provider (JWT issuer) *and* a self-custody wallet API: whitelisted
   (or, for MCP-class clients, dynamically self-registered — see below) third-party apps authenticate users via
   Google or Microsoft Entra ID and receive Algorand-identity claims, and can sign Algorand transactions on the
-  user's behalf via `POST /wallet/sign/{network}/{address}` (spend-limit-enforced, never handing out the
+  user's behalf via `POST /wallet/{network}/{address}/sign` (spend-limit-enforced, never handing out the
   user's own key material).
 - **BiatecMCP** exposes that same self-custody wallet to AI assistants over the Model Context Protocol. It holds
   **no key material and no identity/storage-provider credentials of its own** — it is a pure OAuth 2.1 *resource
@@ -85,7 +85,7 @@ dependency on `BiatecSelfCustodyCore`.
     `sign` claim needed - see "Multisig transactions" below); `activateCryptoAddress` (registers an
     address → seed/slot pairing - the entry point for rekeying an external Algorand address to a
     Biatec-controlled key, requires `sign`); `signTransaction` (standalone - forwards
-    to BiatecOIDC's `POST /wallet/sign/{network}/{address}`, requires `sign`), `mergeMultisigTransactions`
+    to BiatecOIDC's `POST /wallet/{network}/{address}/sign`, requires `sign`), `mergeMultisigTransactions`
     (combines independently-signed multisig copies, no BiatecOIDC/Algod call); `executeAlgorandTransaction`
     (broadcasts already-signed transactions, requires `sign`). Every tool's `[Description]` names the next
     tool in the
@@ -100,7 +100,7 @@ dependency on `BiatecSelfCustodyCore`.
     dynamic, liveness-verified `IAlgorandChainRegistry` (see "Multi-chain support" below) when it isn't one
     of the locally-configured `Algod:Networks` entries.
   - `BusinessLogic/IBiatecWalletClient.cs` + `BiatecWalletClient.cs` — typed `HttpClient` wrapping BiatecOIDC's
-    `POST /wallet/sign/{network}/{address}`/`GET /wallet/seeds`/
+    `POST /wallet/{network}/{address}/sign`/`GET /wallet/seeds`/
     `GET /wallet/address/{seedAddress}/{slot}` (returns both the AVM and EVM address for that seed/slot in
     one call)/`GET /wallet/{network}/{address}/info`/
     `POST /wallet/{network}/{address}/activate`, forwarding the caller's
@@ -140,7 +140,7 @@ dependency on `BiatecSelfCustodyCore`.
     issued; see "MCP server" under Architecture notes for why this exists), `/select-provider` (picker page,
     one button per provider registered in the catalog), `/authorize/challenge`, `/authorize/callback` (verifies
     storage-write access via `catalog.Resolve(idp).HasWriteAccessAsync(...)` before finalizing)
-  - `Controllers/WalletController.cs` — `/wallet/sign/{network}/{address}` (`sign` claim, + `rekey` for a
+  - `Controllers/WalletController.cs` — `/wallet/{network}/{address}/sign` (`sign` claim, + `rekey` for a
     rekey transaction), `/wallet/limits` get (identity only)/put (`manage-limits` claim),
     `/wallet/{network}/{address}/limits` (same claims, per-address bucket),
     `/wallet/limits/currencies` (identity only), `/wallet/{network}/{address}/info` (identity only),
@@ -353,7 +353,7 @@ setup stage needs.
   recovering from a suspected key compromise), and `PUT /wallet/seeds/primary` (switch which seed is primary,
   requires `sign`). Biatec never builds or submits the on-chain rekey transaction itself — the RP's own
   backend builds a transaction with Algorand's `rekey` field set to the new seed's address and submits it
-  through the existing `POST /wallet/sign/{network}/{address}`, which is what actually enforces the `rekey` claim: see the
+  through the existing `POST /wallet/{network}/{address}/sign`, which is what actually enforces the `rekey` claim: see the
   "Wallet API" bullet below and `AlgorandTransactionInspector`'s `IsRekey` detection. Only once that
   transaction is confirmed on-chain should the caller call `PUT /wallet/seeds/primary` — switching primary
   before that would make Biatec sign with a key the account no longer recognizes.
@@ -462,10 +462,10 @@ setup stage needs.
   build an *unsigned* transaction locally (`AlgorandTransactionBuilder`/`MultisigTransactionBuilder`,
   Algorand4 SDK, no key material touched, no `sign` claim required - building a proposal is harmless);
   `signTransaction(unsignedTransactions, network, address)` forwards it to
-  `POST /wallet/sign/{network}/{address}` — (BiatecOIDC resolves `address` to the signing seed/slot,
+  `POST /wallet/{network}/{address}/sign` — (BiatecOIDC resolves `address` to the signing seed/slot,
   enforces the `sign`/`rekey` claim and both spending-limit tiers there —
   `McpTransferLimitsConfiguration`/`TransferPolicy` were removed from `BiatecMCP` entirely, since
-  `/wallet/sign/{network}/{address}` already does this uniformly for every relying party) and requires the
+  `/wallet/{network}/{address}/sign` already does this uniformly for every relying party) and requires the
   `sign` claim itself; `executeAlgorandTransaction` broadcasts the signed bytes to Algod via a shared private
   `SubmitSignedTransactionsAsync` helper, also requiring `sign`. `mergeMultisigTransactions` combines
   independently-signed copies of a `createMultisigTransaction` envelope (no BiatecOIDC/Algod call - pure
@@ -540,9 +540,30 @@ setup stage needs.
   `GET /wallet/address/{seedAddress}/{slot?}` endpoint the AVM address uses - one call derives and returns
   both - there is deliberately no per-EVM-chain concept at this layer, since one EVM address is valid
   across every EVM chain (unlike Algorand's per-`genesisId` split), so **`BiatecOIDC` has no EVM chain
-  registry at all**. Scope today is address + native-balance only - no EVM transaction building/signing/
-  broadcasting, no ERC-20 balances (both explicitly out of scope; see `BiatecMCP.cs`'s `getCryptoBalance`
-  remarks).
+  registry at all**. `POST /wallet/{network}/{address}/sign` signs EVM transactions too (see "Wallet API"
+  below for the legacy/EIP-1559 request shape and `DriveService.SignEvmTransactionAsync`'s implementation) -
+  scope beyond that is address + native-balance only, no broadcasting from `BiatecOIDC` itself (the caller
+  submits the signed raw transaction to the chain's own RPC) and no ERC-20 balances (out of scope; see
+  `BiatecMCP.cs`'s `getCryptoBalance` remarks).
+
+  EVM signing (`DriveService.SignEvmTransactionAsync`, `BiatecSelfCustodyCore/BusinessLogic/`) is built the
+  same way `SignTransactionAsync` signs Algorand transactions - resolve the seed, derive the signing key
+  (`ICloudAccountRepository.LoadEvmAccountAsync`, mirroring `LoadAccountAsync` but returning a
+  `Nethereum.Signer.EthECKey`), sign, discard the key. Unlike Algorand's msgpack blobs, though, an unsigned
+  EVM transaction is submitted as a **field struct** (`BiatecSelfCustodyCore.Model.EvmUnsignedTransaction` -
+  chainId/nonce/to/value/data/gasLimit plus either `GasPrice` for legacy or `MaxFeePerGas`+
+  `MaxPriorityFeePerGas` for EIP-1559), not a raw pre-encoded byte blob - `Nethereum.Model`'s transaction
+  types can only be safely built via their own field constructors (their raw-byte constructors, and
+  `TransactionFactory.CreateTransaction(byte[])`, decode an already-*signed* transaction, e.g. to recover its
+  sender - they don't accept an unsigned one to sign, confirmed empirically while building this). Legacy
+  signs via `EthECKey.SignAndCalculateV(rawHash, chainId)` (EIP-155 - chain id is encoded into `v`); EIP-1559
+  signs via `SignAndCalculateYParityV(rawHash)` (a 0/1 "y parity" byte - chain id is already a first-class
+  field on the transaction itself). `WalletController.SignTransactionGroup`'s EVM branch (see "Wallet API"
+  below) maps its own JSON-facing `EvmTransactionRequest` (all numeric fields as decimal/hex **strings** -
+  wei-scale values routinely exceed a JSON number's safe integer range) to this struct via
+  `EvmTransactionRequestParser`. No spending-limit enforcement for EVM yet (not implemented for any
+  non-Algorand-mainnet chain either - see `chains.html`'s capability matrix) - `WalletService`'s new
+  `SignEvmTransactionGroupAsync` skips straight to signing, no USD valuation/limit check.
 
   Chain-specific RPC discovery, needed only for balance queries, lives entirely in `BiatecMCP`:
   `IEvmChainRegistry`/`EvmChainRegistry` (`BiatecMCP/BusinessLogic/`) resolves EVM chains from
@@ -641,7 +662,7 @@ setup stage needs.
   itself, with `WalletController` alone doing the address → `(seedAddress, slot)` resolution before
   delegating into this unchanged layer. `GET /wallet/seeds` lists every seed's address + `isPrimary`.
 - **Address-centric wallet API and rekey support**: the caller-facing wallet surface takes **the address
-  itself**, not a `(seedAddress, slot)` selector — `POST /wallet/sign/{network}/{address}` and
+  itself**, not a `(seedAddress, slot)` selector — `POST /wallet/{network}/{address}/sign` and
   `GET`/`PUT /wallet/{network}/{address}/limits` (`network` a friendly chain name — `algorand`, `voi`, `base`,
   `arbitrum`, ... — resolved via a new, `BiatecOIDC`-local `INetworkResolver`/`NetworkResolver.cs`, built over
   the existing `IAlgorandChainRegistry` for AVM plus a small static well-known-name list for EVM recognition;
@@ -671,8 +692,10 @@ setup stage needs.
   (`AlgorandTransactionInspector`'s new `Sender` field, decoded from the wire `snd` key, skipped for multisig
   envelopes) that 400s if a non-multisig transaction's own `Sender` disagrees with the route's `address`.
 - **Wallet API (`sign`/`manage-limits`/`rekey` scopes)**: `WalletController` (`BiatecOIDC`) exposes
-  `POST /wallet/sign/{network}/{address}` (signs an Algorand transaction group via the shared `IDriveService`,
-  after resolving `address` — see "Address-centric wallet API and rekey support" above),
+  `POST /wallet/{network}/{address}/sign` (signs a transaction group via the shared `IDriveService` -
+  Algorand-family *and* Ethereum-family chains, after resolving `address` — see "Address-centric wallet API
+  and rekey support" above and "EVM (Ethereum-family) support" below for the two families' different request
+  body shapes, sender/rekey checks, and spending-limit enforcement),
   `GET`/`PUT /wallet/limits` (the caller's own global daily/weekly/monthly spending limits and their currency —
   unchanged, no address), `GET`/`PUT /wallet/{network}/{address}/limits` (the same identity's own per-address
   bucket, replacing the old `seedAddress`/`slot` query params — see "Two-tier spending limits" below),
@@ -683,7 +706,7 @@ setup stage needs.
   and `POST /wallet/{network}/{address}/activate` (new — see above), and `GET`/`POST /wallet/seeds` +
   `PUT /wallet/seeds/primary` (the multi-seed vault — see the bullet above; `GET /wallet/seeds` also replaces
   the removed `GET /wallet/address` list endpoint).
-  `POST /wallet/sign/{network}/{address}` and
+  `POST /wallet/{network}/{address}/sign` and
   `PUT /wallet/limits`/`PUT /wallet/{network}/{address}/limits` are gated on a dedicated claim of the same name
   as the scope (`sign`/`manage-limits`), stamped onto the access token by `JwtIssuerService.CreateAccessToken`
   only when that scope was granted **and**
@@ -691,7 +714,7 @@ setup stage needs.
   `GET /wallet/{network}/{address}/limits`, `GET /wallet/limits/currencies`, `GET /wallet/{network}/{address}/info`,
   and `GET /wallet/seeds` only require a validly authenticated caller (no
   dedicated claim, since they're read-only). `POST /wallet/{network}/{address}/activate` requires `sign` (the
-  risky on-chain action has already happened by the time it's called). `POST /wallet/sign/{network}/{address}`
+  risky on-chain action has already happened by the time it's called). `POST /wallet/{network}/{address}/sign`
   additionally requires the stricter `rekey`
   claim — gated the same allowlist way — whenever the transaction group contains a transaction with Algorand's
   `rekey` field set (a normal `sign`-scoped token is refused with 403 otherwise); this is deliberately a
@@ -804,7 +827,7 @@ setup stage needs.
   daily/weekly/monthly spending-limit enforcement (Biatec Router USD valuation, Czech National Bank FX rates,
   encrypted cloud-drive storage), and its encrypted provider-access-token caching. Use this instead of reading
   the two full guide docs above when working on `/authorize`, `/token`, `/register`, `/userinfo`, `/introspect`,
-  `/verify`, `/connect/endsession`, `/logout`, `/wallet/sign/{network}/{address}`, `/wallet/limits`,
+  `/verify`, `/connect/endsession`, `/logout`, `/wallet/{network}/{address}/sign`, `/wallet/limits`,
   `/wallet/{network}/{address}/limits`, `/wallet/limits/currencies`, `/wallet/{network}/{address}/info`,
   `/wallet/{network}/{address}/activate`,
   `JwtIssuerService.cs`, `JwtIssuerController.cs`, `WalletController.cs`, `WalletService.cs`,

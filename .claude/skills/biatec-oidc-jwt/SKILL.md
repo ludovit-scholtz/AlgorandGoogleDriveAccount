@@ -1,12 +1,12 @@
 ---
 name: biatec-oidc-jwt
-description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its address-centric wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector, ICloudAccountRepository's multi-seed vault and multi-address (seedAddress+slot) signing, IAddressActivationService's address-activation registry and AVM rekey support, INetworkResolver, IVaultBackupService) — endpoints (POST /wallet/sign/{network}/{address}, GET/PUT /wallet/{network}/{address}/limits, GET /wallet/{network}/{address}/info, POST /wallet/{network}/{address}/activate), claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped, and the strict `rekey` scope required for any rekey transaction), redirect-URI/logout allowlist rules, signing-key format, global-and-per-address daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, the encrypted provider-access-token caching embedded in issued tokens, including its automatic renewal from
+description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its address-centric wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector, ICloudAccountRepository's multi-seed vault and multi-address (seedAddress+slot) signing, IAddressActivationService's address-activation registry and AVM rekey support, INetworkResolver, DriveService.SignEvmTransactionAsync's EVM (Ethereum-family) transaction signing, IVaultBackupService) — endpoints (POST /wallet/{network}/{address}/sign - AVM and EVM both, GET/PUT /wallet/{network}/{address}/limits, GET /wallet/{network}/{address}/info, POST /wallet/{network}/{address}/activate), claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped, and the strict `rekey` scope required for any rekey transaction), redirect-URI/logout allowlist rules, signing-key format, global-and-per-address daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, the encrypted provider-access-token caching embedded in issued tokens, including its automatic renewal from
 a cached provider refresh token (both on Biatec token refresh and, opportunistically, mid-request in
 WalletController), the multi-seed vault (GET/POST /wallet/seeds, PUT /wallet/seeds/primary,
 GET /wallet/address/{seedAddress}/{slot?}), the address activation registry that maps an address back to
 its (seedAddress, slot) - stored encrypted on the user's own drive, separate from the seed vault - and
 explicit cross-cloud vault backup (POST/GET /wallet/backup/*).
-Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/sign/{network}/{address}, /wallet/limits, /wallet/{network}/{address}/limits, /wallet/limits/currencies, /wallet/{network}/{address}/info, /wallet/{network}/{address}/activate, /wallet/seeds, /wallet/address, /wallet/backup, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, AddressActivationService.cs, NetworkResolver.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, CloudAccountRepository.cs, DriveService.cs, VaultBackupService.cs, VaultBackupController.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
+Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/{network}/{address}/sign, /wallet/limits, /wallet/{network}/{address}/limits, /wallet/limits/currencies, /wallet/{network}/{address}/info, /wallet/{network}/{address}/activate, /wallet/seeds, /wallet/address, /wallet/backup, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, AddressActivationService.cs, NetworkResolver.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, CloudAccountRepository.cs, DriveService.cs, EvmTransactionRequestParser.cs, VaultBackupService.cs, VaultBackupController.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
 ---
 
 # Biatec OIDC / JWT issuer
@@ -93,26 +93,43 @@ Not part of the OIDC protocol itself - a Biatec-specific self-custody API layere
 way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `ValidateBearerAccessToken`, **not**
 `[Authorize]`/a JWT Bearer scheme - see "Why manual token parsing" below).
 
-- `POST /wallet/sign/{network}/{address}` — requires the `sign` claim; if any transaction in the group has
-  Algorand's `rekey` field set (`AlgorandTransactionInspector.Inspect(...).IsRekey`, checked in
-  `WalletController.SignTransactionGroup` right after decoding, before anything else), also requires the
-  `rekey` claim - a `sign`-only token gets 403 `insufficient_scope` naming `rekey`, and nothing in the group is
-  signed. `network` is a friendly chain name (`algorand`, `voi`, `base`, `arbitrum`, ...) resolved via
-  `INetworkResolver`; unknown → 400, EVM family → 501 `sign_not_supported` (no EVM signing yet). `address` is
+- `POST /wallet/{network}/{address}/sign` — requires the `sign` claim. `network` is a friendly chain name
+  (`algorand`, `voi`, `base`, `arbitrum`, ...) resolved via `INetworkResolver`; unknown → 400. `address` is
   resolved to `(seedAddress, slot)` by `WalletController.ResolveSignerAsync`: first checked against every
   seed's own primary (slot-0) address (free, no file access), then against
   `IAddressActivationService.TryResolveAsync` (see "Address activation registry" below) - 400
   `address_not_active` if neither resolves, naming `GET /wallet/address/{seedAddress}/{slot}` (native) or
-  `POST /wallet/{network}/{address}/activate` (rekeyed) as the fix. Body has shrunk to just
-  `{ "transactions": ["<base64 msgpack>", ...] }` - no `seedAddress`/`slot` field anymore (this is a
-  breaking change from the old shape). For a non-multisig transaction, its own decoded `Sender`
-  (`AlgorandTransactionInspector`'s `Sender` field) must equal the route's `address` or the request 400s
-  `sender_mismatch` (defense-in-depth; skipped for a multisig `SignedTransaction` envelope, where the "sender"
-  is the multisig group address, not the cosigning participant). No provider-token field, no wallet endpoint
-  accepts one; the Google/Microsoft token needed to read/decrypt the self-custody file *and* the spending-limit
-  data is always resolved from the bearer token's own encrypted `provider_token` claim, via
+  `POST /wallet/{network}/{address}/activate` (rekeyed) as the fix. Body: `{ "transactions": [...] }` - no
+  `seedAddress`/`slot` field anymore (this is a breaking change from the old shape) - but each entry's own
+  encoding, and everything else this endpoint checks, depends on whether `network` resolves to the AVM or EVM
+  family:
+  - **AVM**: each entry is base64 msgpack. If any transaction in the group has Algorand's `rekey` field set
+    (`AlgorandTransactionInspector.Inspect(...).IsRekey`, checked right after decoding, before anything else),
+    also requires the `rekey` claim - a `sign`-only token gets 403 `insufficient_scope` naming `rekey`, and
+    nothing in the group is signed. Its own decoded `Sender` (`AlgorandTransactionInspector`'s `Sender` field)
+    must equal the route's `address` or the request 400s `sender_mismatch` (defense-in-depth; skipped for a
+    multisig `SignedTransaction` envelope, where the "sender" is the multisig group address, not the
+    cosigning participant). Every `pay`/`axfer` is priced and checked against the spending limit (see below)
+    before anything signs, via `IDriveService.SignTransactionAsync`.
+  - **EVM**: each entry is base64-encoded UTF-8 JSON matching `EvmTransactionRequest`
+    (`BiatecOIDC/Model/WalletModels.cs`) - `chainId`/`nonce`/`to`/`value`/`data`/`gasLimit` plus either
+    `gasPrice` (legacy) or `maxFeePerGas`+`maxPriorityFeePerGas` (EIP-1559), all numeric fields as
+    decimal/`0x`-hex **strings** (never JSON numbers - wei-scale values exceed a safe JS/JSON integer).
+    `EvmTransactionRequestParser.Parse` maps this to `BiatecSelfCustodyCore.Model.EvmUnsignedTransaction` -
+    400 `invalid_request` if a required field is missing, a number can't be parsed, or neither/both fee
+    shapes are given. No sender field to check (an unsigned EVM transaction has none - the sender is
+    *derived* from whichever key signs it), no rekey concept, and **no spending-limit enforcement yet** (not
+    implemented for EVM at all - same current scope as every AVM chain other than Algorand mainnet, see
+    `chains.html`'s capability matrix) - `IWalletService.SignEvmTransactionGroupAsync` skips straight to
+    `IDriveService.SignEvmTransactionAsync` for each entry. See "EVM transaction signing" below for how that
+    actually builds and signs the right `Nethereum.Model` transaction type.
+
+  No provider-token field, no wallet endpoint
+  accepts one; the Google/Microsoft token needed to read/decrypt the self-custody file *and* (AVM only) the
+  spending-limit data is always resolved from the bearer token's own encrypted `provider_token` claim, via
   `WalletController.ResolveProviderAccessToken` (see "Provider access token caching" below) - never persisted
-  server-side in plaintext, never a caller-supplied parameter. Every `pay`/`axfer` transaction in the group is
+  server-side in plaintext, never a caller-supplied parameter. For AVM, every `pay`/`axfer` transaction in the
+  group is
   priced in USD via `IAssetValuationService` (`BiatecRouterValuationService`, quoting against the Biatec Router
   - see below), summed, and the total is checked against **both** the signing identity's global and
   per-address daily (trailing 24h)/weekly (trailing 7d)/monthly (trailing 30d) spending limits
@@ -139,7 +156,7 @@ way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `V
 - `GET /wallet/{network}/{address}/info` — only requires a valid bearer token. Reports
   `{ Address, Network, Family, IsActive, SeedAddress?, Slot? }` for any address, whether active or not (the
   latter two are `null` when inactive) - checks the seed-primary short-circuit first, then
-  `IAddressActivationService.TryResolveAsync`, same resolution `POST /wallet/sign/{network}/{address}` uses.
+  `IAddressActivationService.TryResolveAsync`, same resolution `POST /wallet/{network}/{address}/sign` uses.
 - `POST /wallet/{network}/{address}/activate` — requires `sign`. Body: `{ "seedAddress": "...", "slot": 0 }`.
   Derives the expected address for that seed/slot/family; if it equals `address` exactly, activates
   immediately (a manual alternative to the same auto-activation `GET /wallet/address/{seedAddress}/{slot}`
@@ -201,6 +218,41 @@ registration, ...) returns `AlgorandTransactionKind.Other` and is not spending-l
 scope of that feature - `IsRekey` is read independently of `Kind`, since a rekey can accompany any transaction
 type (wire key `"rekey"`, a 32-byte address; present whenever non-empty).
 
+## EVM transaction signing (`DriveService.SignEvmTransactionAsync`, `BiatecSelfCustodyCore/BusinessLogic/`)
+
+Signs an unsigned EVM (Ethereum-family) transaction with the same seed `POST /wallet/{network}/{address}/sign`
+resolved a signer for - built the same way `SignTransactionAsync` signs Algorand transactions (resolve the
+seed, derive the key, sign, discard the key), just via `Nethereum.Model`/`Nethereum.Signer` instead of the
+Algorand4 SDK. `ICloudAccountRepository.LoadEvmAccountAsync` (mirrors `LoadAccountAsync`) derives the signing
+key - a `Nethereum.Signer.EthECKey` - via `ARC76.GetEVMEmailAccount`, the same seed mnemonic `DeriveEvmAddressAsync`
+already uses.
+
+The transaction itself is a **field struct** (`BiatecSelfCustodyCore.Model.EvmUnsignedTransaction` -
+`ChainId`/`Nonce`/`To`/`Value`/`Data`/`GasLimit` plus either `GasPrice` for legacy or `MaxFeePerGas`+
+`MaxPriorityFeePerGas` for EIP-1559), not a raw pre-encoded byte blob - `Nethereum.Model`'s transaction types
+(`LegacyTransactionChainId`, `Transaction1559`, ...) can only be safely *built* via their own field
+constructors; their raw-byte constructors, and `TransactionFactory.CreateTransaction(byte[])`, decode an
+already-*signed* transaction (e.g. to recover its sender) - they throw ("Signature not initiated or
+calculated") if fed an unsigned one, confirmed empirically while building this feature. `DriveService`
+constructs `LegacyTransactionChainId` (if `GasPrice` is set) or `Transaction1559` (if the EIP-1559 fields
+are), signs `transaction.RawHash`, and calls `transaction.SetSignature(...)`/`GetRLPEncoded()` for the final
+broadcastable bytes:
+- **Legacy + EIP-155** (`GasPrice` set): `key.SignAndCalculateV(rawHash, chainId)` - chain id is encoded into
+  `v` (replay protection).
+- **EIP-1559** (`MaxFeePerGas`/`MaxPriorityFeePerGas` set): `key.SignAndCalculateYParityV(rawHash)` - a 0/1
+  "y parity" byte; chain id is already a first-class field on the transaction itself, not something the
+  signature encodes.
+
+`WalletController.SignTransactionGroup`'s EVM branch maps the wire-facing `EvmTransactionRequest`
+(`BiatecOIDC/Model/WalletModels.cs` - all numeric fields as decimal/`0x`-hex **strings**, never JSON numbers,
+since wei-scale values exceed a safe JSON/JS integer) to this struct via `EvmTransactionRequestParser`
+(`BiatecOIDC/Helper/`) - `FormatException` (400 `invalid_request`) if a required field is missing, a number
+can't be parsed, or neither/both fee shapes are given. `IWalletService.SignEvmTransactionGroupAsync` is a
+much thinner sibling of `SignTransactionGroupAsync` - no `AlgorandTransactionInspector`, no sender/rekey
+checks (an unsigned EVM transaction carries no sender field - the sender is *derived* from whichever key
+signs it - and EVM has no rekey concept), no spending-limit enforcement (not implemented for EVM at all yet -
+same current scope as every AVM chain other than Algorand mainnet).
+
 ## Address activation registry (`IAddressActivationService`, `BiatecOIDC/BusinessLogic/`) and AVM rekey support
 
 Maps an `address` back to the `(seedAddress, slot)` that controls it, so the wallet API's `{network}/{address}`
@@ -218,9 +270,9 @@ common case (any slot, any family) needs no manual step; (2) explicit -
 `POST /wallet/{network}/{address}/activate` (above), the only path that can register an address the vault didn't
 derive itself - this is what makes rekeying an **external** Algorand address to a Biatec-controlled key work:
 mint a spare seed (`POST /wallet/seeds`, `rekey` claim), submit+confirm an on-chain transaction with `rekey` set
-to that seed's address (through `POST /wallet/sign/{network}/{existingAddress}` with a `rekey`-scoped token, since
+to that seed's address (through `POST /wallet/{network}/{existingAddress}/sign` with a `rekey`-scoped token, since
 the *existing* address is still what signs the rekey transaction itself), then call `/activate` to register the
-pairing once confirmed - from then on, `POST /wallet/sign/{network}/{existingAddress}` resolves to the new seed's
+pairing once confirmed - from then on, `POST /wallet/{network}/{existingAddress}/sign` resolves to the new seed's
 key. `INetworkResolver`/`NetworkResolver.cs` (`BiatecOIDC`'s own copy, independent of `BiatecMCP`'s) resolves the
 route's `network` segment to a chain family (+ live algod connection for AVM, via the existing
 `IAlgorandChainRegistry`) - EVM is recognized by name only (no live EVM chain talk from `BiatecOIDC`), so an EVM
@@ -264,7 +316,7 @@ the same optional `seedAddress`/`slot` straight into `LoadAccountAsync`.
   very first seed ever), and `PUT /wallet/seeds/primary` (switch primary, requires `sign`, 400 if the given
   address isn't in the vault). Biatec never builds/submits the on-chain rekey transaction itself - see
   `OIDC_INTEGRATION_GUIDE.md`'s "Multi-seed vault and rekey" section for the full recovery-flow sequence
-  (mint seed → RP builds+submits a `rekey`-claim-gated `/wallet/sign/{network}/{address}` call → wait for confirmation → only then
+  (mint seed → RP builds+submits a `rekey`-claim-gated `/wallet/{network}/{address}/sign` call → wait for confirmation → only then
   switch primary).
 - `GetEncryptedVaultForBackupAsync(email, provider, accessToken)` returns the vault's current file name and
   raw (still-encrypted) bytes, ensuring it's migrated onto the active AES key/active-generation file name
@@ -380,7 +432,7 @@ validation path deliberately does not query. Without the `ProtectedResources` ha
 client's otherwise-legitimate token (correct signature, issuer, not expired) would fail here the instant it's
 forwarded to *any* BiatecOIDC endpoint - the real-world symptom was BiatecMCP's `getAlgorandAddress`/`listAlgorandAddresses`
 working (they read the `algorand_address` claim locally, no call to BiatecOIDC) while anything that actually had
-to call `GET /wallet/address/{seedAddress}/{slot}`, `GET /wallet/seeds`, or `POST /wallet/sign/{network}/{address}` failed with
+to call `GET /wallet/address/{seedAddress}/{slot}`, `GET /wallet/seeds`, or `POST /wallet/{network}/{address}/sign` failed with
 `invalid_token` for VS Code's MCP client specifically (self-registered, not statically configured). The resource
 URI is only ever added to a token's `aud` by this server itself, at issuance, when `CreateAccessToken` validates
 an RFC 8707 `resource` parameter against that same `ProtectedResources` allowlist - so trusting it here doesn't

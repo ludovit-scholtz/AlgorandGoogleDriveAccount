@@ -24,7 +24,7 @@ delegates all authentication and signing to [BiatecOIDC](https://oidc.biatec.io)
 5. The resulting access token is presented to BiatecMCP as `Authorization: Bearer <token>`. BiatecMCP validates it
    **locally** (JWKS fetched from BiatecOIDC, no per-request network call) against its own resource URI.
 6. Each tool call forwards that *same* bearer token to BiatecOIDC's wallet REST API
-   (`POST /wallet/sign/{network}/{address}`/`GET /wallet/seeds`) — BiatecOIDC does the actual signing, and
+   (`POST /wallet/{network}/{address}/sign`/`GET /wallet/seeds`) — BiatecOIDC does the actual signing, and
    enforces the caller's spending limit and the `rekey` claim, on the caller's behalf.
 
 See the repo root [CLAUDE.md](../CLAUDE.md)'s "MCP server" architecture note for the full code-level walkthrough,
@@ -51,9 +51,11 @@ both chain families (Algorand-family and Ethereum-family) via one `network` para
 `"Voi"`, `"Aramid"`, `"Ethereum"`, `"Gnosis"`, `"Arbitrum"`, `"Base"`, or any other public chain name/id; call
 `listSupportedNetworks` to see what's currently resolvable. EVM chain RPCs are discovered from
 [chainid.network's public chain list](https://chainid.network/chains.json), verified live only for the
-specific chain asked about (not the whole ~2,700-chain list). **EVM support today covers address derivation
-and native-token balance queries only** — sending/signing EVM transactions, ERC-20 token balances, spending
-limits, and rekey are not yet available on EVM chains (rekey has no EVM equivalent at all). See
+specific chain asked about (not the whole ~2,700-chain list). BiatecOIDC's `POST /wallet/{network}/{address}/sign`
+signs EVM transactions too (legacy or EIP-1559) — there is no `create*` tool that builds one yet, so build
+the JSON yourself (see `signTransaction`'s own description below for the shape) and pass it to
+`signTransaction` directly. **Remaining EVM gaps**: no `create*`/build tool, no ERC-20 token balances,
+no spending limits, and no rekey (rekey has no EVM equivalent at all). See
 [BiatecOIDC's supported-chains page](https://oidc.biatec.io/chains.html) for the full per-chain-family
 capability matrix.
 
@@ -66,7 +68,7 @@ require the `sign` scope.
 Every tool's own description tells the connected AI assistant which tool to call next, so a plain "pay X"
 request is handled as three chained tool calls automatically. `signTransaction`, `getAddressInfo`, and
 `activateCryptoAddress` all take the address itself (rather than `seedAddress`/`slot`), matching BiatecOIDC's
-address-centric wallet route shape (`/wallet/sign/{network}/{address}`, etc.) — the `create*` tools and
+address-centric wallet route shape (`/wallet/{network}/{address}/sign`, etc.) — the `create*` tools and
 `getAlgorandAddress` still take the optional `seedAddress`/`slot` pair to *build*/*derive* against a specific
 seed/slot, since that's a different concern (choosing which identity produces the address/transaction).
 
@@ -132,11 +134,17 @@ seed/slot, since that's a different concern (choosing which identity produces th
   participantAddresses)` multisig account. Each participant independently signs the returned envelope with their
   own `signTransaction` call (in their own wallet/MCP session — not necessarily this one), then the signed copies
   are combined with `mergeMultisigTransactions`.
-- **`signTransaction`** — signs one or more unsigned transactions (from any `create*` tool, or a
-  `createMultisigTransaction` envelope) via BiatecOIDC's `POST /wallet/sign/{network}/{address}`. Requires the
-  `sign` scope. `network` and `address` are both required — `address` must already be active (its own seed's
-  slot-0 address, a previously-derived slot from `getAlgorandAddress`, or a pairing registered via
-  `activateCryptoAddress`).
+- **`signTransaction`** — signs one or more unsigned transactions via BiatecOIDC's
+  `POST /wallet/{network}/{address}/sign`. Requires the `sign` scope. `network` and `address` are both
+  required — `address` must already be active (its own seed's slot-0 address, a previously-derived slot from
+  `getAlgorandAddress`, or a pairing registered via `activateCryptoAddress`). For an AVM `network`, each
+  transaction is base64-encoded msgpack from any `create*` tool or a `createMultisigTransaction` envelope.
+  For an EVM `network` (no `create*` tool builds these yet — build the JSON yourself), each transaction is
+  base64-encoded UTF-8 JSON: `{"chainId","nonce","to","value","data","gasLimit","gasPrice"}` for a legacy
+  transaction, or the same with `gasPrice` replaced by `maxFeePerGas`+`maxPriorityFeePerGas` for EIP-1559 —
+  every numeric field a decimal or `0x`-prefixed hex string (never a JSON number). The response is the signed
+  transaction(s) in the same encoding — broadcast an EVM one yourself via that chain's own
+  `eth_sendRawTransaction` (there is no `executeAlgorandTransaction`-equivalent EVM broadcast tool).
 - **`mergeMultisigTransactions`** — combines independently-signed copies of the same multisig envelope (collected
   from each cosigner's own `signTransaction` call) into one transaction, once at least `threshold` signatures are
   present.
@@ -185,10 +193,15 @@ seed/slot, since that's a different concern (choosing which identity produces th
 - *"I rekeyed ABCD...WXYZ on-chain to my new seed EFGH...ADDR at slot 0 — register it"* →
   `activateCryptoAddress(network="algorand", address="ABCD...WXYZ", seedAddress="EFGH...ADDR", slot=0)` —
   now `signTransaction(..., network="algorand", address="ABCD...WXYZ")` signs with the new key.
+- *"send 1 ETH from my ethereum address to 0x13f0...999c"* → `getCryptoAddress(network="Ethereum")` for the
+  sender, then build the unsigned transaction JSON yourself (nonce/gas price from a public RPC or
+  `getCryptoBalance`) and call `signTransaction(unsignedTransactions=['<base64 JSON>'], network="ethereum",
+  address="<sender>")` — broadcast the returned signed bytes via that chain's own `eth_sendRawTransaction`
+  (no broadcast tool for EVM yet).
 
-Spending limits (`PUT /wallet/limits`/`PUT /wallet/{network}/{address}/limits` on BiatecOIDC) can be configured
-globally (apply to every address) and/or per address — a transaction is blocked if it would exceed either,
-enforced by `signTransaction`'s underlying `POST /wallet/sign/{network}/{address}` call. See
+Spending limits (`PUT /wallet/limits`/`PUT /wallet/{network}/{address}/limits` on BiatecOIDC, AVM only for now)
+can be configured globally (apply to every address) and/or per address — a transaction is blocked if it would
+exceed either, enforced by `signTransaction`'s underlying `POST /wallet/{network}/{address}/sign` call. See
 [BiatecOIDC/OIDC_INTEGRATION_GUIDE.md](../BiatecOIDC/OIDC_INTEGRATION_GUIDE.md) for the wallet API's full
 address-centric/spending-limit contract.
 

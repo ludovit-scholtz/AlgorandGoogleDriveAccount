@@ -48,7 +48,7 @@ namespace BiatecMCPTests
             var result = await client.SignAsync("the-bearer-token", "algorand", "SOME-ADDR", new[] { new byte[] { 1, 2, 3 } });
 
             Assert.That(result.SignedTransactions, Is.EqualTo(new[] { "c2lnbmVk" }));
-            Assert.That(captured.LastRequest!.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/sign/algorand/SOME-ADDR"));
+            Assert.That(captured.LastRequest!.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/algorand/SOME-ADDR/sign"));
             Assert.That(captured.LastRequest.Headers.Authorization!.Scheme, Is.EqualTo("Bearer"));
             Assert.That(captured.LastRequest.Headers.Authorization.Parameter, Is.EqualTo("the-bearer-token"));
             using var body = JsonDocument.Parse(captured.LastRequestBody!);
@@ -115,7 +115,7 @@ namespace BiatecMCPTests
 
             await client.SignAsync("token", "algorand", "SEED/ADDR", new[] { new byte[] { 1 } });
 
-            Assert.That(captured.LastRequest!.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/sign/algorand/SEED%2FADDR"));
+            Assert.That(captured.LastRequest!.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/algorand/SEED%2FADDR/sign"));
         }
 
         [Test]

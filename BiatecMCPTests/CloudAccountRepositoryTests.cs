@@ -367,6 +367,43 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task LoadEvmAccountAsync_ReturnsTheSigningKeyForTheDerivedEvmAddress()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var evmAddress = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var key = await repository.LoadEvmAccountAsync(TestEmail, 0, "Fake", "token");
+
+            Assert.That(key.GetPublicAddress(), Is.EqualTo(evmAddress));
+        }
+
+        [Test]
+        public async Task LoadEvmAccountAsync_NonZeroSlot_DiffersFromSlotZero()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var slot0 = await repository.LoadEvmAccountAsync(TestEmail, 0, "Fake", "token");
+            var slot1 = await repository.LoadEvmAccountAsync(TestEmail, 1, "Fake", "token");
+
+            Assert.That(slot1.GetPublicAddress(), Is.Not.EqualTo(slot0.GetPublicAddress()));
+        }
+
+        [Test]
+        public void LoadEvmAccountAsync_UnknownPrimaryAddress_ThrowsInvalidOperationException()
+        {
+            var repository = CreateRepository();
+
+            Assert.That(async () =>
+                {
+                    await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+                    await repository.LoadEvmAccountAsync(TestEmail, 0, "Fake", "token", "NOTAREALADDRESS");
+                },
+                Throws.InvalidOperationException);
+        }
+
+        [Test]
         public async Task ResolveSeedAddressAsync_NullSelector_ReturnsCurrentPrimarySeedAddress()
         {
             var repository = CreateRepository();

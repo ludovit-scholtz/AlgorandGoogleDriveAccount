@@ -1,19 +1,60 @@
 namespace BiatecOIDC.Model
 {
     /// <summary>
-    /// Request body for <c>POST /wallet/sign/{network}/{address}</c> - <c>address</c> (route segment) is
+    /// Request body for <c>POST /wallet/{network}/{address}/sign</c> - <c>address</c> (route segment) is
     /// which identity signs; there is no <c>SeedAddress</c>/<c>Slot</c> selector here anymore (see
     /// <c>WalletController.SignTransactionGroup</c>'s remarks for how <c>address</c> resolves to one).
+    /// Each <see cref="Transactions"/> entry's encoding depends on <c>network</c>'s chain family: base64
+    /// msgpack for AVM, base64 UTF-8 JSON (<see cref="EvmTransactionRequest"/>) for EVM.
     /// </summary>
     public class SignTransactionGroupRequest
     {
         /// <summary>
-        /// One or more transactions, each base64-encoded msgpack - a bare unsigned <c>Transaction</c>, or a
-        /// <c>SignedTransaction</c> wrapper for a multisig co-signing scenario. Multiple entries are signed
-        /// as an atomic group (the caller is responsible for having already computed and assigned the
-        /// group id across them before calling this endpoint).
+        /// One or more transactions, each base64-encoded - a bare unsigned Algorand <c>Transaction</c>
+        /// msgpack, an Algorand <c>SignedTransaction</c> msgpack wrapper for a multisig co-signing scenario,
+        /// or (for an EVM <c>network</c>) UTF-8 JSON matching <see cref="EvmTransactionRequest"/>. Multiple
+        /// entries are signed as an atomic group (the caller is responsible for having already computed and
+        /// assigned the group id across them before calling this endpoint - EVM has no equivalent grouping
+        /// concept, so each EVM entry is signed independently).
         /// </summary>
         public List<string> Transactions { get; set; } = new();
+    }
+
+    /// <summary>
+    /// The JSON shape (base64-encoded, one per <see cref="SignTransactionGroupRequest.Transactions"/> entry)
+    /// an unsigned EVM transaction is submitted as. Numeric fields are decimal or <c>0x</c>-prefixed hex
+    /// strings (never JSON numbers - wei-scale values routinely exceed <c>double</c>'s safe integer range).
+    /// Set <see cref="GasPrice"/> for a legacy (EIP-155) transaction, or both <see cref="MaxFeePerGas"/> and
+    /// <see cref="MaxPriorityFeePerGas"/> for an EIP-1559 one - not both fee shapes at once.
+    /// </summary>
+    public class EvmTransactionRequest
+    {
+        /// <summary>The destination chain's id (EIP-155) - see <c>GET /chains</c>/<c>listSupportedNetworks</c>.</summary>
+        public string ChainId { get; set; } = string.Empty;
+
+        /// <summary>The sending account's transaction count (nonce).</summary>
+        public string Nonce { get; set; } = string.Empty;
+
+        /// <summary>Recipient address, <c>"0x..."</c>. Empty for a contract-creation transaction.</summary>
+        public string To { get; set; } = string.Empty;
+
+        /// <summary>Amount to transfer, in wei. Defaults to <c>0</c>.</summary>
+        public string Value { get; set; } = "0";
+
+        /// <summary>Call data / contract-creation bytecode, hex-encoded (<c>"0x..."</c>). Defaults to empty.</summary>
+        public string Data { get; set; } = string.Empty;
+
+        /// <summary>Maximum gas this transaction may consume.</summary>
+        public string GasLimit { get; set; } = string.Empty;
+
+        /// <summary>Legacy (pre-EIP-1559) gas price, in wei.</summary>
+        public string? GasPrice { get; set; }
+
+        /// <summary>EIP-1559 max total fee per gas, in wei.</summary>
+        public string? MaxFeePerGas { get; set; }
+
+        /// <summary>EIP-1559 max priority fee (tip) per gas, in wei.</summary>
+        public string? MaxPriorityFeePerGas { get; set; }
     }
 
     /// <summary>Response body for <c>POST /wallet/sign</c>.</summary>

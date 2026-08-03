@@ -1,5 +1,6 @@
 using BiatecOIDC.Helper;
 using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
 
 namespace BiatecOIDC.BusinessLogic
@@ -94,6 +95,28 @@ namespace BiatecOIDC.BusinessLogic
             }
 
             _logger.LogInformation("Signed a {Count}-transaction group for {Email}, totaling {TotalUsd:0.####} USD.", signed.Count, email, totalUsd);
+            return signed;
+        }
+
+        public async Task<IReadOnlyList<byte[]>> SignEvmTransactionGroupAsync(string email, string provider, IReadOnlyList<EvmUnsignedTransaction> unsignedTransactions, string? accessToken, string? seedAddress = null, int slot = 0)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                throw new ArgumentException("Email is required.", nameof(email));
+            }
+
+            if (unsignedTransactions == null || unsignedTransactions.Count == 0)
+            {
+                throw new ArgumentException("At least one transaction is required.", nameof(unsignedTransactions));
+            }
+
+            var signed = new List<byte[]>(unsignedTransactions.Count);
+            foreach (var tx in unsignedTransactions)
+            {
+                signed.Add(await _driveService.SignEvmTransactionAsync(email, tx, provider, accessToken, seedAddress, slot));
+            }
+
+            _logger.LogInformation("Signed a {Count}-transaction EVM group for {Email}.", signed.Count, email);
             return signed;
         }
     }

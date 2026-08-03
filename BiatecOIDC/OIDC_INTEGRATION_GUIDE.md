@@ -60,12 +60,14 @@ for a given client (don't mix the two for the same integration).
   - RFC-like active token introspection response.
 - `POST /verify`
   - Convenience token verification endpoint.
-- `POST /wallet/sign/{network}/{address}`
-  - Signs an Algorand transaction group as `address` on `network`. Requires the `sign` scope, and
-    additionally the `rekey` scope if any transaction in the group carries Algorand's `rekey` field (see
-    "Wallet API" below). Body is just `{ "transactions": [...] }` now - see "Address-centric wallet API"
-    below for how `address` resolves to a signing seed/slot, and how this differs from the old
-    `POST /wallet/sign`.
+- `POST /wallet/{network}/{address}/sign`
+  - Signs a transaction group as `address` on `network` - both Algorand-family (AVM) and Ethereum-family
+    (EVM) chains. Requires the `sign` scope. Body is just `{ "transactions": [...] }` now - see
+    "Address-centric wallet API" below for how `address` resolves to a signing seed/slot and how this
+    differs from the old `POST /wallet/sign`. For AVM, each entry is base64 msgpack, additionally requires
+    the `rekey` scope if any transaction carries Algorand's `rekey` field (see "Wallet API" below), and is
+    checked against the caller's spending limit. For EVM, each entry is base64 UTF-8 JSON (see "EVM
+    (Ethereum-family) support" below for the shape) - no rekey concept, no spending-limit enforcement yet.
 - `GET /wallet/address/{seedAddress}/{slot?}`
   - Derives (without signing anything) the address at `slot` (default `0`) for the seed identified by
     `seedAddress`, for **every currently-supported chain family in one call** - both the Algorand-family
@@ -142,7 +144,7 @@ like `algorand`/`voi`, or a raw genesis id):
 
 | Before | After |
 |---|---|
-| `POST /wallet/sign` with body `{ "transactions": [...], "seedAddress": "SEED", "slot": 5 }` | `POST /wallet/sign/algorand/{address}` with body `{ "transactions": [...] }` |
+| `POST /wallet/sign` with body `{ "transactions": [...], "seedAddress": "SEED", "slot": 5 }` | `POST /wallet/algorand/{address}/sign` with body `{ "transactions": [...] }` |
 | `GET /wallet/limits?seedAddress=SEED&slot=5` | `GET /wallet/algorand/{address}/limits` |
 | `PUT /wallet/limits?seedAddress=SEED&slot=5` | `PUT /wallet/algorand/{address}/limits` |
 | `GET`/`PUT /wallet/limits` (no selector - global bucket) | unchanged |
@@ -191,8 +193,16 @@ address (per seed/slot) is valid across every EVM chain (Ethereum, Gnosis, Arbit
 `GET /wallet/address/{seedAddress}/{slot?}` (above) - which derives both the AVM and EVM address for a
 seed/slot in one call - takes no chain parameter for the EVM half at all.
 
-Scope today is address derivation only - EVM transaction building/signing/broadcasting is not implemented
-(BiatecMCP's `getCryptoBalance` tool queries EVM balances directly against a public RPC, without ever
+`POST /wallet/{network}/{address}/sign` signs EVM transactions too (see "Wallet API" above) - build one
+yourself (this API has no EVM transaction-*building* helper, unlike `AlgorandTransactionBuilder` for AVM) as
+JSON matching `EvmTransactionRequest`: `{ "chainId", "nonce", "to", "value", "data", "gasLimit", "gasPrice" }`
+for a legacy transaction, or the same with `"gasPrice"` replaced by `"maxFeePerGas"`+`"maxPriorityFeePerGas"`
+for EIP-1559 - every numeric field is a decimal or `0x`-prefixed hex **string** (wei-scale values exceed a
+safe JSON number), base64-encode the UTF-8 JSON, and pass it as one of `POST /wallet/{network}/{address}/sign`'s
+`transactions` entries. The response's signed bytes (also base64) are ready to broadcast via that chain's own
+`eth_sendRawTransaction` - this API does not broadcast for you (unlike Algorand transactions, which BiatecMCP's
+`executeAlgorandTransaction` submits through the shared Algod connection). No spending-limit enforcement for
+EVM yet (BiatecMCP's `getCryptoBalance` tool queries EVM balances directly against a public RPC, without ever
 involving this API, since that needs no key material).
 
 See [the supported-chains page](https://oidc.biatec.io/chains.html) for the full capability matrix, and this
@@ -327,11 +337,12 @@ integration that doesn't opt in.
 
 ## Wallet API (`sign` / `manage-limits` / `rekey` scopes)
 
-Beyond identity, Biatec OIDC can sign Algorand transaction groups directly on behalf of the wallet owner, subject
-to daily/weekly/monthly spending limits the owner controls, in a currency of their choosing. This is a separate,
-opt-in capability — request these scopes at `/authorize` only if your integration needs them, and they must be
-explicitly added to your client's allowed scopes when it's registered (never granted implicitly, regardless of
-what you request).
+Beyond identity, Biatec OIDC can sign transaction groups directly on behalf of the wallet owner - both
+Algorand-family (AVM) and Ethereum-family (EVM) chains, though only AVM signing is subject to the
+daily/weekly/monthly spending limits the owner controls, in a currency of their choosing (EVM spending limits
+aren't implemented yet). This is a separate, opt-in capability — request these scopes at `/authorize` only if
+your integration needs them, and they must be explicitly added to your client's allowed scopes when it's
+registered (never granted implicitly, regardless of what you request).
 
 Full request/response examples, curl snippets, and a live discovery link are on the documentation site at
 `https://oidc.biatec.io/` (the `#wallet-api` section) — this section is a summary.
@@ -342,21 +353,31 @@ self-custody data is resolved entirely from an encrypted copy cached inside that
 "Provider access token caching" below) - this is what lets the exact same Biatec token work from any
 device/backend, not just the one the user originally signed in on.
 
-- **`POST /wallet/sign/{network}/{address}`** (needs `sign`; additionally needs `rekey` if any transaction in
-  the group carries Algorand's `rekey` field) — body: `{ "transactions": ["<base64 msgpack>", ...] }`.
-  `address` selects which identity signs (see "Address-centric wallet API" above for how it resolves to a
-  seed/slot, and the migration table from the old body-field selector). Every payment/asset-transfer in the
-  group is priced in USD via the Biatec Router, and the group's *total* is checked against the signing
-  identity's global **and** per-address spending limits *before* anything is signed — if the total would
-  exceed either configured (non-zero) limit, the whole request is rejected (`403 spending_limit_exceeded`)
-  and nothing is signed. A group containing a rekey transaction is checked for the `rekey` claim before any
-  of that - a `sign`-only token gets `403 insufficient_scope` naming `rekey` specifically, and nothing in
-  the group is signed. `address` unknown to Biatec fails with `400 address_not_active`; a transaction whose
-  own sender doesn't match `address` fails with `400 sender_mismatch`. Returns
-  `{ "signedTransactions": ["<base64 msgpack>", ...] }` in the same order as the request. A `503`
-  (`asset_valuation_failed` or `spending_limit_currency_unavailable`) means a spent asset couldn't be
-  priced, or the caller's limit currency's exchange rate couldn't be fetched — every transaction is subject
-  to the limit, so an unpriceable asset fails the request rather than being silently treated as free.
+- **`POST /wallet/{network}/{address}/sign`** (needs `sign`) — body: `{ "transactions": [...] }`. `address`
+  selects which identity signs (see "Address-centric wallet API" above for how it resolves to a seed/slot,
+  and the migration table from the old body-field selector); unknown to Biatec fails with
+  `400 address_not_active`. Returns `{ "signedTransactions": [...] }` in the same order as the request. Each
+  `transactions`/`signedTransactions` entry's encoding, and what's checked before signing, depends on
+  `network`'s chain family:
+  - **AVM**: each entry is base64 msgpack. Additionally needs `rekey` if any transaction carries Algorand's
+    `rekey` field - a `sign`-only token gets `403 insufficient_scope` naming `rekey`, and nothing in the
+    group signs. A transaction whose own sender doesn't match `address` fails with `400 sender_mismatch`.
+    Every payment/asset-transfer in the group is priced in USD via the Biatec Router, and the group's
+    *total* is checked against the signing identity's global **and** per-address spending limits *before*
+    anything is signed — if the total would exceed either configured (non-zero) limit, the whole request is
+    rejected (`403 spending_limit_exceeded`) and nothing is signed. A `503` (`asset_valuation_failed` or
+    `spending_limit_currency_unavailable`) means a spent asset couldn't be priced, or the caller's limit
+    currency's exchange rate couldn't be fetched — every transaction is subject to the limit, so an
+    unpriceable asset fails the request rather than being silently treated as free.
+  - **EVM**: each entry is base64-encoded UTF-8 JSON: `{ "chainId", "nonce", "to", "value", "data",
+    "gasLimit", "gasPrice" }` for a legacy transaction, or the same with `gasPrice` replaced by
+    `maxFeePerGas`+`maxPriorityFeePerGas` for EIP-1559 — every numeric field a decimal or `0x`-prefixed hex
+    **string** (never a JSON number — wei-scale values exceed a JSON number's safe integer range). Exactly
+    one of the two fee shapes must be given, or the request 400s `invalid_request`. No sender check (an
+    unsigned EVM transaction carries no sender field at all — it's *derived* from whichever key signs it),
+    no rekey concept, and **no spending-limit enforcement yet**. The response entry is the RLP-encoded
+    signed transaction, base64-encoded — broadcast it yourself via that chain's own `eth_sendRawTransaction`
+    (this endpoint does not broadcast).
 - **`GET`/`PUT /wallet/limits`** (`GET` only needs to be authenticated; `PUT` needs `manage-limits`) — read/
   set the account-wide global spending-limit bucket. Shape:
   `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000, "address": null,
@@ -401,7 +422,7 @@ identity, just derive/activate the address you want and use it directly.
   signing anything) the address at `slot` (default `0`) for the named seed, for every currently-supported
   chain family in one call: `{ "address": "derived-avm...", "evmAddress": "0xderived-evm...",
   "seedAddress": "ABC...", "slot": 3 }`. `400 seed_not_found` if `seedAddress` doesn't match any seed in
-  the vault. Also registers both derived addresses for later `POST /wallet/sign/{network}/{address}` calls
+  the vault. Also registers both derived addresses for later `POST /wallet/{network}/{address}/sign` calls
   (see "Address-centric wallet API" above).
 - Spending limits are two-tiered per the `GET`/`PUT /wallet/limits`/`GET`/`PUT /wallet/{network}/{address}/limits`
   bullets above: a **global** bucket that counts every signed transaction from any address together, and
@@ -430,7 +451,7 @@ different network, or be part of a multisig configured entirely outside Biatec.
 **The recovery-from-suspected-compromise flow**, end to end:
 1. `POST /wallet/seeds` to mint a new seed - call it `newAddress`.
 2. Your backend builds an Algorand transaction with `sender` = the account's existing address and
-   `rekey`/`RekeyTo` = `newAddress`, and calls `POST /wallet/sign/{network}/{existingAddress}` with a token
+   `rekey`/`RekeyTo` = `newAddress`, and calls `POST /wallet/{network}/{existingAddress}/sign` with a token
    that has **both** `sign` and `rekey` (this is what actually gets checked - minting a spare seed via step 1
    requires only `rekey`, but the transaction that reassigns the account requires both, same as any other
    signed transaction).

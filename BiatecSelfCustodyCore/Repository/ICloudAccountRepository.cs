@@ -1,4 +1,5 @@
 using Algorand.Algod.Model;
+using Nethereum.Signer;
 
 namespace BiatecSelfCustodyCore.Repository
 {
@@ -48,6 +49,16 @@ namespace BiatecSelfCustodyCore.Repository
         /// <see cref="InvalidOperationException"/> if it doesn't exist.
         /// </param>
         Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null);
+
+        /// <summary>
+        /// Loads the EVM (Ethereum-family) signing key for <paramref name="email"/>/<paramref name="slot"/> -
+        /// the same seed mnemonic <see cref="LoadAccountAsync"/> derives the Algorand key from, just via
+        /// <c>ARC76.GetEVMEmailAccount</c> instead of <c>ARC76.GetEmailAccount</c>. Mirrors
+        /// <see cref="LoadAccountAsync"/>'s exact seed-resolution/error semantics - callers use the
+        /// returned <see cref="EthECKey"/> to sign immediately and let it go out of scope; never persisted,
+        /// never logged.
+        /// </summary>
+        Task<EthECKey> LoadEvmAccountAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null);
 
         /// <summary>
         /// Derives (without signing or mutating anything) the ARC-76 address at <paramref name="slot"/>
