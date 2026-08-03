@@ -325,6 +325,86 @@ namespace BiatecMCPTests
             Assert.That(result.Error, Does.Contain("no Algorand address"));
         }
 
+        // ───────────────────────── getAddressInfo / activateCryptoAddress ─────────────────────────
+
+        [Test]
+        public async Task GetAddressInfo_ForwardsToWalletClientAndReturnsResult()
+        {
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressInfoAsync("tok", "algorand", "ADDR1", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true, PrimaryAddress = "SEED1", Slot = 2 });
+
+            var result = await CreateTool().GetAddressInfo("algorand", "ADDR1");
+
+            Assert.That(result.IsActive, Is.True);
+            Assert.That(result.PrimaryAddress, Is.EqualTo("SEED1"));
+            Assert.That(result.Slot, Is.EqualTo(2));
+            Assert.That(result.Error, Is.Empty);
+        }
+
+        [Test]
+        public async Task GetAddressInfo_NoBearerToken_ReturnsUnauthorized()
+        {
+            var result = await CreateTool().GetAddressInfo("algorand", "ADDR1");
+
+            Assert.That(result.ErrorType, Is.EqualTo("Unauthorized"));
+        }
+
+        [Test]
+        public async Task GetAddressInfo_WalletApiThrows_ReturnsErrorFromException()
+        {
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressInfoAsync("tok", "algorand", "ADDR1", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new WalletApiException(400, "unknown_network", "Unknown network 'algorand'."));
+
+            var result = await CreateTool().GetAddressInfo("algorand", "ADDR1");
+
+            Assert.That(result.ErrorType, Is.EqualTo("unknown_network"));
+        }
+
+        [Test]
+        public async Task ActivateCryptoAddress_MissingSignClaim_ReturnsInsufficientScope()
+        {
+            SetClaims();
+            SetBearerToken("tok");
+
+            var result = await CreateTool().ActivateCryptoAddress("algorand", "ADDR1", "SEED1", 0);
+
+            Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
+            _walletClient.Verify(c => c.ActivateAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task ActivateCryptoAddress_ValidRequest_ForwardsToWalletClient()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "ADDR1", "SEED1", 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true });
+
+            var result = await CreateTool().ActivateCryptoAddress("algorand", "ADDR1", "SEED1", 3);
+
+            Assert.That(result.IsActive, Is.True);
+            Assert.That(result.Error, Is.Empty);
+        }
+
+        [Test]
+        public async Task ActivateCryptoAddress_RekeyNotConfirmed_ReturnsErrorFromException()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "ADDR1", "SEED1", 0, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new WalletApiException(409, "rekey_not_confirmed", "Not yet rekeyed on-chain."));
+
+            var result = await CreateTool().ActivateCryptoAddress("algorand", "ADDR1", "SEED1");
+
+            Assert.That(result.ErrorType, Is.EqualTo("rekey_not_confirmed"));
+        }
+
         // ───────────────────────── createPaymentTransaction / createOptInTransaction (no sign claim needed - build only) ─────────────────────────
 
         [Test]
@@ -355,7 +435,7 @@ namespace BiatecMCPTests
             _walletClient.Verify(c => c.GetAddressAsync("tok", "OTHER-SEED", 10, It.IsAny<CancellationToken>()), Times.Once);
             Assert.That(result.ErrorType, Does.Contain("ArgumentException"));
             // Never touches the wallet's sign endpoint - this tool only builds, never signs.
-            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -400,10 +480,10 @@ namespace BiatecMCPTests
             SetClaims();
             SetBearerToken("tok");
 
-            var result = await CreateTool().SignTransaction(new List<string> { "AA==" });
+            var result = await CreateTool().SignTransaction(new List<string> { "AA==" }, "algorand", "ADDR");
 
             Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
-            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -412,7 +492,7 @@ namespace BiatecMCPTests
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
 
-            var result = await CreateTool().SignTransaction(new List<string>());
+            var result = await CreateTool().SignTransaction(new List<string>(), "algorand", "ADDR");
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
         }
@@ -422,21 +502,21 @@ namespace BiatecMCPTests
         {
             SetClaims(new Claim("sign", "true"));
 
-            var result = await CreateTool().SignTransaction(new List<string> { "AA==" });
+            var result = await CreateTool().SignTransaction(new List<string> { "AA==" }, "algorand", "ADDR");
 
             Assert.That(result.ErrorType, Is.EqualTo("Unauthorized"));
         }
 
         [Test]
-        public async Task SignTransaction_ValidRequest_ForwardsToWalletClientWithPrimaryAddressAndSlot()
+        public async Task SignTransaction_ValidRequest_ForwardsToWalletClientWithNetworkAndAddress()
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
             _walletClient
-                .Setup(c => c.SignAsync("tok", It.IsAny<IReadOnlyList<byte[]>>(), "SEED", 5, It.IsAny<CancellationToken>()))
+                .Setup(c => c.SignAsync("tok", "algorand", "SEED-ADDR", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new SignTransactionGroupResponse { SignedTransactions = { "c2lnbmVk" } });
 
-            var result = await CreateTool().SignTransaction(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, primaryAddress: "SEED", slot: 5);
+            var result = await CreateTool().SignTransaction(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "algorand", "SEED-ADDR");
 
             Assert.That(result.SignedTransactions, Is.EqualTo(new[] { "c2lnbmVk" }));
             Assert.That(result.Error, Is.Empty);
@@ -448,7 +528,7 @@ namespace BiatecMCPTests
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
 
-            var result = await CreateTool().SignTransaction(new List<string> { "not-base64!!" });
+            var result = await CreateTool().SignTransaction(new List<string> { "not-base64!!" }, "algorand", "ADDR");
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
         }
@@ -573,7 +653,7 @@ namespace BiatecMCPTests
         {
             SetClaims(new Claim("algorand_address", "SOMEADDRESS"));
 
-            var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 416101, "VOIRECIPIENT", "302189", genesisId: "testnet-v1.0");
+            var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 416101, "VOIRECIPIENT", "302189", network: "testnet-v1.0");
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
             _aramidBridgeConfigProvider.Verify(p => p.GetConfigAsync(It.IsAny<CancellationToken>()), Times.Never);

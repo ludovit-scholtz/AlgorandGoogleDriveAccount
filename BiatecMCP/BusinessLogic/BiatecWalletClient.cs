@@ -19,16 +19,14 @@ namespace BiatecMCP.BusinessLogic
             _httpClient = httpClient;
         }
 
-        public async Task<SignTransactionGroupResponse> SignAsync(string bearerToken, IReadOnlyList<byte[]> unsignedTransactions, string? primaryAddress = null, int slot = 0, CancellationToken cancellationToken = default)
+        public async Task<SignTransactionGroupResponse> SignAsync(string bearerToken, string network, string address, IReadOnlyList<byte[]> unsignedTransactions, CancellationToken cancellationToken = default)
         {
             var request = new SignTransactionGroupRequest
             {
-                Transactions = unsignedTransactions.Select(Convert.ToBase64String).ToList(),
-                PrimaryAddress = primaryAddress,
-                Slot = slot
+                Transactions = unsignedTransactions.Select(Convert.ToBase64String).ToList()
             };
 
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "wallet/sign")
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"wallet/sign/{Uri.EscapeDataString(network)}/{Uri.EscapeDataString(address)}")
             {
                 Content = JsonContent.Create(request)
             };
@@ -117,6 +115,40 @@ namespace BiatecMCP.BusinessLogic
 
             return await response.Content.ReadFromJsonAsync<DerivedEvmAddressResponse>(cancellationToken)
                 ?? new DerivedEvmAddressResponse();
+        }
+
+        public async Task<AddressInfoResponse> GetAddressInfoAsync(string bearerToken, string network, string address, CancellationToken cancellationToken = default)
+        {
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, $"wallet/{Uri.EscapeDataString(network)}/{Uri.EscapeDataString(address)}/info");
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+            using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw await BuildExceptionAsync(response, cancellationToken);
+            }
+
+            return await response.Content.ReadFromJsonAsync<AddressInfoResponse>(cancellationToken)
+                ?? new AddressInfoResponse();
+        }
+
+        public async Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string address, string primaryAddress, int slot, CancellationToken cancellationToken = default)
+        {
+            var request = new ActivateAddressRequest { PrimaryAddress = primaryAddress, Slot = slot };
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"wallet/{Uri.EscapeDataString(network)}/{Uri.EscapeDataString(address)}/activate")
+            {
+                Content = JsonContent.Create(request)
+            };
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+            using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw await BuildExceptionAsync(response, cancellationToken);
+            }
+
+            return await response.Content.ReadFromJsonAsync<AddressInfoResponse>(cancellationToken)
+                ?? new AddressInfoResponse();
         }
 
         private static async Task<WalletApiException> BuildExceptionAsync(HttpResponseMessage response, CancellationToken cancellationToken)

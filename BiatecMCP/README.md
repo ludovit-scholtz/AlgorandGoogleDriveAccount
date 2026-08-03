@@ -24,8 +24,8 @@ delegates all authentication and signing to [BiatecOIDC](https://oidc.biatec.io)
 5. The resulting access token is presented to BiatecMCP as `Authorization: Bearer <token>`. BiatecMCP validates it
    **locally** (JWKS fetched from BiatecOIDC, no per-request network call) against its own resource URI.
 6. Each tool call forwards that *same* bearer token to BiatecOIDC's wallet REST API
-   (`POST /wallet/sign`/`GET /wallet/seeds`) — BiatecOIDC does the actual signing, and enforces the caller's
-   spending limit and the `rekey` claim, on the caller's behalf.
+   (`POST /wallet/sign/{network}/{address}`/`GET /wallet/seeds`) — BiatecOIDC does the actual signing, and
+   enforces the caller's spending limit and the `rekey` claim, on the caller's behalf.
 
 See the repo root [CLAUDE.md](../CLAUDE.md)'s "MCP server" architecture note for the full code-level walkthrough,
 and [BiatecOIDC/OIDC_INTEGRATION_GUIDE.md](../BiatecOIDC/OIDC_INTEGRATION_GUIDE.md) for the Dynamic Client
@@ -33,12 +33,12 @@ Registration / resource-indicator contract in detail.
 
 ## Multi-chain support
 
-Every tool's `genesisId` parameter isn't limited to a small hardcoded list — it accepts any Algorand-family
+Every tool's `network` parameter isn't limited to a small hardcoded list — it accepts any Algorand-family
 chain published in [scholtz.github.io/AlgorandPublicData's genesis list](https://scholtz.github.io/AlgorandPublicData/genesis/genesis-list.json)
 that currently has at least one publicly reachable algod node reporting the matching genesis hash (checked
 live against each chain's [`public-algod-providers.json`](https://scholtz.github.io/AlgorandPublicData/algod/mainnet-v1.0/public-algod-providers.json),
 via that node's own `/v2/transactions/params`). A locally-configured `Algod:Networks` entry always takes
-precedence for a given `genesisId` (so an operator can still pin a specific node/explorer link); anything else
+precedence for a given `network`/genesis id (so an operator can still pin a specific node/explorer link); anything else
 falls back to this dynamically discovered, liveness-verified registry, cached in-process for ~10 minutes. The
 same registry backs `createBridgeTransaction`'s destination-liquidity check (below) and BiatecOIDC's public
 `GET /chains` endpoint.
@@ -61,17 +61,35 @@ capability matrix.
 
 Wallet operations are three separate, chainable steps — **build** an unsigned transaction, **sign** it, then
 **execute** (broadcast) it — rather than one monolithic call. Each `create*` tool only builds and never touches
-BiatecOIDC or the network; only `signTransaction` and `executeAlgorandTransaction` require the `sign` scope.
+BiatecOIDC or the network; only `signTransaction`, `activateCryptoAddress`, and `executeAlgorandTransaction`
+require the `sign` scope.
 Every tool's own description tells the connected AI assistant which tool to call next, so a plain "pay X"
-request is handled as three chained tool calls automatically.
+request is handled as three chained tool calls automatically. `signTransaction`, `getAddressInfo`, and
+`activateCryptoAddress` all take the address itself (rather than `primaryAddress`/`slot`), matching BiatecOIDC's
+address-centric wallet route shape (`/wallet/sign/{network}/{address}`, etc.) — the `create*` tools and
+`getAlgorandAddress` still take the optional `primaryAddress`/`slot` pair to *build*/*derive* against a specific
+seed/slot, since that's a different concern (choosing which identity produces the address/transaction).
 
 - **`getAlgorandAddress`** — returns an Algorand address for the signed-in account. With no arguments, returns the
   default identity (from the bearer token's own `algorand_address` claim, falling back to the primary seed from
   `GET /wallet/seeds`). Pass `slot` (ARC-76 derivation index — `1` for the "second address", `2` for the "third",
   etc.) and/or `primaryAddress` (a specific seed's identifying address, from `listAlgorandAddresses`) to derive a
-  different address instead.
+  different address instead — this also registers the derived address for later `signTransaction`/
+  `getAddressInfo` calls by address alone.
 - **`listAlgorandAddresses`** — lists every seed's identifying address in the account, and which one is primary.
   Use an address from here as `primaryAddress` on the other tools.
+- **`getAddressInfo`** — reports whether a given `(network, address)` is currently active (resolvable to a
+  signing seed/slot), and if so, which `primaryAddress`/`slot` backs it. No authentication beyond a valid
+  bearer token required.
+- **`activateCryptoAddress`** — registers an address → `(primaryAddress, slot)` pairing, requires the `sign`
+  scope. If the address already matches what that seed/slot derives to, this is just an explicit alternative
+  to the automatic registration `getAlgorandAddress`/`getCryptoAddress` already do. The important case is
+  **rekeying an external Algorand address to a Biatec-controlled key**: mint a spare seed (ask for a new seed
+  via BiatecOIDC's `/wallet/seeds`), submit and confirm an on-chain transaction that sets that external
+  address's `rekey` field to the new seed's address (via `signTransaction` with a `rekey`-scoped token, signed
+  by the *existing* key), then call `activateCryptoAddress` with the external address and the new seed's
+  `primaryAddress`/`slot` — BiatecOIDC verifies the on-chain rekey before registering it, and only then does
+  `signTransaction` start working for that address under the new key.
 - **`listSupportedNetworks`** — lists every blockchain network currently usable with `getCryptoAddress`/
   `getCryptoBalance`: every live Algorand-family chain, plus a few well-known Ethereum-family chains
   (Ethereum, Gnosis, Arbitrum, Base). Other public EVM chains not listed here also work by name or numeric
@@ -115,8 +133,10 @@ request is handled as three chained tool calls automatically.
   own `signTransaction` call (in their own wallet/MCP session — not necessarily this one), then the signed copies
   are combined with `mergeMultisigTransactions`.
 - **`signTransaction`** — signs one or more unsigned transactions (from any `create*` tool, or a
-  `createMultisigTransaction` envelope) via BiatecOIDC's `POST /wallet/sign`. Requires the `sign` scope; signs
-  with the default identity unless `primaryAddress`/`slot` are given.
+  `createMultisigTransaction` envelope) via BiatecOIDC's `POST /wallet/sign/{network}/{address}`. Requires the
+  `sign` scope. `network` and `address` are both required — `address` must already be active (its own seed's
+  slot-0 address, a previously-derived slot from `getAlgorandAddress`, or a pairing registered via
+  `activateCryptoAddress`).
 - **`mergeMultisigTransactions`** — combines independently-signed copies of the same multisig envelope (collected
   from each cosigner's own `signTransaction` call) into one transaction, once at least `threshold` signatures are
   present.
@@ -135,35 +155,42 @@ request is handled as three chained tool calls automatically.
 - *"how much ETH do I have"* → `getCryptoBalance(network="Ethereum")`
 - *"check the balance of 0xABCD...WXYZ on Arbitrum"* → `getCryptoBalance(network="Arbitrum", address="0xABCD...WXYZ")`
 - *"pay to address ABCD...WXYZ 1 algo with note biatec"* → `createPaymentTransaction(receiverAccount="ABCD...WXYZ",
-  amount=1000000, note="biatec")` → `signTransaction(...)` → `executeAlgorandTransaction(...)` — three chained
-  calls, signing with the default identity (primary seed, slot 0).
+  amount=1000000, note="biatec")` (returns the built transaction plus its `Sender`) → `signTransaction(...,
+  network="algorand", address="<Sender>")` → `executeAlgorandTransaction(...)` — three chained calls, signing
+  with the default identity (primary seed, slot 0).
 - *"pay to address ABCD...WXYZ 1 algo with note biatec with my arc76 address SEED2...ADDR and slot 10"* → same
-  chain, with `primaryAddress="SEED2...ADDR", slot=10` passed to both `createPaymentTransaction` and
-  `signTransaction`.
+  chain, with `primaryAddress="SEED2...ADDR", slot=10` passed to `createPaymentTransaction`, then
+  `signTransaction(..., network="algorand", address="<the derived slot-10 address>")`.
 - *"do self transfer with 1 algo amount and note field biatecmcp"* → `createPaymentTransaction(amount=1000000,
-  note="biatecmcp")` (empty `receiverAccount` self-transfers) → `signTransaction` → `executeAlgorandTransaction`.
-- *"opt in to asset 31566704"* → `createOptInTransaction(assetId=31566704)` → `signTransaction` →
-  `executeAlgorandTransaction`.
+  note="biatecmcp")` (empty `receiverAccount` self-transfers) → `signTransaction(..., network="algorand",
+  address="<Sender>")` → `executeAlgorandTransaction`.
+- *"opt in to asset 31566704"* → `createOptInTransaction(assetId=31566704)` → `signTransaction(..., network="algorand",
+  address="<Sender>")` → `executeAlgorandTransaction`.
 - *"swap 1 algo for USDC"* → `createSwapTransaction(fromAssetId=0, toAssetId=31566704, amount=1000000)` — quotes
-  all three aggregators; if Biatec Router wins, chain `signTransaction` → `executeAlgorandTransaction` on the
-  returned transaction(s), otherwise the response explains which aggregator quoted better and that its
-  transaction can't be built yet.
+  all three aggregators; if Biatec Router wins, chain `signTransaction(..., network="algorand", address="<Sender>")`
+  → `executeAlgorandTransaction` on the returned transaction(s), otherwise the response explains which
+  aggregator quoted better and that its transaction can't be built yet.
 - *"propose a 2-of-3 multisig payment of 5 algo to address ABCD...WXYZ between my address, SEED2...ADDR, and
   SEED3...ADDR"* → `createMultisigTransaction(version=1, threshold=2, participantAddresses=[...], ...)`, then
-  each participant runs `signTransaction` on the returned envelope in their own session, and any one party runs
-  `mergeMultisigTransactions` on the collected signed copies followed by `executeAlgorandTransaction`.
+  each participant runs `signTransaction(..., network="algorand", address="<their own participant address>")` on
+  the returned envelope in their own session, and any one party runs `mergeMultisigTransactions` on the collected
+  signed copies followed by `executeAlgorandTransaction`.
 - *"what bridge routes are available from Algorand mainnet"* → `getBridgeConfiguration()`, or
   `getBridgeConfiguration(destinationChainId=416101)` to filter to a specific destination (e.g. Voi).
 - *"bridge 1 algo to my address VOI...ADDR on Voi"* → `createBridgeTransaction(assetId=0, amount=1000000,
   destinationNetwork=416101, destinationAddress="VOI...ADDR", destinationToken="<Voi ALGO token id>")` → review
-  the returned fee/amount breakdown and `LiquidityVerified`/`Warning` fields → `signTransaction` →
-  `executeAlgorandTransaction`.
+  the returned fee/amount breakdown and `LiquidityVerified`/`Warning` fields → `signTransaction(..., network="algorand",
+  address="<Sender>")` → `executeAlgorandTransaction`.
+- *"is my address ABCD...WXYZ active"* → `getAddressInfo(network="algorand", address="ABCD...WXYZ")`.
+- *"I rekeyed ABCD...WXYZ on-chain to my new seed EFGH...ADDR at slot 0 — register it"* →
+  `activateCryptoAddress(network="algorand", address="ABCD...WXYZ", primaryAddress="EFGH...ADDR", slot=0)` —
+  now `signTransaction(..., network="algorand", address="ABCD...WXYZ")` signs with the new key.
 
-Spending limits (`PUT /wallet/limits` on BiatecOIDC) can be configured globally (apply to every address) and/or
-per address (`?primaryAddress=...&slot=...`) — a transaction is blocked if it would exceed either, enforced by
-`signTransaction`'s underlying `POST /wallet/sign` call. See
+Spending limits (`PUT /wallet/limits`/`PUT /wallet/limits/{network}/{address}` on BiatecOIDC) can be configured
+globally (apply to every address) and/or per address — a transaction is blocked if it would exceed either,
+enforced by `signTransaction`'s underlying `POST /wallet/sign/{network}/{address}` call. See
 [BiatecOIDC/OIDC_INTEGRATION_GUIDE.md](../BiatecOIDC/OIDC_INTEGRATION_GUIDE.md) for the wallet API's full
-multi-address/spending-limit contract.
+address-centric/spending-limit contract.
 
 ## Connecting an MCP client
 
@@ -244,7 +271,7 @@ needed to run this project — everything self-custody-related lives in `BiatecO
 
 ### Algod configuration
 
-`Algod:Networks` in `appsettings.json` maps a `genesisId` (e.g. `mainnet-v1.0`, `testnet-v1.0`) to an Algod node
+`Algod:Networks` in `appsettings.json` maps a `network`/genesis id (e.g. `mainnet-v1.0`, `testnet-v1.0`) to an Algod node
 address/token and a block-explorer base URL for the `transferAsset`/`optIn` tools' `ExplorerLink` response field.
 
 ## Project structure
@@ -253,7 +280,7 @@ address/token and a block-explorer base URL for the `transferAsset`/`optIn` tool
 BiatecMCP/
 ├── Program.cs                     # OAuth 2.1 resource-server wiring (AddJwtBearer + AddMcp)
 ├── MCP/
-│   └── BiatecMCP.cs                # The 3 MCP tools
+│   └── BiatecMCP.cs                # The MCP tools
 ├── BusinessLogic/
 │   ├── IBiatecWalletClient.cs      # BiatecOIDC wallet API client (interface)
 │   ├── BiatecWalletClient.cs       # ...(implementation, typed HttpClient)

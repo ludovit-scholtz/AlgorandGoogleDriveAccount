@@ -1,6 +1,10 @@
 namespace BiatecOIDC.Model
 {
-    /// <summary>Request body for <c>POST /wallet/sign</c>.</summary>
+    /// <summary>
+    /// Request body for <c>POST /wallet/sign/{network}/{address}</c> - <c>address</c> (route segment) is
+    /// which identity signs; there is no <c>PrimaryAddress</c>/<c>Slot</c> selector here anymore (see
+    /// <c>WalletController.SignTransactionGroup</c>'s remarks for how <c>address</c> resolves to one).
+    /// </summary>
     public class SignTransactionGroupRequest
     {
         /// <summary>
@@ -10,16 +14,6 @@ namespace BiatecOIDC.Model
         /// group id across them before calling this endpoint).
         /// </summary>
         public List<string> Transactions { get; set; } = new();
-
-        /// <summary>
-        /// Which seed signs this group - its own identifying (slot-0) address, see <c>GET /wallet/address</c>.
-        /// Omitted (the default) signs with the vault's current primary seed, unchanged from before this
-        /// field existed.
-        /// </summary>
-        public string? PrimaryAddress { get; set; }
-
-        /// <summary>ARC-76 derivation slot within the selected seed. Defaults to <c>0</c>.</summary>
-        public int Slot { get; set; }
     }
 
     /// <summary>Response body for <c>POST /wallet/sign</c>.</summary>
@@ -49,7 +43,10 @@ namespace BiatecOIDC.Model
         public decimal MonthlyLimit { get; set; }
     }
 
-    /// <summary>Response body for <c>GET /wallet/limits</c> and <c>PUT /wallet/limits</c>.</summary>
+    /// <summary>
+    /// Response body for <c>GET</c>/<c>PUT /wallet/limits</c> (the global bucket) and
+    /// <c>GET</c>/<c>PUT /wallet/limits/{network}/{address}</c> (a per-address bucket).
+    /// </summary>
     public class SpendingLimitResponse
     {
         /// <summary>ISO 4217 currency code the three limits below are expressed in.</summary>
@@ -64,7 +61,13 @@ namespace BiatecOIDC.Model
         /// <summary>The caller's current monthly (trailing 30d) spending limit, in <see cref="CurrencyCode"/>. <c>0</c> means unbounded.</summary>
         public decimal MonthlyLimit { get; set; }
 
-        /// <summary>Which bucket this response describes - <c>null</c> means the account-wide global bucket.</summary>
+        /// <summary>The queried address (route segment), echoed back - <c>null</c> for the account-wide global bucket.</summary>
+        public string? Address { get; set; }
+
+        /// <summary>The queried network (route segment), echoed back - <c>null</c> for the account-wide global bucket.</summary>
+        public string? Network { get; set; }
+
+        /// <summary>Which seed's bucket this is - resolved from <see cref="Address"/>. <c>null</c> for the global bucket.</summary>
         public string? PrimaryAddress { get; set; }
 
         /// <summary>ARC-76 slot of <see cref="PrimaryAddress"/>'s bucket - meaningless when <see cref="PrimaryAddress"/> is <c>null</c>.</summary>
@@ -179,6 +182,46 @@ namespace BiatecOIDC.Model
         public string PrimaryAddress { get; set; } = string.Empty;
 
         /// <summary>The ARC-76 derivation slot that was used, echoed back.</summary>
+        public int Slot { get; set; }
+    }
+
+    /// <summary>Request body for <c>POST /wallet/{network}/{address}/activate</c>.</summary>
+    public class ActivateAddressRequest
+    {
+        /// <summary>Which seed's key signs for the address being activated - its own identifying (Algorand slot-0) address.</summary>
+        public string PrimaryAddress { get; set; } = string.Empty;
+
+        /// <summary>ARC-76 derivation slot within that seed. Defaults to <c>0</c>.</summary>
+        public int Slot { get; set; }
+    }
+
+    /// <summary>
+    /// Response body for <c>GET /wallet/{network}/{address}/info</c> and
+    /// <c>POST /wallet/{network}/{address}/activate</c>.
+    /// </summary>
+    public class AddressInfoResponse
+    {
+        /// <summary>The queried address, echoed back.</summary>
+        public string Address { get; set; } = string.Empty;
+
+        /// <summary>The queried network, echoed back.</summary>
+        public string Network { get; set; } = string.Empty;
+
+        /// <summary><c>"Avm"</c> or <c>"Evm"</c>.</summary>
+        public string Family { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Whether Biatec currently knows which key signs for <see cref="Address"/> - either it's a seed's
+        /// own primary address (implicit), it was derived at least once via
+        /// <c>GET /wallet/address/{primaryAddress}/{slot}</c> (or its EVM counterpart), or it was explicitly
+        /// activated via <c>POST /wallet/{network}/{address}/activate</c> after an on-chain rekey check.
+        /// </summary>
+        public bool IsActive { get; set; }
+
+        /// <summary>Which seed signs for <see cref="Address"/> - <c>null</c> if <see cref="IsActive"/> is <c>false</c>.</summary>
+        public string? PrimaryAddress { get; set; }
+
+        /// <summary>ARC-76 slot of <see cref="PrimaryAddress"/> - meaningless if <see cref="IsActive"/> is <c>false</c>.</summary>
         public int Slot { get; set; }
     }
 }

@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using Algorand;
+using Algorand.Algod;
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Helper;
 using BiatecOIDC.Model;
@@ -47,6 +49,8 @@ namespace BiatecOIDC.Controllers
         private readonly IProviderAccessTokenProtector _providerTokenProtector;
         private readonly ICloudStorageProviderCatalog _providerCatalog;
         private readonly ICloudAccountRepository _accountRepository;
+        private readonly IAddressActivationService _addressActivationService;
+        private readonly INetworkResolver _networkResolver;
         private readonly ILogger<WalletController> _logger;
 
         public WalletController(
@@ -57,6 +61,8 @@ namespace BiatecOIDC.Controllers
             IProviderAccessTokenProtector providerTokenProtector,
             ICloudStorageProviderCatalog providerCatalog,
             ICloudAccountRepository accountRepository,
+            IAddressActivationService addressActivationService,
+            INetworkResolver networkResolver,
             ILogger<WalletController> logger)
         {
             _jwtIssuerService = jwtIssuerService;
@@ -66,31 +72,54 @@ namespace BiatecOIDC.Controllers
             _providerTokenProtector = providerTokenProtector;
             _providerCatalog = providerCatalog;
             _accountRepository = accountRepository;
+            _addressActivationService = addressActivationService;
+            _networkResolver = networkResolver;
             _logger = logger;
         }
 
         /// <summary>
-        /// Signs an Algorand transaction group. The group's total USD value (every payment/asset-transfer
-        /// in it, priced via the Biatec Router) is checked against the caller's daily/weekly/monthly
-        /// spending limits before anything is signed.
+        /// Signs an Algorand transaction group as <paramref name="address"/>. The group's total USD value
+        /// (every payment/asset-transfer in it, priced via the Biatec Router) is checked against the
+        /// caller's daily/weekly/monthly spending limits before anything is signed.
         /// </summary>
+        /// <param name="network">Which chain <paramref name="address"/> belongs to (e.g. <c>algorand</c>, <c>voi</c>) - see <c>GET /chains</c>.</param>
+        /// <param name="address">
+        /// Which identity signs - a seed's own primary address, an address previously derived via
+        /// <c>GET /wallet/address/{primaryAddress}/{slot}</c> (or its EVM counterpart), or an address
+        /// activated via <c>POST /wallet/{network}/{address}/activate</c> (e.g. after an on-chain rekey to a
+        /// Biatec-controlled key).
+        /// </param>
         /// <param name="request">The transactions to sign (base64 msgpack).</param>
         /// <returns>The signed transactions (base64 msgpack), in the same order as the request.</returns>
         /// <response code="200">All transactions were within limit and signed successfully.</response>
-        /// <response code="400">The request was malformed, or a transaction could not be decoded.</response>
+        /// <response code="400">The request was malformed, a transaction could not be decoded, a
+        /// transaction's sender doesn't match <paramref name="address"/>, or <paramref name="address"/> is
+        /// unknown (never derived or activated).</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
         /// <response code="403">The token lacks the <c>sign</c> claim, lacks the <c>rekey</c> claim while the
         /// group contains a rekey transaction, or the group exceeds the caller's spending limit.</response>
+        /// <response code="501"><paramref name="network"/> is an EVM chain - signing isn't supported there yet.</response>
         /// <response code="503">A spent asset's USD value, or the caller's limit currency's exchange rate, could not be determined.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
-        [HttpPost("sign")]
-        public async Task<IActionResult> SignTransactionGroup([FromBody] SignTransactionGroupRequest request)
+        [HttpPost("sign/{network}/{address}")]
+        public async Task<IActionResult> SignTransactionGroup(string network, string address, [FromBody] SignTransactionGroupRequest request)
         {
             var authError = TryAuthenticate(WalletScopes.Sign, out var principal);
             if (authError != null)
             {
                 return authError;
+            }
+
+            var resolvedNetwork = await _networkResolver.ResolveAsync(network);
+            if (resolvedNetwork == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "unknown_network", Detail = $"Unknown network '{network}'. See GET /chains for currently-supported networks." });
+            }
+
+            if (resolvedNetwork.Family == ChainFamily.Evm)
+            {
+                return StatusCode(StatusCodes.Status501NotImplemented, new ProblemDetails { Title = "sign_not_supported", Detail = "Signing EVM transactions is not supported yet." });
             }
 
             if (request.Transactions == null || request.Transactions.Count == 0)
@@ -108,22 +137,39 @@ namespace BiatecOIDC.Controllers
                 return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Each transaction must be base64-encoded." });
             }
 
+            var infos = new List<AlgorandTransferInfo>();
+            foreach (var tx in decodedTransactions)
+            {
+                try
+                {
+                    infos.Add(AlgorandTransactionInspector.Inspect(tx));
+                }
+                catch (FormatException)
+                {
+                    infos.Add(null!); // Undecodable transactions are reported by WalletService below, not here.
+                }
+            }
+
+            // Defense in depth: a plain (non-multisig) transaction's own sender must match the identity this
+            // route names - catches an integration bug (signing under the wrong route address) before it
+            // produces a signature that would just be rejected on-chain anyway. A multisig envelope's
+            // "sender" is the multisig group's address, not the cosigning participant's own - not checked.
+            var senderMismatch = infos.FirstOrDefault(i => i != null && !i.IsMultisig && !string.IsNullOrEmpty(i.Sender) && !string.Equals(i.Sender, address, StringComparison.Ordinal));
+            if (senderMismatch != null)
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Title = "sender_mismatch",
+                    Detail = $"A transaction's sender ('{senderMismatch.Sender}') does not match the address '{address}' in the route."
+                });
+            }
+
             // Rekey is gated on its own, stricter claim - independent of (and in addition to) `sign` above -
             // since a rekey transaction permanently reassigns which key controls the account, unlike a
             // pay/axfer which is bounded by the spending limit. A group containing even one rekey
             // transaction is refused outright if the caller's token lacks it; the rest of the group (if
             // any) never gets a chance to partially sign.
-            var containsRekey = decodedTransactions.Any(tx =>
-            {
-                try
-                {
-                    return AlgorandTransactionInspector.Inspect(tx).IsRekey;
-                }
-                catch (FormatException)
-                {
-                    return false; // Undecodable transactions are reported by WalletService below, not here.
-                }
-            });
+            var containsRekey = infos.Any(i => i != null && i.IsRekey);
             if (containsRekey && !string.Equals(principal!.FindFirstValue(WalletScopes.Rekey), "true", StringComparison.Ordinal))
             {
                 return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
@@ -137,10 +183,20 @@ namespace BiatecOIDC.Controllers
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
 
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            if (signer == null)
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Title = "address_not_active",
+                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{primaryAddress}}/{{slot}}, or activate an externally rekeyed address via POST /wallet/{network}/{address}/activate first."
+                });
+            }
+
             try
             {
                 var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, request.PrimaryAddress, request.Slot));
+                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, signer.Value.PrimaryAddress, signer.Value.Slot));
                 return Ok(new SignTransactionGroupResponse
                 {
                     SignedTransactions = signed.Select(Convert.ToBase64String).ToList()
@@ -177,20 +233,14 @@ namespace BiatecOIDC.Controllers
             }
         }
 
-        /// <summary>
-        /// Returns the caller's current daily/weekly/monthly spending limits and their currency, for one
-        /// bucket - the account-wide global bucket if <paramref name="primaryAddress"/> is omitted, or the
-        /// per-address bucket for that <c>(primaryAddress, slot)</c> signing identity otherwise.
-        /// </summary>
-        /// <param name="primaryAddress">Selects the per-address bucket instead of the global one. Omit for the account-wide global bucket.</param>
-        /// <param name="slot">ARC-76 slot of <paramref name="primaryAddress"/>'s bucket. Ignored if <paramref name="primaryAddress"/> is omitted.</param>
+        /// <summary>Returns the caller's current daily/weekly/monthly spending limits and their currency, for the account-wide global bucket.</summary>
         /// <response code="200">The current limits (all-zero/unbounded, in USD, if never configured).</response>
         /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider
         /// access token is available (see the class remarks) - a fresh interactive sign-in is required.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("limits")]
-        public async Task<IActionResult> GetSpendingLimit([FromQuery] string? primaryAddress = null, [FromQuery] int slot = 0)
+        public async Task<IActionResult> GetSpendingLimit()
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
             if (authError != null)
@@ -205,8 +255,8 @@ namespace BiatecOIDC.Controllers
             try
             {
                 var settings = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, resolvedAccessToken,
-                    token => _spendingLimitService.GetLimitsAsync(email, provider, token, primaryAddress, slot));
-                return Ok(ToResponse(settings, primaryAddress, slot));
+                    token => _spendingLimitService.GetLimitsAsync(email, provider, token, primaryAddress: null, slot: 0));
+                return Ok(ToResponse(settings, address: null, network: null, primaryAddress: null, slot: 0));
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -214,14 +264,8 @@ namespace BiatecOIDC.Controllers
             }
         }
 
-        /// <summary>
-        /// Sets the caller's daily/weekly/monthly spending limits and the currency they're expressed in,
-        /// for one bucket - same <paramref name="primaryAddress"/>/<paramref name="slot"/> selector
-        /// convention as <see cref="GetSpendingLimit"/>.
-        /// </summary>
+        /// <summary>Sets the caller's daily/weekly/monthly spending limits and the currency they're expressed in, for the account-wide global bucket.</summary>
         /// <param name="request">The new limits (<c>0</c> to leave a window unbounded) and their currency.</param>
-        /// <param name="primaryAddress">Selects the per-address bucket instead of the global one. Omit for the account-wide global bucket.</param>
-        /// <param name="slot">ARC-76 slot of <paramref name="primaryAddress"/>'s bucket. Ignored if <paramref name="primaryAddress"/> is omitted.</param>
         /// <response code="200">The limits were updated.</response>
         /// <response code="400">The requested currency isn't supported - see <c>GET /wallet/limits/currencies</c>.</response>
         /// <response code="401">The bearer token is missing, invalid, or expired.</response>
@@ -229,7 +273,7 @@ namespace BiatecOIDC.Controllers
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpPut("limits")]
-        public async Task<IActionResult> UpdateSpendingLimit([FromBody] UpdateSpendingLimitRequest request, [FromQuery] string? primaryAddress = null, [FromQuery] int slot = 0)
+        public async Task<IActionResult> UpdateSpendingLimit([FromBody] UpdateSpendingLimitRequest request)
         {
             var authError = TryAuthenticate(WalletScopes.ManageLimits, out var principal);
             if (authError != null)
@@ -252,7 +296,7 @@ namespace BiatecOIDC.Controllers
             try
             {
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings, primaryAddress, slot));
+                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings, primaryAddress: null, slot: 0));
             }
             catch (UnsupportedCurrencyException ex)
             {
@@ -264,7 +308,111 @@ namespace BiatecOIDC.Controllers
             }
 
             _logger.LogInformation("{Email} updated their spending limits (currency {Currency}).", email, settings.CurrencyCode);
-            return Ok(ToResponse(settings, primaryAddress, slot));
+            return Ok(ToResponse(settings, address: null, network: null, primaryAddress: null, slot: 0));
+        }
+
+        /// <summary>Returns the caller's current daily/weekly/monthly spending limits for the bucket tied to <paramref name="address"/>.</summary>
+        /// <param name="network">Which chain <paramref name="address"/> belongs to - see <c>GET /chains</c>.</param>
+        /// <param name="address">A known address (native or activated) - see <see cref="SignTransactionGroup"/>'s remarks for how it resolves.</param>
+        /// <response code="200">The current limits (all-zero/unbounded, in USD, if never configured).</response>
+        /// <response code="400"><paramref name="address"/> is unknown, or <paramref name="network"/> is unrecognized.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpGet("limits/{network}/{address}")]
+        public async Task<IActionResult> GetSpendingLimitForAddress(string network, string address)
+        {
+            var authError = TryAuthenticate(requiredClaim: null, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            if (await _networkResolver.ResolveAsync(network) == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "unknown_network", Detail = $"Unknown network '{network}'." });
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var resolvedAccessToken = ResolveProviderAccessToken(principal, email);
+
+            var signer = await ResolveSignerAsync(principal, email, provider, resolvedAccessToken, address);
+            if (signer == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "address_not_active", Detail = $"'{address}' is not a known address for this account." });
+            }
+
+            try
+            {
+                var settings = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, resolvedAccessToken,
+                    token => _spendingLimitService.GetLimitsAsync(email, provider, token, signer.Value.PrimaryAddress, signer.Value.Slot));
+                return Ok(ToResponse(settings, address, network, signer.Value.PrimaryAddress, signer.Value.Slot));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>Sets the caller's daily/weekly/monthly spending limits for the bucket tied to <paramref name="address"/>.</summary>
+        /// <param name="network">Which chain <paramref name="address"/> belongs to - see <c>GET /chains</c>.</param>
+        /// <param name="address">A known address (native or activated).</param>
+        /// <param name="request">The new limits (<c>0</c> to leave a window unbounded) and their currency.</param>
+        /// <response code="200">The limits were updated.</response>
+        /// <response code="400">The requested currency isn't supported, <paramref name="address"/> is unknown, or <paramref name="network"/> is unrecognized.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired.</response>
+        /// <response code="403">The token lacks the <c>manage-limits</c> claim.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpPut("limits/{network}/{address}")]
+        public async Task<IActionResult> UpdateSpendingLimitForAddress(string network, string address, [FromBody] UpdateSpendingLimitRequest request)
+        {
+            var authError = TryAuthenticate(WalletScopes.ManageLimits, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            if (await _networkResolver.ResolveAsync(network) == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "unknown_network", Detail = $"Unknown network '{network}'." });
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            if (signer == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "address_not_active", Detail = $"'{address}' is not a known address for this account." });
+            }
+
+            var settings = new SpendingLimitSettings
+            {
+                CurrencyCode = string.IsNullOrWhiteSpace(request.CurrencyCode) ? "USD" : request.CurrencyCode,
+                DailyLimit = request.DailyLimit,
+                WeeklyLimit = request.WeeklyLimit,
+                MonthlyLimit = request.MonthlyLimit
+            };
+
+            try
+            {
+                await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings, signer.Value.PrimaryAddress, signer.Value.Slot));
+            }
+            catch (UnsupportedCurrencyException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "unsupported_currency", Detail = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+
+            _logger.LogInformation("{Email} updated their spending limits for {Address} on {Network} (currency {Currency}).", email, address, network, settings.CurrencyCode);
+            return Ok(ToResponse(settings, address, network, signer.Value.PrimaryAddress, signer.Value.Slot));
         }
 
         /// <summary>Lists every seed's identifying address in the caller's vault, and which one is primary.</summary>
@@ -329,6 +477,17 @@ namespace BiatecOIDC.Controllers
             {
                 var address = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.DeriveAddressAsync(email, provider, primaryAddress, resolvedSlot, token));
+
+                // A slot-0 address is already its own seed's identifying address (recognized for free,
+                // without ever touching the activation registry - see ResolveSignerAsync). Only a non-zero
+                // slot needs an explicit entry so it becomes resolvable by address alone later (e.g. from
+                // POST /wallet/sign/{network}/{address}).
+                if (resolvedSlot != 0)
+                {
+                    await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                        token => _addressActivationService.ActivateAsync(email, provider, token, address, nameof(ChainFamily.Avm), primaryAddress, resolvedSlot));
+                }
+
                 return Ok(new DerivedAddressResponse { Address = address, PrimaryAddress = primaryAddress, Slot = resolvedSlot });
             }
             catch (InvalidOperationException ex)
@@ -373,6 +532,10 @@ namespace BiatecOIDC.Controllers
                 {
                     var evmAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                         token => _accountRepository.DeriveEvmAddressAsync(email, provider, seed.PrimaryAddress, 0, token));
+                    // Unlike Algorand slot 0, an EVM address is never a seed's own identifying address - it
+                    // always needs an activation-registry entry to be resolvable by address alone later.
+                    await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                        token => _addressActivationService.ActivateAsync(email, provider, token, evmAddress, nameof(ChainFamily.Evm), seed.PrimaryAddress, 0));
                     addresses.Add(new EvmAddressResponse { Address = evmAddress, IsPrimary = seed.IsPrimary });
                 }
 
@@ -413,7 +576,171 @@ namespace BiatecOIDC.Controllers
             {
                 var address = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.DeriveEvmAddressAsync(email, provider, primaryAddress, resolvedSlot, token));
+                await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _addressActivationService.ActivateAsync(email, provider, token, address, nameof(ChainFamily.Evm), primaryAddress, resolvedSlot));
                 return Ok(new DerivedEvmAddressResponse { Address = address, PrimaryAddress = primaryAddress, Slot = resolvedSlot });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "seed_not_found", Detail = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Reports whether Biatec currently knows which key signs for <paramref name="address"/> - a seed's
+        /// own primary address, a previously-derived address (any slot), or one explicitly activated via
+        /// <see cref="ActivateAddress"/>.
+        /// </summary>
+        /// <param name="network">Which chain <paramref name="address"/> belongs to - see <c>GET /chains</c>.</param>
+        /// <param name="address">The address to look up.</param>
+        /// <response code="200">The address's activation status.</response>
+        /// <response code="400"><paramref name="network"/> is unrecognized.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpGet("{network}/{address}/info")]
+        public async Task<IActionResult> GetAddressInfo(string network, string address)
+        {
+            var authError = TryAuthenticate(requiredClaim: null, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            var resolvedNetwork = await _networkResolver.ResolveAsync(network);
+            if (resolvedNetwork == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "unknown_network", Detail = $"Unknown network '{network}'." });
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            try
+            {
+                var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+                return Ok(new AddressInfoResponse
+                {
+                    Address = address,
+                    Network = network,
+                    Family = resolvedNetwork.Family.ToString(),
+                    IsActive = signer != null,
+                    PrimaryAddress = signer?.PrimaryAddress,
+                    Slot = signer?.Slot ?? 0
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Registers that <c>(primaryAddress, slot)</c>'s key signs for <paramref name="address"/> - the
+        /// entry point for AVM rekey support: rekey an external account to one of this account's addresses
+        /// (see <c>GET /wallet/address/{primaryAddress}/{slot}</c> for candidates, or mint a fresh one via
+        /// <c>POST /wallet/seeds</c>), confirm the rekey transaction on-chain, then call this so
+        /// <c>POST /wallet/sign/{network}/{address}</c> recognizes <paramref name="address"/> going forward.
+        /// For a native address (one that's exactly the derived address for that seed/slot already), this
+        /// just registers it immediately - the same thing <c>GET /wallet/address/{primaryAddress}/{slot}</c>
+        /// already does automatically, so calling this for a native address is rarely necessary.
+        /// </summary>
+        /// <param name="network">Which chain <paramref name="address"/> belongs to - see <c>GET /chains</c>. EVM chains are only accepted for a native address (EVM has no rekey concept).</param>
+        /// <param name="address">The address to activate.</param>
+        /// <param name="request">Which seed/slot's key signs for <paramref name="address"/>.</param>
+        /// <response code="200">Activated.</response>
+        /// <response code="400"><paramref name="network"/> is unrecognized, <paramref name="request"/> names an unknown seed, or an EVM address doesn't match its seed's own derived address.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        /// <response code="403">The token lacks the <c>sign</c> claim.</response>
+        /// <response code="409">
+        /// <paramref name="address"/> differs from the seed's derived address (an external/rekey scenario)
+        /// but an on-chain check found it isn't currently rekeyed to that derived address - submit and
+        /// confirm the on-chain rekey transaction first.
+        /// </response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpPost("{network}/{address}/activate")]
+        public async Task<IActionResult> ActivateAddress(string network, string address, [FromBody] ActivateAddressRequest request)
+        {
+            var authError = TryAuthenticate(WalletScopes.Sign, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            var resolvedNetwork = await _networkResolver.ResolveAsync(network);
+            if (resolvedNetwork == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "unknown_network", Detail = $"Unknown network '{network}'." });
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            try
+            {
+                string derivedAddress;
+                if (resolvedNetwork.Family == ChainFamily.Avm)
+                {
+                    derivedAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                        token => _accountRepository.DeriveAddressAsync(email, provider, request.PrimaryAddress, request.Slot, token));
+                }
+                else
+                {
+                    derivedAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                        token => _accountRepository.DeriveEvmAddressAsync(email, provider, request.PrimaryAddress, request.Slot, token));
+                }
+
+                if (!string.Equals(derivedAddress, address, StringComparison.Ordinal))
+                {
+                    if (resolvedNetwork.Family == ChainFamily.Evm)
+                    {
+                        return BadRequest(new ProblemDetails
+                        {
+                            Title = "invalid_request",
+                            Detail = "An EVM address cannot be repointed to a different key - EVM has no rekey concept. Activate the seed's own EVM address instead (GET /wallet/evm/address/{primaryAddress}/{slot})."
+                        });
+                    }
+
+                    bool verified;
+                    try
+                    {
+                        verified = await IsRekeyedOnChainAsync(resolvedNetwork.AvmChain!, address, derivedAddress);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Unable to check {Address}'s on-chain rekey status on {Network}.", address, network);
+                        return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "algod_unavailable", Detail = "Unable to verify the on-chain rekey status right now. Please try again." });
+                    }
+
+                    if (!verified)
+                    {
+                        return StatusCode(StatusCodes.Status409Conflict, new ProblemDetails
+                        {
+                            Title = "rekey_not_confirmed",
+                            Detail = $"'{address}' is not currently rekeyed to '{derivedAddress}' on-chain. Submit and confirm the rekey transaction first, then activate again."
+                        });
+                    }
+                }
+
+                await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _addressActivationService.ActivateAsync(email, provider, token, address, resolvedNetwork.Family.ToString(), request.PrimaryAddress, request.Slot));
+
+                return Ok(new AddressInfoResponse
+                {
+                    Address = address,
+                    Network = network,
+                    Family = resolvedNetwork.Family.ToString(),
+                    IsActive = true,
+                    PrimaryAddress = request.PrimaryAddress,
+                    Slot = request.Slot
+                });
             }
             catch (InvalidOperationException ex)
             {
@@ -685,15 +1012,52 @@ namespace BiatecOIDC.Controllers
             return refreshed?.AccessToken;
         }
 
-        private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings, string? primaryAddress, int slot) => new()
+        private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings, string? address, string? network, string? primaryAddress, int slot) => new()
         {
             CurrencyCode = settings.CurrencyCode,
             DailyLimit = settings.DailyLimit,
             WeeklyLimit = settings.WeeklyLimit,
             MonthlyLimit = settings.MonthlyLimit,
+            Address = address,
+            Network = network,
             PrimaryAddress = primaryAddress,
             Slot = slot
         };
+
+        /// <summary>
+        /// Resolves <paramref name="address"/> to the <c>(primaryAddress, slot)</c> that signs for it - a
+        /// seed's own Algorand primary address (checked first, for free, no activation-registry read needed),
+        /// else whatever <see cref="IAddressActivationService"/> has on file (populated automatically by
+        /// <see cref="GetAddress"/>/<see cref="GetEvmAddress"/>, or explicitly by
+        /// <see cref="ActivateAddress"/>). Returns <c>null</c> if <paramref name="address"/> is neither.
+        /// </summary>
+        private async Task<(string PrimaryAddress, int Slot)?> ResolveSignerAsync(ClaimsPrincipal principal, string email, string provider, string? accessToken, string address)
+        {
+            var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                token => _accountRepository.ListSeedsAsync(email, provider, token));
+            var nativeSeed = seeds.FirstOrDefault(s => string.Equals(s.PrimaryAddress, address, StringComparison.Ordinal));
+            if (nativeSeed != null)
+            {
+                return (nativeSeed.PrimaryAddress, 0);
+            }
+
+            var entry = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                token => _addressActivationService.TryResolveAsync(email, provider, token, address));
+            return entry == null ? null : (entry.PrimaryAddress, entry.Slot);
+        }
+
+        /// <summary>
+        /// Checks whether <paramref name="address"/> is currently rekeyed on-chain to
+        /// <paramref name="expectedAuthAddress"/> - a null/unset <c>auth-addr</c> means the account isn't
+        /// rekeyed at all (still signs with its own key), which is also a "not confirmed" result here.
+        /// </summary>
+        private static async Task<bool> IsRekeyedOnChainAsync(AlgorandChain chain, string address, string expectedAuthAddress)
+        {
+            using var httpClient = HttpClientConfigurator.ConfigureHttpClient(chain.AlgodApiAddress, chain.AlgodApiToken);
+            var algodApi = new DefaultApi(httpClient);
+            var account = await algodApi.AccountInformationAsync(address);
+            return account.AuthAddr != null && string.Equals(account.AuthAddr.EncodeAsString(), expectedAuthAddress, StringComparison.Ordinal);
+        }
 
         /// <summary>
         /// Extracts and validates the bearer access token and confirms it carries an <c>email</c> claim

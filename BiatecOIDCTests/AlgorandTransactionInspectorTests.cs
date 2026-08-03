@@ -243,6 +243,120 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public void Inspect_PaymentTransaction_ReturnsSenderAddress()
+        {
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 1,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash
+            };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(pay));
+
+            Assert.That(info.Sender, Is.EqualTo(addr.EncodeAsString()));
+        }
+
+        [Test]
+        public void Inspect_SignedTransactionWrappingPayment_ReturnsSenderFromWrappedTxn()
+        {
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 1,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash
+            };
+            var signedWrapper = new SignedTransaction { Tx = pay };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(signedWrapper));
+
+            Assert.That(info.Sender, Is.EqualTo(addr.EncodeAsString()));
+        }
+
+        [Test]
+        public void Inspect_BareTransaction_IsNotMultisig()
+        {
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 1,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash
+            };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(pay));
+
+            Assert.That(info.IsMultisig, Is.False);
+        }
+
+        [Test]
+        public void Inspect_SignedTransactionWithoutMsig_IsNotMultisig()
+        {
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 1,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash
+            };
+            var signedWrapper = new SignedTransaction { Tx = pay };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(signedWrapper));
+
+            Assert.That(info.IsMultisig, Is.False);
+        }
+
+        [Test]
+        public void Inspect_SignedTransactionWithMsig_IsMultisig()
+        {
+            var addr = NewTestAddress();
+            var participant2 = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 1,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash
+            };
+            var subsigs = new List<MultisigSubsig>
+            {
+                new(addr.Bytes, null),
+                new(participant2.Bytes, null)
+            };
+            var signedWrapper = new SignedTransaction { Tx = pay, MSig = new MultisigSignature(1, 2, subsigs) };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(signedWrapper));
+
+            Assert.That(info.IsMultisig, Is.True);
+        }
+
+        [Test]
         public void Inspect_EmptyBytes_ThrowsFormatException()
         {
             Assert.Throws<FormatException>(() => AlgorandTransactionInspector.Inspect(Array.Empty<byte>()));

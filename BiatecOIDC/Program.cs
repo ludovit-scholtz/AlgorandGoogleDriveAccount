@@ -166,6 +166,13 @@ namespace BiatecOIDC
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.ISpendingLimitService, BiatecOIDC.BusinessLogic.SpendingLimitService>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IWalletService, BiatecOIDC.BusinessLogic.WalletService>();
 
+            // Address-centric wallet API: persists which (primaryAddress, slot) key signs for a given
+            // address (native derivation, or an externally rekeyed AVM address once verified on-chain - see
+            // WalletController's activate endpoint), encrypted on the user's own Drive, separate from the
+            // seed vault file itself - see AddressActivationService's remarks.
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IAddressActivationService, BiatecOIDC.BusinessLogic.AddressActivationService>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.INetworkResolver, BiatecOIDC.BusinessLogic.NetworkResolver>();
+
             // Explicit, user-triggered copy of the encrypted seed vault to a second cloud provider - see
             // IVaultBackupService's remarks for why this uses a manual OAuth2 code exchange rather than the
             // ASP.NET Core Challenge()/cookie sign-in flow.

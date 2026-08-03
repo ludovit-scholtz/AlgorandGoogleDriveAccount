@@ -60,18 +60,21 @@ for a given client (don't mix the two for the same integration).
   - RFC-like active token introspection response.
 - `POST /verify`
   - Convenience token verification endpoint.
-- `POST /wallet/sign`
-  - Signs an Algorand transaction group. Requires the `sign` scope, and additionally the `rekey` scope if
-    any transaction in the group carries Algorand's `rekey` field (see "Wallet API" below). Body accepts
-    optional `primaryAddress`/`slot` fields to sign with a specific seed/ARC-76 slot instead of the vault's
-    current primary seed at slot 0 (see "Multi-address signing" below).
+- `POST /wallet/sign/{network}/{address}`
+  - Signs an Algorand transaction group as `address` on `network`. Requires the `sign` scope, and
+    additionally the `rekey` scope if any transaction in the group carries Algorand's `rekey` field (see
+    "Wallet API" below). Body is just `{ "transactions": [...] }` now - see "Address-centric wallet API"
+    below for how `address` resolves to a signing seed/slot, and how this differs from the old
+    `POST /wallet/sign`.
 - `GET /wallet/address`
   - Lists every seed's identifying (slot-0) address in the caller's vault, and which one is primary. Same
     data as `GET /wallet/seeds` below, addressed for the multi-address signing use case. Only requires
     being authenticated.
 - `GET /wallet/address/{primaryAddress}/{slot?}`
   - Derives (without signing anything) the ARC-76 address at `slot` (default `0`) for the seed identified
-    by `primaryAddress`. Only requires being authenticated.
+    by `primaryAddress`. Only requires being authenticated. As a side effect, a non-zero `slot` becomes
+    resolvable by address alone afterwards (see "Address-centric wallet API" below) - a slot-0 address
+    already is, since it's the seed's own identifying address.
 - `GET /wallet/evm/address`
   - Lists every seed's EVM (Ethereum-family) address in the caller's vault, and which one is primary - same
     seeds as `GET /wallet/address`, just derived via `ARC76.GetEVMEmailAccount` instead of
@@ -79,15 +82,28 @@ for a given client (don't mix the two for the same integration).
     authenticated. See "EVM (Ethereum-family) support" below.
 - `GET /wallet/evm/address/{primaryAddress}/{slot?}`
   - Derives (without signing anything) the EVM address at `slot` (default `0`) for the seed identified by
-    `primaryAddress`. Only requires being authenticated.
+    `primaryAddress`. Only requires being authenticated. Always becomes resolvable by address afterwards
+    (unlike Algorand slot 0, an EVM address is never a seed's own identifying address by itself).
+- `GET /wallet/{network}/{address}/info`
+  - Reports whether Biatec currently knows which key signs for `address` on `network` - a seed's own
+    primary address, a previously-derived address (any slot), or one explicitly activated (below). Only
+    requires being authenticated. See "Address-centric wallet API" below.
+- `POST /wallet/{network}/{address}/activate`
+  - Registers that a specific seed/slot's key signs for `address` - the entry point for rekeying an
+    external AVM account to a Biatec-controlled key. Requires the `sign` scope. See "Address-centric
+    wallet API" below for the full flow and verification rules.
 - `GET /wallet/limits`
-  - Reads the caller's own daily/weekly/monthly spending limits. Only requires being authenticated
-    (`openid`) - no `manage-limits` scope needed to read your own limits. Accepts optional
-    `primaryAddress`/`slot` query parameters to read a per-address bucket instead of the account-wide
-    global bucket (see "Multi-address signing" below).
+  - Reads the caller's own account-wide daily/weekly/monthly spending limits. Only requires being
+    authenticated (`openid`) - no `manage-limits` scope needed to read your own limits.
 - `PUT /wallet/limits`
-  - Sets the caller's own daily/weekly/monthly spending limits and their currency. Requires the
-    `manage-limits` scope. Same optional `primaryAddress`/`slot` query parameters as the `GET`.
+  - Sets the caller's own account-wide daily/weekly/monthly spending limits and their currency. Requires
+    the `manage-limits` scope.
+- `GET /wallet/limits/{network}/{address}`
+  - Reads the daily/weekly/monthly spending limits for the bucket tied to `address`, instead of the
+    account-wide global bucket. Only requires being authenticated.
+- `PUT /wallet/limits/{network}/{address}`
+  - Sets the daily/weekly/monthly spending limits for the bucket tied to `address`. Requires the
+    `manage-limits` scope.
 - `GET /wallet/limits/currencies`
   - Lists every currency a spending limit can be configured in, with its current USD exchange rate. Only
     requires being authenticated.
@@ -124,6 +140,52 @@ A chain only appears here if it's both listed in the public registry *and* curre
 liveness snapshot (cached ~10 minutes server-side), not a static allowlist. Use it to validate a `genesisId`
 before passing it to `POST /wallet/sign` or any other genesisId-accepting call, instead of hardcoding a list
 that can silently go stale if a chain's public infrastructure changes.
+
+## Address-centric wallet API
+
+**Breaking change**: `POST /wallet/sign` and `GET`/`PUT /wallet/limits` used to take an optional
+`primaryAddress`/`slot` selector (a body field for sign, query params for limits) to pick which seed/slot
+signs or owns a spending-limit bucket, defaulting to the vault's primary seed at slot 0. That selector is
+gone - the *address itself* is now a route segment, alongside a `network` segment (a friendly chain name
+like `algorand`/`voi`, or a raw genesis id):
+
+| Before | After |
+|---|---|
+| `POST /wallet/sign` with body `{ "transactions": [...], "primaryAddress": "SEED", "slot": 5 }` | `POST /wallet/sign/algorand/{address}` with body `{ "transactions": [...] }` |
+| `GET /wallet/limits?primaryAddress=SEED&slot=5` | `GET /wallet/limits/algorand/{address}` |
+| `PUT /wallet/limits?primaryAddress=SEED&slot=5` | `PUT /wallet/limits/algorand/{address}` |
+| `GET`/`PUT /wallet/limits` (no selector - global bucket) | unchanged |
+
+`address` must be a **known** address - resolved to the seed/slot that actually signs for it via:
+
+1. **A seed's own primary address** (its ARC-76 slot-0 address) - recognized for free, no extra step ever needed.
+2. **A previously-derived address at any slot** - calling `GET /wallet/address/{primaryAddress}/{slot}` (or
+   its EVM counterpart) derives *and registers* that address, so it becomes usable by address alone from
+   then on. This is the same call you'd make anyway to find out what the address even is, so in practice
+   this never requires an extra step either.
+3. **An explicitly activated address** - `POST /wallet/{network}/{address}/activate`, body
+   `{ "primaryAddress": "...", "slot": 0 }`. This is the entry point for **rekeying an external Algorand
+   account to a Biatec-controlled key**: rekey the external account to one of this account's addresses
+   (mint a fresh seed via `POST /wallet/seeds` if you want a dedicated one), submit and confirm that rekey
+   transaction on-chain yourself, then call `/activate` naming which seed/slot now controls it. Biatec
+   verifies this on-chain (checks the address's `auth-addr` against the derived address via algod) before
+   accepting it - nothing is registered if the rekey hasn't actually confirmed yet (`409 rekey_not_confirmed`).
+   For a *native* address (one that already exactly equals its seed/slot's derived address), this just
+   registers it immediately, equivalent to step 2 - calling it is rarely necessary since deriving the
+   address already does this.
+
+This pairing (`address` → `primaryAddress`/`slot`) is stored **encrypted on your own cloud drive** (Google
+Drive/OneDrive, whichever you're signed in with), in a file separate from the seed vault itself - never on
+Biatec's own infrastructure, same principle as the seed vault and spending-limit data.
+
+`GET /wallet/{network}/{address}/info` reports an address's current status:
+`{ "address", "network", "family", "isActive", "primaryAddress", "slot" }` - `primaryAddress`/`slot` are
+`null`/`0` when `isActive` is `false`.
+
+A plain (non-multisig) transaction's own `snd` (sender) field must match the route's `address` exactly, or
+`POST /wallet/sign/...` fails with `400 sender_mismatch` - a defense-in-depth check to catch signing under
+the wrong identity by mistake. This doesn't apply to a multisig co-signing envelope, where `address` is the
+individual participant's own key, not the multisig group's address.
 
 ## EVM (Ethereum-family) support
 
@@ -286,33 +348,33 @@ self-custody data is resolved entirely from an encrypted copy cached inside that
 "Provider access token caching" below) - this is what lets the exact same Biatec token work from any
 device/backend, not just the one the user originally signed in on.
 
-- **`POST /wallet/sign`** (needs `sign`; additionally needs `rekey` if any transaction in the group carries
-  Algorand's `rekey` field) — body: `{ "transactions": ["<base64 msgpack>", ...], "primaryAddress": "ABC...",
-  "slot": 0 }`. `primaryAddress`/`slot` are optional and select which seed/ARC-76 index signs (see
-  "Multi-address signing" below) - omit both to sign with the vault's current primary seed at slot 0, unchanged
-  from before this existed. Every payment/asset-transfer in the group is priced in USD via the Biatec Router,
-  and the group's *total* is checked against the signing identity's global **and** per-address spending limits
-  *before* anything is signed — if the total would exceed either configured (non-zero) limit, the whole request
-  is rejected (`403 spending_limit_exceeded`) and nothing is signed. A group containing a rekey transaction is
-  checked for the `rekey` claim before any of that - a `sign`-only token gets `403 insufficient_scope` naming
-  `rekey` specifically, and nothing in the group is signed. `primaryAddress` naming a seed that doesn't exist in
-  the vault fails with `400 seed_not_found`. Returns `{ "signedTransactions": ["<base64 msgpack>", ...] }` in
-  the same order as the request. A `503` (`asset_valuation_failed` or `spending_limit_currency_unavailable`)
-  means a spent asset couldn't be priced, or the caller's limit currency's exchange rate couldn't be fetched —
-  every transaction is subject to the limit, so an unpriceable asset fails the request rather than being
-  silently treated as free.
-- **`GET /wallet/limits`** (only needs to be authenticated; optional `primaryAddress`/`slot` query params) — read
-  the caller's own limits for one bucket: the account-wide global bucket if `primaryAddress` is omitted, or the
-  per-address bucket for that `(primaryAddress, slot)` identity otherwise. Shape:
-  `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000, "primaryAddress": null,
-  "slot": 0 }` (`0` on any of the three limit fields means that window is unbounded). A bucket that's never been
-  configured gets an all-zero, USD-denominated default rather than a 404.
-- **`PUT /wallet/limits`** (needs `manage-limits`; same optional `primaryAddress`/`slot` query params as the
-  `GET`) — set the caller's limits for one bucket: same body shape as the `GET` response (query params select
-  the bucket, not body fields). `currencyCode` defaults to `"USD"` if omitted/blank; an unsupported code is
-  rejected with `400 unsupported_currency` (see `GET /wallet/limits/currencies` for the supported list). The
-  limits belong to the wallet owner, not to your application — they apply the same way across every app the
-  owner has authorized with a `sign`-scoped token.
+- **`POST /wallet/sign/{network}/{address}`** (needs `sign`; additionally needs `rekey` if any transaction in
+  the group carries Algorand's `rekey` field) — body: `{ "transactions": ["<base64 msgpack>", ...] }`.
+  `address` selects which identity signs (see "Address-centric wallet API" above for how it resolves to a
+  seed/slot, and the migration table from the old body-field selector). Every payment/asset-transfer in the
+  group is priced in USD via the Biatec Router, and the group's *total* is checked against the signing
+  identity's global **and** per-address spending limits *before* anything is signed — if the total would
+  exceed either configured (non-zero) limit, the whole request is rejected (`403 spending_limit_exceeded`)
+  and nothing is signed. A group containing a rekey transaction is checked for the `rekey` claim before any
+  of that - a `sign`-only token gets `403 insufficient_scope` naming `rekey` specifically, and nothing in
+  the group is signed. `address` unknown to Biatec fails with `400 address_not_active`; a transaction whose
+  own sender doesn't match `address` fails with `400 sender_mismatch`. Returns
+  `{ "signedTransactions": ["<base64 msgpack>", ...] }` in the same order as the request. A `503`
+  (`asset_valuation_failed` or `spending_limit_currency_unavailable`) means a spent asset couldn't be
+  priced, or the caller's limit currency's exchange rate couldn't be fetched — every transaction is subject
+  to the limit, so an unpriceable asset fails the request rather than being silently treated as free.
+- **`GET`/`PUT /wallet/limits`** (`GET` only needs to be authenticated; `PUT` needs `manage-limits`) — read/
+  set the account-wide global spending-limit bucket. Shape:
+  `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000, "address": null,
+  "network": null, "primaryAddress": null, "slot": 0 }` (`0` on any of the three limit fields means that
+  window is unbounded). A bucket that's never been configured gets an all-zero, USD-denominated default
+  rather than a 404. `currencyCode` defaults to `"USD"` if omitted/blank on `PUT`; an unsupported code is
+  rejected with `400 unsupported_currency` (see `GET /wallet/limits/currencies` for the supported list).
+- **`GET`/`PUT /wallet/limits/{network}/{address}`** — same shapes/claims as the global bucket above, but for
+  the per-address bucket tied to `address` (resolved the same way as `POST /wallet/sign`'s `address`) - the
+  response's `address`/`network`/`primaryAddress`/`slot` fields are populated instead of `null`. The limits
+  belong to the wallet owner, not to your application — they apply the same way across every app the owner
+  has authorized with a `sign`-scoped token.
 - **`GET /wallet/limits/currencies`** (only needs to be authenticated) — every currency `PUT /wallet/limits`
   will accept, with its current USD rate: `{ "currencies": [ { "code": "USD", "name": null, "usdPerUnit": 1.0 },
   { "code": "EUR", "name": "EMU euro", "usdPerUnit": 1.08 }, ... ] }`. Rates come from the Czech National Bank's
@@ -330,12 +392,14 @@ device/backend, not just the one the user originally signed in on.
 
 ## Multi-address signing
 
-Every signing identity is a `(primaryAddress, slot)` pair: `primaryAddress` selects *which seed* (its own
-identifying slot-0 address, from `GET /wallet/address`/`GET /wallet/seeds` - `null`/omitted means "the vault's
-current primary seed"), `slot` selects the ARC-76 derivation index *within* that seed (default `0`). This is
-addressable independently of which seed is currently "primary" - you don't need to call
-`PUT /wallet/seeds/primary` to sign with a non-default identity, just pass `primaryAddress`/`slot` on
-`POST /wallet/sign` directly.
+Under the hood, every signing identity is still a `(primaryAddress, slot)` pair: `primaryAddress` selects
+*which seed* (its own identifying slot-0 address, from `GET /wallet/address`/`GET /wallet/seeds`), `slot`
+selects the ARC-76 derivation index *within* that seed (default `0`). What changed is how you *address* one
+at the API surface - see "Address-centric wallet API" above: instead of passing `primaryAddress`/`slot`
+directly to `POST /wallet/sign`/`PUT /wallet/limits`, you pass the resulting **address** in the route, and
+Biatec resolves it back to the seed/slot that signs for it. This is addressable independently of which seed
+is currently "primary" - you don't need to call `PUT /wallet/seeds/primary` to sign with a non-default
+identity, just derive/activate the address you want and use it directly.
 
 - **`GET /wallet/address`** (only needs to be authenticated) — lists every seed's identifying address and
   whether it's primary: `{ "addresses": [ { "address": "ABC...", "isPrimary": true }, ... ] }`. Same underlying
@@ -343,11 +407,12 @@ addressable independently of which seed is currently "primary" - you don't need 
 - **`GET /wallet/address/{primaryAddress}/{slot?}`** (only needs to be authenticated) — derives (without
   signing anything) the ARC-76 address at `slot` (default `0`) for the named seed: `{ "address": "derived...",
   "primaryAddress": "ABC...", "slot": 3 }`. `400 seed_not_found` if `primaryAddress` doesn't match any seed in
-  the vault.
-- Spending limits are two-tiered per the `GET`/`PUT /wallet/limits` bullets above: a **global** bucket that
-  counts every signed transaction from any address together, and independent **per-address** buckets. A
-  transaction signed with a given `(primaryAddress, slot)` identity is checked against both - it's blocked if
-  it would exceed either.
+  the vault. Also registers that derived address for later `POST /wallet/sign/{network}/{address}` calls (see
+  "Address-centric wallet API" above).
+- Spending limits are two-tiered per the `GET`/`PUT /wallet/limits`/`GET`/`PUT /wallet/limits/{network}/{address}`
+  bullets above: a **global** bucket that counts every signed transaction from any address together, and
+  independent **per-address** buckets. A transaction signed with a given `(primaryAddress, slot)` identity is
+  checked against both - it's blocked if it would exceed either.
 
 ## Multi-seed vault and rekey
 
@@ -371,9 +436,10 @@ different network, or be part of a multisig configured entirely outside Biatec.
 **The recovery-from-suspected-compromise flow**, end to end:
 1. `POST /wallet/seeds` to mint a new seed - call it `newAddress`.
 2. Your backend builds an Algorand transaction with `sender` = the account's existing address and
-   `rekey`/`RekeyTo` = `newAddress`, and calls `POST /wallet/sign` with a token that has **both** `sign` and
-   `rekey` (this is what actually gets checked - minting a spare seed via step 1 requires only `rekey`, but
-   the transaction that reassigns the account requires both, same as any other signed transaction).
+   `rekey`/`RekeyTo` = `newAddress`, and calls `POST /wallet/sign/{network}/{existingAddress}` with a token
+   that has **both** `sign` and `rekey` (this is what actually gets checked - minting a spare seed via step 1
+   requires only `rekey`, but the transaction that reassigns the account requires both, same as any other
+   signed transaction).
 3. Submit the signed transaction to the network yourself and wait for confirmation - Biatec never submits
    transactions on your behalf, only signs them.
 4. Only once the rekey is confirmed on-chain, call `PUT /wallet/seeds/primary` with `newAddress`. Doing this

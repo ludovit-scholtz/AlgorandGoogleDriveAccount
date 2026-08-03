@@ -1,20 +1,16 @@
 namespace BiatecMCP.Model
 {
     /// <summary>
-    /// Request body for BiatecOIDC's <c>POST /wallet/sign</c> - mirrored here (rather than referencing
-    /// BiatecOIDC's own model type) so this project has no compile-time dependency on BiatecOIDC; the two
-    /// services are independently deployed and only ever talk to each other over HTTP.
+    /// Request body for BiatecOIDC's <c>POST /wallet/sign/{network}/{address}</c> - mirrored here (rather
+    /// than referencing BiatecOIDC's own model type) so this project has no compile-time dependency on
+    /// BiatecOIDC; the two services are independently deployed and only ever talk to each other over HTTP.
+    /// Which identity signs is the <c>address</c> route segment now, not a body field - see
+    /// <see cref="IBiatecWalletClient.SignAsync"/>.
     /// </summary>
     public class SignTransactionGroupRequest
     {
         /// <summary>One or more unsigned transactions, each base64-encoded canonical msgpack.</summary>
         public List<string> Transactions { get; set; } = new();
-
-        /// <summary>Which seed signs this group (its own identifying slot-0 address). Omitted = the vault's current primary seed.</summary>
-        public string? PrimaryAddress { get; set; }
-
-        /// <summary>ARC-76 derivation slot within the selected seed. Defaults to <c>0</c>.</summary>
-        public int Slot { get; set; }
     }
 
     /// <summary>Response body for <c>POST /wallet/sign</c>.</summary>
@@ -101,6 +97,41 @@ namespace BiatecMCP.Model
         public string PrimaryAddress { get; set; } = string.Empty;
 
         /// <summary>The ARC-76 derivation slot that was used, echoed back.</summary>
+        public int Slot { get; set; }
+    }
+
+    /// <summary>Request body for <c>POST /wallet/{network}/{address}/activate</c>.</summary>
+    public class ActivateAddressRequest
+    {
+        /// <summary>Which seed's key signs for the address being activated - its own identifying (Algorand slot-0) address.</summary>
+        public string PrimaryAddress { get; set; } = string.Empty;
+
+        /// <summary>ARC-76 derivation slot within that seed. Defaults to <c>0</c>.</summary>
+        public int Slot { get; set; }
+    }
+
+    /// <summary>
+    /// Response body for <c>GET /wallet/{network}/{address}/info</c> and
+    /// <c>POST /wallet/{network}/{address}/activate</c>.
+    /// </summary>
+    public class AddressInfoResponse
+    {
+        /// <summary>The queried address, echoed back.</summary>
+        public string Address { get; set; } = string.Empty;
+
+        /// <summary>The queried network, echoed back.</summary>
+        public string Network { get; set; } = string.Empty;
+
+        /// <summary><c>"Avm"</c> or <c>"Evm"</c>.</summary>
+        public string Family { get; set; } = string.Empty;
+
+        /// <summary>Whether BiatecOIDC currently knows which key signs for <see cref="Address"/>.</summary>
+        public bool IsActive { get; set; }
+
+        /// <summary>Which seed signs for <see cref="Address"/> - <c>null</c> if <see cref="IsActive"/> is <c>false</c>.</summary>
+        public string? PrimaryAddress { get; set; }
+
+        /// <summary>ARC-76 slot of <see cref="PrimaryAddress"/> - meaningless if <see cref="IsActive"/> is <c>false</c>.</summary>
         public int Slot { get; set; }
     }
 }

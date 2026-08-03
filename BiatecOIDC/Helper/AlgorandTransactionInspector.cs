@@ -29,7 +29,19 @@ namespace BiatecOIDC.Helper
     /// which private key is authorized to sign for the sender's account. Independent of <paramref name="Kind"/>
     /// - a rekey can accompany a payment, an asset transfer, or any other transaction type.
     /// </param>
-    public sealed record AlgorandTransferInfo(AlgorandTransactionKind Kind, ulong Amount, ulong AssetId, bool IsRekey);
+    /// <param name="Sender">
+    /// The transaction's own <c>snd</c> field, base32-encoded - the address this transaction claims to move
+    /// funds from/act as, independent of whose key material actually signs it (see
+    /// <c>WalletController.SignTransactionGroup</c>'s sender-match check, which uses this to catch a caller
+    /// signing under the wrong route address).
+    /// </param>
+    /// <param name="IsMultisig">
+    /// Whether this is a <c>SignedTransaction</c> wrapper carrying a multisig envelope (an <c>msig</c> key
+    /// alongside the wrapped <c>txn</c>) - see <c>WalletController.SignTransactionGroup</c>'s sender-match
+    /// check, which skips that check for a multisig envelope since <see cref="Sender"/> there is the
+    /// *multisig group's* address, not the individual cosigning participant's own address.
+    /// </param>
+    public sealed record AlgorandTransferInfo(AlgorandTransactionKind Kind, ulong Amount, ulong AssetId, bool IsRekey, string Sender, bool IsMultisig);
 
     /// <summary>
     /// Determines whether a raw Algorand transaction (msgpack-encoded, as accepted by
@@ -58,6 +70,8 @@ namespace BiatecOIDC.Helper
         private const string PaymentType = "pay";
         private const string AssetTransferType = "axfer";
         private const string RekeyKey = "rekey";
+        private const string SenderKey = "snd";
+        private const string MultisigKey = "msig";
 
         private static readonly MessagePackSerializerOptions MapOptions =
             MessagePackSerializerOptions.Standard.WithResolver(ContractlessStandardResolver.Instance);
@@ -82,8 +96,16 @@ namespace BiatecOIDC.Helper
 
             var map = DecodeMap(transactionMsgPack);
 
-            // A SignedTransaction wrapper nests the real transaction fields under "txn".
-            if (!map.ContainsKey(TypeKey) && map.TryGetValue(WrappedTransactionKey, out var inner) && inner is Dictionary<object, object> innerMap)
+            // A SignedTransaction wrapper nests the real transaction fields under "txn"; an "msig" key
+            // alongside it means this is specifically a multisig envelope.
+            Dictionary<object, object>? innerMap = null;
+            if (!map.ContainsKey(TypeKey) && map.TryGetValue(WrappedTransactionKey, out var inner) && inner is Dictionary<object, object> unwrapped)
+            {
+                innerMap = unwrapped;
+            }
+
+            var isMultisig = innerMap != null && map.ContainsKey(MultisigKey);
+            if (innerMap != null)
             {
                 map = innerMap;
             }
@@ -95,13 +117,25 @@ namespace BiatecOIDC.Helper
 
             // Independent of "type" - a rekey field can accompany any transaction kind, not just pay/axfer.
             var isRekey = map.TryGetValue(RekeyKey, out var rekeyObj) && rekeyObj is byte[] { Length: > 0 };
+            var sender = ReadAddress(map, SenderKey);
 
             return type switch
             {
-                PaymentType => new AlgorandTransferInfo(AlgorandTransactionKind.Payment, ReadUInt64(map, PaymentAmountKey), 0, isRekey),
-                AssetTransferType => new AlgorandTransferInfo(AlgorandTransactionKind.AssetTransfer, ReadUInt64(map, AssetTransferAmountKey), ReadUInt64(map, AssetTransferAssetIdKey), isRekey),
-                _ => new AlgorandTransferInfo(AlgorandTransactionKind.Other, 0, 0, isRekey)
+                PaymentType => new AlgorandTransferInfo(AlgorandTransactionKind.Payment, ReadUInt64(map, PaymentAmountKey), 0, isRekey, sender, isMultisig),
+                AssetTransferType => new AlgorandTransferInfo(AlgorandTransactionKind.AssetTransfer, ReadUInt64(map, AssetTransferAmountKey), ReadUInt64(map, AssetTransferAssetIdKey), isRekey, sender, isMultisig),
+                _ => new AlgorandTransferInfo(AlgorandTransactionKind.Other, 0, 0, isRekey, sender, isMultisig)
             };
+        }
+
+        /// <summary>Reads a 32-byte address field and base32-encodes it, or <c>""</c> if the key is absent.</summary>
+        private static string ReadAddress(Dictionary<object, object> map, string key)
+        {
+            if (!map.TryGetValue(key, out var value) || value is not byte[] { Length: 32 } bytes)
+            {
+                return string.Empty;
+            }
+
+            return new Algorand.Address(bytes).EncodeAsString();
         }
 
         private static Dictionary<object, object> DecodeMap(byte[] transactionMsgPack)

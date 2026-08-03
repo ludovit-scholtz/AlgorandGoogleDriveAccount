@@ -348,7 +348,7 @@ namespace BiatecMCP.MCP
             [Description("ASA id to transfer. If 0, builds a native ALGO payment instead.")] ulong assetId = 0,
             [Description("Amount to transfer, in the asset's base units (microAlgos for native ALGO).")] ulong amount = 0,
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
-            [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0",
+            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? primaryAddress = null,
             [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
@@ -362,7 +362,7 @@ namespace BiatecMCP.MCP
 
                 var sender = new Address(senderAddress);
                 var receiver = string.IsNullOrWhiteSpace(receiverAccount) ? sender : new Address(receiverAccount);
-                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var suggestedParams = await GetSuggestedParamsAsync(network);
 
                 var unsignedTransaction = assetId == 0
                     ? AlgorandTransactionBuilder.BuildPayment(sender, receiver, amount, note, suggestedParams)
@@ -396,7 +396,7 @@ namespace BiatecMCP.MCP
         public async Task<CreateTransactionResponse> CreateOptInTransaction(
             [Description("ASA id to opt in to. Must be a positive number for an asset that exists.")] ulong assetId = 0,
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
-            [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0",
+            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? primaryAddress = null,
             [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
@@ -414,7 +414,7 @@ namespace BiatecMCP.MCP
                 }
 
                 var sender = new Address(senderAddress);
-                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var suggestedParams = await GetSuggestedParamsAsync(network);
                 var unsignedTransaction = AlgorandTransactionBuilder.BuildOptIn(sender, assetId, note, suggestedParams);
 
                 return new CreateTransactionResponse
@@ -449,7 +449,7 @@ namespace BiatecMCP.MCP
             [Description("Full asset name (max 32 characters).")] string assetName,
             [Description("Optional URL with more information about the asset.")] string? url = null,
             [Description("Whether newly-opted-in holders start frozen (requires the freeze address to unfreeze them).")] bool defaultFrozen = false,
-            [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0",
+            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to create the asset from instead of the primary seed.")] string? primaryAddress = null,
             [Description("ARC-76 derivation slot to create the asset from. Defaults to 0 (matches the signed-in identity).")] int slot = 0,
             [Description("Manager address. Defaults to the creator's own address.")] string? manager = null,
@@ -466,7 +466,7 @@ namespace BiatecMCP.MCP
                 }
 
                 var sender = new Address(senderAddress);
-                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var suggestedParams = await GetSuggestedParamsAsync(network);
                 var unsignedTransaction = AlgorandTransactionBuilder.BuildAssetCreate(
                     sender, total, decimals, unitName, assetName, url, defaultFrozen, suggestedParams,
                     manager: string.IsNullOrWhiteSpace(manager) ? null : new Address(manager),
@@ -516,7 +516,7 @@ namespace BiatecMCP.MCP
             [Description("Asset id to swap to. 0 = native ALGO.")] long toAssetId,
             [Description("Amount to swap, in fromAssetId's base units.")] long amount,
             [Description("Minimum acceptable output amount, in toAssetId's base units. 0 = no minimum.")] long receiveMinimum = 0,
-            [Description("Blockchain genesis id.")] string genesisId = "mainnet-v1.0",
+            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
             [Description("A specific seed's identifying address to swap from instead of the primary seed.")] string? primaryAddress = null,
             [Description("ARC-76 derivation slot to swap from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
@@ -552,7 +552,7 @@ namespace BiatecMCP.MCP
                     return response;
                 }
 
-                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var suggestedParams = await GetSuggestedParamsAsync(network);
                 var biatecRouterProvider = (BiatecRouterQuoteProvider)_dexSwapAggregator.Providers.Single(p => p.ProviderName == BiatecRouterProviderName);
                 var routerParams = BiatecRouterConnector.Extensions.ToRouterParams(suggestedParams);
                 var unsignedTransactions = await biatecRouterProvider.BuildRouteTransactionsAsync(
@@ -611,6 +611,15 @@ namespace BiatecMCP.MCP
             ["mainnet-v1.0"] = 416001
         };
 
+        /// <summary>
+        /// Accepted spellings of the one source network Aramid bridging supports today - a small local
+        /// alias check rather than a live <see cref="INetworkResolver"/> lookup, since this never needs to
+        /// change dynamically (there is exactly one supported source, hardcoded) and keeping it local avoids
+        /// a redundant second network-resolution round trip alongside <see cref="GetSuggestedParamsAsync"/>'s
+        /// own resolution of the same value.
+        /// </summary>
+        private static readonly string[] AlgorandMainnetAliases = ["mainnet-v1.0", "algorand", "algorand mainnet"];
+
         [McpServerTool(Name = "createBridgeTransaction"),
          Description("Builds an unsigned Aramid Finance bridge transaction (a pay/axfer sent to Aramid's bridge deposit address, with a note field encoding the destination chain/address/amounts) - does NOT sign or broadcast it. Fetches Aramid's live bridge configuration first and validates the route and amount bounds against it. For Algorand-family destination chains with a currently-live public algod node, also verifies the bridge deposit address there actually holds enough of the destination token, and refuses to build the transaction (InsufficientDestinationLiquidity) if not; for other destinations the response's LiquidityVerified/Warning fields explain why it couldn't be checked - confirm independently in that case before broadcasting anything but a small amount. Consider calling getBridgeConfiguration first to see valid routes/chains. Pass the result's UnsignedTransaction to signTransaction next, then executeAlgorandTransaction to broadcast.")]
         public async Task<CreateBridgeTransactionResponse> CreateBridgeTransaction(
@@ -620,13 +629,14 @@ namespace BiatecMCP.MCP
             [Description("Recipient address on the destination chain.")] string destinationAddress,
             [Description("Destination token identifier, as defined in Aramid's bridge configuration for this route.")] string destinationToken,
             [Description("Optional memo forwarded to the destination chain, max 50 characters, letters/numbers/whitespace/./,/-/_//,@,*,+,$,% only.")] string? note = null,
-            [Description("Blockchain genesis id to bridge from. Only mainnet-v1.0 is supported today.")] string genesisId = "mainnet-v1.0",
+            [Description("Which network to bridge from. Only Algorand mainnet ('algorand'/'mainnet-v1.0') is supported today.")] string network = "mainnet-v1.0",
             [Description("A specific seed's identifying address to bridge from instead of the primary seed.")] string? primaryAddress = null,
             [Description("ARC-76 derivation slot to bridge from. Defaults to 0.")] int slot = 0)
         {
-            if (!AramidSourceChainIdsByGenesisId.TryGetValue(genesisId, out var sourceChainId))
+            if (!AlgorandMainnetAliases.Any(alias => string.Equals(alias, network, StringComparison.OrdinalIgnoreCase)) ||
+                !AramidSourceChainIdsByGenesisId.TryGetValue("mainnet-v1.0", out var sourceChainId))
             {
-                return new CreateBridgeTransactionResponse { Error = $"Aramid bridging is only supported from genesisId 'mainnet-v1.0' today (got '{genesisId}').", ErrorType = "InvalidRequest" };
+                return new CreateBridgeTransactionResponse { Error = $"Aramid bridging is only supported from Algorand mainnet today (got '{network}').", ErrorType = "InvalidRequest" };
             }
 
             try
@@ -661,7 +671,7 @@ namespace BiatecMCP.MCP
                     return new CreateBridgeTransactionResponse { Error = $"Aramid does not currently offer a route from asset {assetId} on Algorand to token '{destinationToken}' on chain {destinationNetwork}.", ErrorType = "RouteNotFound" };
                 }
 
-                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var suggestedParams = await GetSuggestedParamsAsync(network);
                 var feeAlternative = AramidBridgeCalculator.ResolveFeeAlternative(mapping.FeeAlternatives, suggestedParams.LastRound);
 
                 var feeAmount = AramidBridgeCalculator.ComputeFeeAmount(amount, feeAlternative);
@@ -937,7 +947,7 @@ namespace BiatecMCP.MCP
             [Description("ASA id to transfer. If 0, builds a native ALGO payment instead.")] ulong assetId = 0,
             [Description("Amount to transfer, in the asset's base units.")] ulong amount = 0,
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
-            [Description("Blockchain genesis id.")] string genesisId = "mainnet-v1.0")
+            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0")
         {
             if (participantAddresses == null || participantAddresses.Count == 0)
             {
@@ -954,7 +964,7 @@ namespace BiatecMCP.MCP
                 var multisigAddress = MultisigTransactionBuilder.DeriveAddress(version, threshold, participantAddresses);
                 var sender = new Address(multisigAddress);
                 var receiver = string.IsNullOrWhiteSpace(receiverAccount) ? sender : new Address(receiverAccount);
-                var suggestedParams = await GetSuggestedParamsAsync(genesisId);
+                var suggestedParams = await GetSuggestedParamsAsync(network);
 
                 var inner = assetId == 0
                     ? AlgorandTransactionBuilder.BuildPayment(sender, receiver, amount, note, suggestedParams)
@@ -978,11 +988,11 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "signTransaction"),
-         Description("Signs one or more unsigned transactions (from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope) via BiatecOIDC. Requires the 'sign' scope. Pass the result to executeAlgorandTransaction to broadcast, or to mergeMultisigTransactions first if this was a multisig envelope.")]
+         Description("Signs one or more unsigned transactions (from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope) via BiatecOIDC, as 'address' on 'network'. Requires the 'sign' scope. 'address' must be the same address the create* tool (or getCryptoAddress/listAlgorandAddresses) returned as the sender - use getAddressInfo/activateCryptoAddress first if it's not the signed-in account's own default address. Pass the result to executeAlgorandTransaction to broadcast, or to mergeMultisigTransactions first if this was a multisig envelope.")]
         public async Task<SignTransactionResponse> SignTransaction(
             [Description("Unsigned transaction(s), base64-encoded msgpack.")] List<string> unsignedTransactions,
-            [Description("A specific seed's identifying address to sign with instead of the primary seed.")] string? primaryAddress = null,
-            [Description("ARC-76 derivation slot to sign with. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
+            [Description("Which network 'address' belongs to. Call listSupportedNetworks to see valid values.")] string network,
+            [Description("Which identity signs - the sender address returned by the create* tool that built these transactions.")] string address)
         {
             var authError = RequireSignClaim();
             if (authError != null)
@@ -1008,7 +1018,7 @@ namespace BiatecMCP.MCP
             try
             {
                 var bearerToken = GetBearerToken();
-                var signResult = await _walletClient.SignAsync(bearerToken, rawTransactions, primaryAddress, slot);
+                var signResult = await _walletClient.SignAsync(bearerToken, network, address, rawTransactions);
                 return new SignTransactionResponse { SignedTransactions = signResult.SignedTransactions };
             }
             catch (WalletApiException ex)
@@ -1022,6 +1032,102 @@ namespace BiatecMCP.MCP
             catch (Exception ex)
             {
                 return new SignTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(SignTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        public class GetAddressInfoResponse
+        {
+            public string Address { get; set; } = string.Empty;
+            public string Network { get; set; } = string.Empty;
+            public string Family { get; set; } = string.Empty;
+            public bool IsActive { get; set; }
+            public string? PrimaryAddress { get; set; }
+            public int Slot { get; set; }
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "getAddressInfo"),
+         Description("Reports whether BiatecOIDC currently knows which key signs for 'address' on 'network' - a seed's own default address is always active; any other address (a different slot, or an externally rekeyed AVM address) needs activateCryptoAddress first. Call this before signTransaction if you're unsure whether an address is ready to sign with.")]
+        public async Task<GetAddressInfoResponse> GetAddressInfo(
+            [Description("Which network 'address' belongs to. Call listSupportedNetworks to see valid values.")] string network,
+            [Description("The address to check.")] string address)
+        {
+            try
+            {
+                var bearerToken = GetBearerToken();
+                var info = await _walletClient.GetAddressInfoAsync(bearerToken, network, address);
+                return new GetAddressInfoResponse
+                {
+                    Address = info.Address,
+                    Network = info.Network,
+                    Family = info.Family,
+                    IsActive = info.IsActive,
+                    PrimaryAddress = info.PrimaryAddress,
+                    Slot = info.Slot
+                };
+            }
+            catch (WalletApiException ex)
+            {
+                return new GetAddressInfoResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new GetAddressInfoResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (Exception ex)
+            {
+                return new GetAddressInfoResponse { Error = SanitizeForToolResponse(ex, nameof(GetAddressInfo)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        public class ActivateCryptoAddressResponse
+        {
+            public string Address { get; set; } = string.Empty;
+            public string Network { get; set; } = string.Empty;
+            public string Family { get; set; } = string.Empty;
+            public bool IsActive { get; set; }
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "activateCryptoAddress"),
+         Description("Registers that a specific seed/slot's key signs for 'address' on 'network' - the entry point for AVM rekey support. Flow: rekey an external Algorand account to one of this account's addresses (see getAlgorandAddress/listAlgorandAddresses for candidates, or mint a fresh seed first), submit and confirm that rekey transaction on-chain yourself, then call this so signTransaction recognizes 'address' going forward. For a native address (already exactly the derived address for that seed/slot), this just registers it immediately - getAlgorandAddress/getCryptoAddress already does this automatically for any slot, so calling this for a native address is rarely necessary. Requires the 'sign' scope.")]
+        public async Task<ActivateCryptoAddressResponse> ActivateCryptoAddress(
+            [Description("Which network 'address' belongs to. EVM networks are only accepted for a native address (EVM has no rekey concept).")] string network,
+            [Description("The address to activate.")] string address,
+            [Description("Which seed's key signs for 'address' - its own identifying address (see listAlgorandAddresses).")] string primaryAddress,
+            [Description("ARC-76 derivation slot within that seed. Defaults to 0.")] int slot = 0)
+        {
+            var authError = RequireSignClaim();
+            if (authError != null)
+            {
+                return new ActivateCryptoAddressResponse { Error = authError, ErrorType = "InsufficientScope" };
+            }
+
+            try
+            {
+                var bearerToken = GetBearerToken();
+                var info = await _walletClient.ActivateAddressAsync(bearerToken, network, address, primaryAddress, slot);
+                return new ActivateCryptoAddressResponse
+                {
+                    Address = info.Address,
+                    Network = info.Network,
+                    Family = info.Family,
+                    IsActive = info.IsActive
+                };
+            }
+            catch (WalletApiException ex)
+            {
+                return new ActivateCryptoAddressResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new ActivateCryptoAddressResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (Exception ex)
+            {
+                return new ActivateCryptoAddressResponse { Error = SanitizeForToolResponse(ex, nameof(ActivateCryptoAddress)), ErrorType = ex.GetType().ToString() };
             }
         }
 
@@ -1064,7 +1170,7 @@ namespace BiatecMCP.MCP
         [McpServerTool(Name = "executeAlgorandTransaction"), Description("Broadcasts one or more already-signed Algorand transactions (base64 msgpack, e.g. from signTransaction or mergeMultisigTransactions) to the network. Requires the 'sign' scope.")]
         public async Task<ExecuteTransactionResponse> ExecuteTransaction(
             [Description("Signed transaction(s), base64-encoded msgpack, in submission order.")] List<string> signedTransactions,
-            [Description("Blockchain genesis id. mainnet-v1.0 for Algorand mainnet, testnet-v1.0 for Algorand testnet.")] string genesisId = "mainnet-v1.0")
+            [Description("Which network to broadcast on - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0")
         {
             var authError = RequireSignClaim();
             if (authError != null)
@@ -1079,7 +1185,7 @@ namespace BiatecMCP.MCP
 
             try
             {
-                var (apiAddress, apiToken, explorerBaseUrl) = await GetAlgodSettings(genesisId);
+                var (apiAddress, apiToken, explorerBaseUrl) = await GetAlgodSettings(network);
                 using var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
                 var algodApi = new DefaultApi(httpClient);
 
@@ -1116,34 +1222,37 @@ namespace BiatecMCP.MCP
         }
 
         /// <summary>
-        /// Resolves algod connection details for <paramref name="genesisId"/> - locally-configured
-        /// <c>Algod:Networks</c> entries take precedence (preserves operator control/custom explorer links),
-        /// falling back to <see cref="IAlgorandChainRegistry"/>'s dynamically discovered, liveness-verified
-        /// public chain registry for anything not explicitly configured. The registry doesn't publish
-        /// explorer URLs, so a dynamically-resolved chain gets a generic Allo Explorer-style fallback.
+        /// Resolves algod connection details for <paramref name="network"/> (a friendly name like
+        /// <c>"algorand"</c>/<c>"voi"</c>, or a raw genesis id) - locally-configured <c>Algod:Networks</c>
+        /// entries take precedence by literal genesis id (preserves operator control/custom explorer links),
+        /// falling back to <see cref="INetworkResolver"/>'s dynamically discovered, liveness-verified public
+        /// chain registry for anything not explicitly configured - a superset of what a literal genesis id
+        /// alone used to resolve. The registry doesn't publish explorer URLs, so a dynamically-resolved
+        /// chain gets a generic Allo Explorer-style fallback. Throws <see cref="ArgumentException"/> for an
+        /// unresolvable network, or one that resolves to an EVM chain (not supported for these tools yet).
         /// </summary>
-        private async Task<(string apiAddress, string apiToken, string explorerBaseUrl)> GetAlgodSettings(string genesisId)
+        private async Task<(string apiAddress, string apiToken, string explorerBaseUrl)> GetAlgodSettings(string network)
         {
             var algodConfig = _algodConfig.CurrentValue;
 
-            if (algodConfig.Networks.TryGetValue(genesisId.ToLowerInvariant(), out var networkSettings))
+            if (algodConfig.Networks.TryGetValue(network.ToLowerInvariant(), out var networkSettings))
             {
                 return (networkSettings.ApiAddress, networkSettings.ApiToken, networkSettings.ExplorerBaseUrl);
             }
 
-            var chain = await _chainRegistry.TryGetChainAsync(genesisId);
-            if (chain != null)
+            var resolved = await _networkResolver.ResolveAsync(network);
+            if (resolved is { Family: ChainFamily.Avm, AvmChain: not null })
             {
-                return (chain.AlgodApiAddress, chain.AlgodApiToken, "https://allo.info/tx/");
+                return (resolved.AvmChain.AlgodApiAddress, resolved.AvmChain.AlgodApiToken, "https://allo.info/tx/");
             }
 
-            throw new ArgumentException($"Unknown or unconfigured genesisId '{genesisId}'.");
+            throw new ArgumentException($"Unknown or unsupported network '{network}'. Call listSupportedNetworks to see valid values.");
         }
 
-        /// <summary>Fetches Algod's current suggested transaction parameters for <paramref name="genesisId"/> - used by every <c>create*</c> tool.</summary>
-        private async Task<Algorand.Algod.Model.TransactionParametersResponse> GetSuggestedParamsAsync(string genesisId)
+        /// <summary>Fetches Algod's current suggested transaction parameters for <paramref name="network"/> - used by every <c>create*</c> tool.</summary>
+        private async Task<Algorand.Algod.Model.TransactionParametersResponse> GetSuggestedParamsAsync(string network)
         {
-            var (apiAddress, apiToken, _) = await GetAlgodSettings(genesisId);
+            var (apiAddress, apiToken, _) = await GetAlgodSettings(network);
             using var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
             var algodApi = new DefaultApi(httpClient);
             return await algodApi.TransactionParamsAsync();

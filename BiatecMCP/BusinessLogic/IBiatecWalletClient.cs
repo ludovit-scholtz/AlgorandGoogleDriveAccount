@@ -11,13 +11,14 @@ namespace BiatecMCP.BusinessLogic
     public interface IBiatecWalletClient
     {
         /// <summary>
-        /// Signs one or more unsigned transactions as an atomic group. Throws <see cref="WalletApiException"/>
-        /// on any non-success response (e.g. spend limit exceeded, missing <c>sign</c>/<c>rekey</c> claim,
-        /// no cached storage-provider access).
+        /// Signs one or more unsigned transactions as an atomic group, as <paramref name="address"/>.
+        /// Throws <see cref="WalletApiException"/> on any non-success response (e.g. spend limit exceeded,
+        /// missing <c>sign</c>/<c>rekey</c> claim, no cached storage-provider access, or <paramref name="address"/>
+        /// isn't a known/activated address - <c>address_not_active</c>).
         /// </summary>
-        /// <param name="primaryAddress">Which seed signs (its own identifying slot-0 address). <c>null</c> = the vault's current primary seed.</param>
-        /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
-        Task<SignTransactionGroupResponse> SignAsync(string bearerToken, IReadOnlyList<byte[]> unsignedTransactions, string? primaryAddress = null, int slot = 0, CancellationToken cancellationToken = default);
+        /// <param name="network">Which chain <paramref name="address"/> belongs to (e.g. <c>"algorand"</c>, <c>"voi"</c>).</param>
+        /// <param name="address">Which identity signs - a native address (see <see cref="GetAddressAsync"/>) or one activated via <see cref="ActivateAddressAsync"/>.</param>
+        Task<SignTransactionGroupResponse> SignAsync(string bearerToken, string network, string address, IReadOnlyList<byte[]> unsignedTransactions, CancellationToken cancellationToken = default);
 
         /// <summary>Lists every seed in the caller's vault. Throws <see cref="WalletApiException"/> on failure.</summary>
         Task<ListSeedsResponse> ListSeedsAsync(string bearerToken, CancellationToken cancellationToken = default);
@@ -39,5 +40,19 @@ namespace BiatecMCP.BusinessLogic
         /// <paramref name="primaryAddress"/>. Throws <see cref="WalletApiException"/> (e.g. <c>seed_not_found</c>) on failure.
         /// </summary>
         Task<DerivedEvmAddressResponse> GetEvmAddressAsync(string bearerToken, string primaryAddress, int slot, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Reports whether BiatecOIDC currently knows which key signs for <paramref name="address"/> on
+        /// <paramref name="network"/>. Throws <see cref="WalletApiException"/> on failure.
+        /// </summary>
+        Task<AddressInfoResponse> GetAddressInfoAsync(string bearerToken, string network, string address, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Registers that <paramref name="primaryAddress"/>/<paramref name="slot"/>'s key signs for
+        /// <paramref name="address"/> - the entry point for AVM rekey support. Throws
+        /// <see cref="WalletApiException"/> (e.g. <c>rekey_not_confirmed</c> if an external address isn't
+        /// yet rekeyed on-chain) on failure.
+        /// </summary>
+        Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string address, string primaryAddress, int slot, CancellationToken cancellationToken = default);
     }
 }
