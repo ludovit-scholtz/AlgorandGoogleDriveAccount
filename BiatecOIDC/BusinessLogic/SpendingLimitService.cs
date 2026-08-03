@@ -48,14 +48,14 @@ namespace BiatecOIDC.BusinessLogic
             }
         }
 
-        public async Task<SpendingLimitSettings> GetLimitsAsync(string email, string provider, string? accessToken, string? primaryAddress = null, int slot = 0, CancellationToken cancellationToken = default)
+        public async Task<SpendingLimitSettings> GetLimitsAsync(string email, string provider, string? accessToken, string? seedAddress = null, int slot = 0, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
             var document = await LoadDocumentAsync(email, provider, accessToken);
-            return ResolveBucket(document, primaryAddress, slot);
+            return ResolveBucket(document, seedAddress, slot);
         }
 
-        public async Task SetLimitsAsync(string email, string provider, string? accessToken, SpendingLimitSettings settings, string? primaryAddress = null, int slot = 0, CancellationToken cancellationToken = default)
+        public async Task SetLimitsAsync(string email, string provider, string? accessToken, SpendingLimitSettings settings, string? seedAddress = null, int slot = 0, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
             ArgumentNullException.ThrowIfNull(settings);
@@ -74,29 +74,29 @@ namespace BiatecOIDC.BusinessLogic
             };
 
             var document = await LoadDocumentAsync(email, provider, accessToken);
-            if (primaryAddress == null)
+            if (seedAddress == null)
             {
                 document.Global = normalized;
             }
             else
             {
-                document.PerAddress[BuildAddressKey(primaryAddress, slot)] = normalized;
+                document.PerAddress[BuildAddressKey(seedAddress, slot)] = normalized;
             }
 
             await SaveDocumentAsync(email, provider, accessToken, document);
         }
 
-        public async Task EnsureWithinLimitsAsync(string email, string provider, string? accessToken, decimal amountUsd, string primaryAddress, int slot, CancellationToken cancellationToken = default)
+        public async Task EnsureWithinLimitsAsync(string email, string provider, string? accessToken, decimal amountUsd, string seedAddress, int slot, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
-            if (string.IsNullOrWhiteSpace(primaryAddress))
+            if (string.IsNullOrWhiteSpace(seedAddress))
             {
-                throw new ArgumentException("A resolved signing address is required.", nameof(primaryAddress));
+                throw new ArgumentException("A resolved signing address is required.", nameof(seedAddress));
             }
 
             var document = await LoadDocumentAsync(email, provider, accessToken);
             var global = document.Global;
-            document.PerAddress.TryGetValue(BuildAddressKey(primaryAddress, slot), out var address);
+            document.PerAddress.TryGetValue(BuildAddressKey(seedAddress, slot), out var address);
 
             var globalUnbounded = IsUnbounded(global);
             var addressUnbounded = address == null || IsUnbounded(address);
@@ -119,7 +119,7 @@ namespace BiatecOIDC.BusinessLogic
             if (!addressUnbounded)
             {
                 var addressLedger = ledger.Where(e =>
-                    string.Equals(e.PrimaryAddress, primaryAddress, StringComparison.Ordinal) && e.Slot == slot).ToList();
+                    string.Equals(e.SeedAddress, seedAddress, StringComparison.Ordinal) && e.Slot == slot).ToList();
                 var newAmountInCurrency = await _exchangeRateService.ConvertFromUsdAsync(amountUsd, address!.CurrencyCode, cancellationToken);
                 await CheckWindowAsync("address-daily", DailyWindow, address.DailyLimit, addressLedger, now, newAmountInCurrency, address.CurrencyCode, cancellationToken);
                 await CheckWindowAsync("address-weekly", WeeklyWindow, address.WeeklyLimit, addressLedger, now, newAmountInCurrency, address.CurrencyCode, cancellationToken);
@@ -130,16 +130,16 @@ namespace BiatecOIDC.BusinessLogic
         private static bool IsUnbounded(SpendingLimitSettings settings) =>
             settings.DailyLimit <= 0 && settings.WeeklyLimit <= 0 && settings.MonthlyLimit <= 0;
 
-        internal static string BuildAddressKey(string primaryAddress, int slot) => $"{primaryAddress}:{slot}";
+        internal static string BuildAddressKey(string seedAddress, int slot) => $"{seedAddress}:{slot}";
 
-        private static SpendingLimitSettings ResolveBucket(SpendingLimitsDocument document, string? primaryAddress, int slot)
+        private static SpendingLimitSettings ResolveBucket(SpendingLimitsDocument document, string? seedAddress, int slot)
         {
-            if (primaryAddress == null)
+            if (seedAddress == null)
             {
                 return document.Global;
             }
 
-            return document.PerAddress.TryGetValue(BuildAddressKey(primaryAddress, slot), out var settings) ? settings : new SpendingLimitSettings();
+            return document.PerAddress.TryGetValue(BuildAddressKey(seedAddress, slot), out var settings) ? settings : new SpendingLimitSettings();
         }
 
         /// <summary>

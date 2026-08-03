@@ -675,7 +675,7 @@ namespace BiatecOIDC.BusinessLogic
                 // Current.Clients, so without this a dynamically-registered client's otherwise-legitimate
                 // token (correct signature, issuer, not expired) would always fail here the moment it's
                 // forwarded to any of BiatecOIDC's own endpoints - e.g. BiatecMCP forwarding it to
-                // GET /wallet/address/{primaryAddress}/{slot}. The resource URI is only ever added to `aud`
+                // GET /wallet/address/{seedAddress}/{slot}. The resource URI is only ever added to `aud`
                 // by this server itself at issuance (see CreateAccessToken), so trusting it here doesn't
                 // weaken the "reject a deregistered/tampered client" property this check exists for.
                 ValidateAudience = true,

@@ -92,7 +92,7 @@ dependency on `BiatecSelfCustodyCore`.
     chain, since MCP has no other side-channel for teaching the connected agent the intended protocol. All
     forward the caller's own bearer token to BiatecOIDC rather than touching any key material - see "MCP
     server" under Architecture notes below for the full request flow. The `create*`/`getAlgorandAddress`
-    tools accept optional `primaryAddress`/`slot` parameters to build against/from a specific seed/ARC-76
+    tools accept optional `seedAddress`/`slot` parameters to build against/from a specific seed/ARC-76
     slot instead of the default identity (see BiatecOIDC's "Address-centric wallet API and rekey support"
     note) - `signTransaction`, `getAddressInfo`, and `activateCryptoAddress` instead take the address itself,
     matching BiatecOIDC's address-centric wallet route shape. Every `network` parameter across these tools
@@ -100,9 +100,9 @@ dependency on `BiatecSelfCustodyCore`.
     dynamic, liveness-verified `IAlgorandChainRegistry` (see "Multi-chain support" below) when it isn't one
     of the locally-configured `Algod:Networks` entries.
   - `BusinessLogic/IBiatecWalletClient.cs` + `BiatecWalletClient.cs` — typed `HttpClient` wrapping BiatecOIDC's
-    `POST /wallet/sign/{network}/{address}`/`GET /wallet/seeds`/`GET /wallet/address`/
-    `GET /wallet/address/{primaryAddress}/{slot}`/`GET /wallet/evm/address`/
-    `GET /wallet/evm/address/{primaryAddress}/{slot}`/`GET /wallet/{network}/{address}/info`/
+    `POST /wallet/sign/{network}/{address}`/`GET /wallet/seeds`/
+    `GET /wallet/address/{seedAddress}/{slot}` (returns both the AVM and EVM address for that seed/slot in
+    one call)/`GET /wallet/{network}/{address}/info`/
     `POST /wallet/{network}/{address}/activate`, forwarding the caller's
     bearer token; `WalletApiException` carries BiatecOIDC's `ProblemDetails` title/detail back to the tool
   - `BusinessLogic/IDexQuoteProvider.cs` + `BiatecRouterQuoteProvider.cs`/`FolksRouterQuoteProvider.cs`/
@@ -142,11 +142,13 @@ dependency on `BiatecSelfCustodyCore`.
     storage-write access via `catalog.Resolve(idp).HasWriteAccessAsync(...)` before finalizing)
   - `Controllers/WalletController.cs` — `/wallet/sign/{network}/{address}` (`sign` claim, + `rekey` for a
     rekey transaction), `/wallet/limits` get (identity only)/put (`manage-limits` claim),
-    `/wallet/limits/{network}/{address}` (same claims, per-address bucket),
+    `/wallet/{network}/{address}/limits` (same claims, per-address bucket),
     `/wallet/limits/currencies` (identity only), `/wallet/{network}/{address}/info` (identity only),
     `/wallet/{network}/{address}/activate` (`sign` claim - the address activation registry, see
-    "Address-centric wallet API and rekey support" below), `/wallet/evm/address` +
-    `/wallet/evm/address/{primaryAddress}/{slot?}` (identity only - EVM address derivation, see "EVM
+    "Address-centric wallet API and rekey support" below), `/wallet/seeds` (identity only - lists every
+    seed's address, replacing the removed `/wallet/address` list endpoint), `/wallet/address/{seedAddress}/{slot?}`
+    (identity only - derives both the AVM and EVM address for a seed/slot in one call, replacing the removed
+    per-family `/wallet/evm/address`/`/wallet/evm/address/{seedAddress}/{slot?}` endpoints, see "EVM
     (Ethereum-family) support" below); same manual bearer-token pattern as `JwtIssuerController`'s
     `/userinfo` (not `[Authorize]` — see `.claude/skills/biatec-oidc-jwt/SKILL.md`)
   - `Controllers/ChainsController.cs` + `Model/ChainsModels.cs` — `GET /chains`, `[AllowAnonymous]`, no bearer
@@ -183,7 +185,7 @@ dependency on `BiatecSelfCustodyCore`.
     - never `AesOptions`) so it can be cached inside issued access/refresh tokens; see the "Provider access token
     caching" architecture note below
   - `BusinessLogic/AddressActivationModels.cs`, `IAddressActivationService.cs`/`AddressActivationService.cs` —
-    the address → `(primaryAddress, slot)` activation registry backing `/wallet/{network}/{address}/info` and
+    the address → `(seedAddress, slot)` activation registry backing `/wallet/{network}/{address}/info` and
     `/wallet/{network}/{address}/activate`, AES-encrypted on the user's own Drive/OneDrive under its own
     `AddressActivations.%AESID%.dat` file (see "Address-centric wallet API and rekey support" below)
   - `BusinessLogic/INetworkResolver.cs`/`NetworkResolver.cs` — `BiatecOIDC`'s own lightweight `network`
@@ -340,7 +342,7 @@ setup stage needs.
   authorized signing operation — never persist plaintext keys.
 - **Multi-seed vault and on-chain rekey**: the account file's decrypted content is a `SeedVault`
   (`BiatecSelfCustodyCore.Model`) — a list of independently-generated `SeedVaultEntry` seeds, each identified
-  by its own ARC-76 slot-0 address (`PrimaryAddress`), with exactly one flagged `IsPrimary` at a time.
+  by its own ARC-76 slot-0 address (`SeedAddress`), with exactly one flagged `IsPrimary` at a time.
   `CloudAccountRepository.LoadAccountAsync` always derives from whichever seed is primary (`slot` still
   parameterizes derivation *within* that seed, exactly as before this existed); an existing plain-mnemonic
   file (pre-dating this feature) is transparently wrapped into a single-seed vault the first time it's read,
@@ -450,10 +452,10 @@ setup stage needs.
   stable audience value via local JWT validation (`AddJwtBearer`, `Authority` = `Oidc:Issuer`), with no
   per-request network call to BiatecOIDC; (4) the tools (`MCP/BiatecMCP.cs`) forward that same bearer token
   to BiatecOIDC's wallet REST API (`IBiatecWalletClient`/`BiatecWalletClient`) — `getAlgorandAddress` (with
-  no `slot`/`primaryAddress` given) reads the token's own `algorand_address` claim (falling back to
-  `GET /wallet/seeds`'s primary seed); any non-default identity, or `listAlgorandAddresses`, hits
-  `GET /wallet/address`/`GET /wallet/address/{primaryAddress}/{slot?}` instead - each such derive call also
-  activates the derived address on BiatecOIDC's side (see "Address-centric wallet API and rekey support"
+  no `slot`/`seedAddress` given) reads the token's own `algorand_address` claim (falling back to
+  `GET /wallet/seeds`'s primary seed); `listAlgorandAddresses` lists every seed via `GET /wallet/seeds`; any
+  non-default identity hits `GET /wallet/address/{seedAddress}/{slot?}` instead - each such derive call also
+  activates the derived address(es) on BiatecOIDC's side (see "Address-centric wallet API and rekey support"
   below), so it's immediately usable by address alone afterwards. Wallet operations are three
   separate, chainable tools rather than one monolithic call: `createPaymentTransaction`/
   `createOptInTransaction`/`createAssetCreateTransaction`/`createSwapTransaction`/`createMultisigTransaction`
@@ -469,7 +471,7 @@ setup stage needs.
   independently-signed copies of a `createMultisigTransaction` envelope (no BiatecOIDC/Algod call - pure
   local combination via the Algorand4 SDK). `createBridgeTransaction` builds a real Aramid Finance bridge
   transaction (see "Aramid bridge integration" below). `getAddressInfo(network, address)` and
-  `activateCryptoAddress(network, address, primaryAddress, slot)` are thin wrappers over
+  `activateCryptoAddress(network, address, seedAddress, slot)` are thin wrappers over
   `GET`/`POST /wallet/{network}/{address}/info`/`activate` — `activateCryptoAddress`'s own `[Description]`
   spells out the full external-rekey flow end to end (mint a spare seed via the existing seed tools, submit
   and confirm the on-chain rekey transaction outside Biatec, then call this to register the pairing). Every
@@ -534,9 +536,9 @@ setup stage needs.
   Algorand. No new seed, consent flow, or storage format was needed; `CloudAccountRepository`/
   `ICloudAccountRepository` (`BiatecSelfCustodyCore`) just gained `DeriveEvmAddressAsync`, mirroring
   `DeriveAddressAsync` exactly (same `ResolveSeedEntryAsync` seed lookup) but calling
-  `.GetEVMEmailAccount(...).GetPublicAddress()` instead. `WalletController` exposes this as `GET
-  /wallet/evm/address` / `GET /wallet/evm/address/{primaryAddress}/{slot?}` (mirroring the AVM address
-  endpoints) - there is deliberately no per-EVM-chain concept at this layer, since one EVM address is valid
+  `.GetEVMEmailAccount(...).GetPublicAddress()` instead. `WalletController` exposes this via the same
+  `GET /wallet/address/{seedAddress}/{slot?}` endpoint the AVM address uses - one call derives and returns
+  both - there is deliberately no per-EVM-chain concept at this layer, since one EVM address is valid
   across every EVM chain (unlike Algorand's per-`genesisId` split), so **`BiatecOIDC` has no EVM chain
   registry at all**. Scope today is address + native-balance only - no EVM transaction building/signing/
   broadcasting, no ERC-20 balances (both explicitly out of scope; see `BiatecMCP.cs`'s `getCryptoBalance`
@@ -623,47 +625,47 @@ setup stage needs.
   MSAL-flavored OIDC clients auto-append regardless of configuration) is silently dropped instead, since there's
   nothing to fix and failing login over library-injected noise would be worse. The actual grant is always visible
   in the token response's `scope` field.
-- **Multi-address signing**: every signing identity is still, underneath, a `(primaryAddress, slot)` pair —
-  `primaryAddress` selects *which seed* (its own identifying slot-0 address; `null`/omitted = the vault's
+- **Multi-address signing**: every signing identity is still, underneath, a `(seedAddress, slot)` pair —
+  `seedAddress` selects *which seed* (its own identifying slot-0 address; `null`/omitted = the vault's
   current primary seed, byte-for-byte unchanged from before this existed), `slot` selects the ARC-76
   derivation index *within* that seed (default `0`). `ICloudAccountRepository.LoadAccountAsync` gained this as
-  an optional trailing `primaryAddress` parameter; two new read-only methods share its private
+  an optional trailing `seedAddress` parameter; two new read-only methods share its private
   seed-resolution helper: `DeriveAddressAsync` (derives an address without signing, backs
-  `GET /wallet/address/{primaryAddress}/{slot?}`) and `ResolveSeedAddressAsync` (resolves/validates a selector
+  `GET /wallet/address/{seedAddress}/{slot?}`) and `ResolveSeedAddressAsync` (resolves/validates a selector
   to its seed's address without deriving a slot — called once by `WalletService.SignTransactionGroupAsync`
   before pricing/limit-checking, so the resolved identity used for the spending-limit check and the identity
   actually used to sign can't disagree even if `PUT /wallet/seeds/primary` runs concurrently).
   `IDriveService.SignTransactionAsync`/`GetAccountAddressAsync` still take this pair exactly as before — but
-  **no wallet endpoint accepts `primaryAddress`/`slot` from a caller anymore**; see "Address-centric wallet
+  **no wallet endpoint accepts `seedAddress`/`slot` from a caller anymore**; see "Address-centric wallet
   API and rekey support" below for how the caller-facing surface was rebuilt entirely around the address
-  itself, with `WalletController` alone doing the address → `(primaryAddress, slot)` resolution before
-  delegating into this unchanged layer. `GET /wallet/address` lists every seed's address + `isPrimary` (same
-  data as `GET /wallet/seeds`, addressed for this use case).
+  itself, with `WalletController` alone doing the address → `(seedAddress, slot)` resolution before
+  delegating into this unchanged layer. `GET /wallet/seeds` lists every seed's address + `isPrimary`.
 - **Address-centric wallet API and rekey support**: the caller-facing wallet surface takes **the address
-  itself**, not a `(primaryAddress, slot)` selector — `POST /wallet/sign/{network}/{address}` and
-  `GET`/`PUT /wallet/limits/{network}/{address}` (`network` a friendly chain name — `algorand`, `voi`, `base`,
+  itself**, not a `(seedAddress, slot)` selector — `POST /wallet/sign/{network}/{address}` and
+  `GET`/`PUT /wallet/{network}/{address}/limits` (`network` a friendly chain name — `algorand`, `voi`, `base`,
   `arbitrum`, ... — resolved via a new, `BiatecOIDC`-local `INetworkResolver`/`NetworkResolver.cs`, built over
   the existing `IAlgorandChainRegistry` for AVM plus a small static well-known-name list for EVM recognition;
   a separate, independent copy from `BiatecMCP`'s own `INetworkResolver`, per this repo's no-compile-time-
-  coupling rule). This is a deliberate **breaking change** from the old `primaryAddress`/`slot` body
+  coupling rule). This is a deliberate **breaking change** from the old `seedAddress`/`slot` body
   field/query params — see `BiatecOIDC/OIDC_INTEGRATION_GUIDE.md`'s "Address-centric wallet API" section for
   the full before/after migration table. A new `IAddressActivationService`/`AddressActivationService.cs`
-  (`BiatecOIDC/BusinessLogic/`) persists the address → `(primaryAddress, slot)` pairing — `AddressActivationDocument`
-  (`Entries: List<AddressActivationEntry>`, each `{Address, Family, PrimaryAddress, Slot, ActivatedUtc}`) —
+  (`BiatecOIDC/BusinessLogic/`) persists the address → `(seedAddress, slot)` pairing — `AddressActivationDocument`
+  (`Entries: List<AddressActivationEntry>`, each `{Address, Family, SeedAddress, Slot, ActivatedUtc}`) —
   AES-encrypted on the user's **own** Drive/OneDrive (never Biatec's infrastructure), mirroring
   `SpendingLimitService`'s exact storage pattern (`EncryptedKeyRingFileStore`/`AesKeyRingResolver`/`AesOptions`
   key ring, `%AESID%`-templated filename) but in its own separate file, `AddressActivations.%AESID%.dat` — not
   the seed vault, not the spending-limit files. Every stored entry is, by construction, already verified: no
-  pending/inactive tri-state. Two paths populate it: (1) automatic — `GET /wallet/address/{primaryAddress}/{slot?}`
-  and its EVM counterpart call `ActivateAsync` themselves right after deriving, so the common case (any slot,
-  including EVM) needs no manual step at all; (2) explicit — `POST /wallet/{network}/{address}/activate`
-  (`sign` claim, body `{PrimaryAddress, Slot}`), the entry point for **rekeying an external Algorand address to
+  pending/inactive tri-state. Two paths populate it: (1) automatic — `GET /wallet/address/{seedAddress}/{slot?}`
+  (which derives and activates both the AVM and EVM address for that seed/slot in one call) calls
+  `ActivateAsync` for each right after deriving, so the common case (any slot, including EVM) needs no
+  manual step at all; (2) explicit — `POST /wallet/{network}/{address}/activate`
+  (`sign` claim, body `{SeedAddress, Slot}`), the entry point for **rekeying an external Algorand address to
   a Biatec-controlled key**: if the derived address for that seed/slot doesn't already equal `address`, it's
   only allowed for the AVM family, and is verified on-chain (`DefaultApi.AccountInformationAsync(address).AuthAddr`
   must equal the derived address) before anything is stored — 409 `rekey_not_confirmed` if the on-chain rekey
   hasn't actually happened yet. `GET /wallet/{network}/{address}/info` reports `{Address, Network, Family,
-  IsActive, PrimaryAddress?, Slot?}` for any address, active or not. `WalletController.SignTransactionGroup`
-  resolves `{network}/{address}` to `(primaryAddress, slot)` via this registry (checking each seed's own
+  IsActive, SeedAddress?, Slot?}` for any address, active or not. `WalletController.SignTransactionGroup`
+  resolves `{network}/{address}` to `(seedAddress, slot)` via this registry (checking each seed's own
   primary address first, for free, before ever touching the file) before calling the unchanged
   `WalletService.SignTransactionGroupAsync` — plus a defense-in-depth `sender_mismatch` check
   (`AlgorandTransactionInspector`'s new `Sender` field, decoded from the wire `snd` key, skipped for multisig
@@ -672,21 +674,21 @@ setup stage needs.
   `POST /wallet/sign/{network}/{address}` (signs an Algorand transaction group via the shared `IDriveService`,
   after resolving `address` — see "Address-centric wallet API and rekey support" above),
   `GET`/`PUT /wallet/limits` (the caller's own global daily/weekly/monthly spending limits and their currency —
-  unchanged, no address), `GET`/`PUT /wallet/limits/{network}/{address}` (the same identity's own per-address
-  bucket, replacing the old `primaryAddress`/`slot` query params — see "Two-tier spending limits" below),
+  unchanged, no address), `GET`/`PUT /wallet/{network}/{address}/limits` (the same identity's own per-address
+  bucket, replacing the old `seedAddress`/`slot` query params — see "Two-tier spending limits" below),
   `GET /wallet/limits/currencies` (every currency a limit can be set in, with its current USD rate),
-  `GET /wallet/address` + `GET /wallet/address/{primaryAddress}/{slot?}` (+ their EVM-family counterparts,
-  `GET /wallet/evm/address` + `GET /wallet/evm/address/{primaryAddress}/{slot?}` — see "EVM (Ethereum-family)
-  support" below — these two *derive from* a seed/slot, so there's no address to substitute for what's being
-  computed, and their routes are unchanged), `GET /wallet/{network}/{address}/info` and
-  `POST /wallet/{network}/{address}/activate` (new — see above), and `GET`/`POST /wallet/seeds` +
-  `PUT /wallet/seeds/primary` (the multi-seed vault — see the bullet above).
+  `GET /wallet/address/{seedAddress}/{slot?}` (derives both the AVM and EVM address for that seed/slot in one
+  call — see "EVM (Ethereum-family) support" below — this *derives from* a seed/slot, so there's no address
+  to substitute for what's being computed, and its route is unchanged), `GET /wallet/{network}/{address}/info`
+  and `POST /wallet/{network}/{address}/activate` (new — see above), and `GET`/`POST /wallet/seeds` +
+  `PUT /wallet/seeds/primary` (the multi-seed vault — see the bullet above; `GET /wallet/seeds` also replaces
+  the removed `GET /wallet/address` list endpoint).
   `POST /wallet/sign/{network}/{address}` and
-  `PUT /wallet/limits`/`PUT /wallet/limits/{network}/{address}` are gated on a dedicated claim of the same name
+  `PUT /wallet/limits`/`PUT /wallet/{network}/{address}/limits` are gated on a dedicated claim of the same name
   as the scope (`sign`/`manage-limits`), stamped onto the access token by `JwtIssuerService.CreateAccessToken`
   only when that scope was granted **and**
   the client's `AllowedScopes` allowlists it — existing clients don't get these implicitly; `GET /wallet/limits`,
-  `GET /wallet/limits/{network}/{address}`, `GET /wallet/limits/currencies`, `GET /wallet/{network}/{address}/info`,
+  `GET /wallet/{network}/{address}/limits`, `GET /wallet/limits/currencies`, `GET /wallet/{network}/{address}/info`,
   and `GET /wallet/seeds` only require a validly authenticated caller (no
   dedicated claim, since they're read-only). `POST /wallet/{network}/{address}/activate` requires `sign` (the
   risky on-chain action has already happened by the time it's called). `POST /wallet/sign/{network}/{address}`
@@ -705,7 +707,7 @@ setup stage needs.
   via the `BiatecRouterConnector` NuGet package's public `/quote` endpoint — mainnet USDC by default, see
   `SpendingLimitsConfiguration`), summed, converted into the caller's configured limit currency via
   `IExchangeRateService`/`CnbExchangeRateService` (Czech National Bank daily fixing, cached in Redis), and checked
-  against **both** the global and the resolved `(primaryAddress, slot)` identity's own per-address rolling
+  against **both** the global and the resolved `(seedAddress, slot)` identity's own per-address rolling
   daily (24h)/weekly (7d)/monthly (30d) windows (see "Two-tier spending limits" below) **before** any
   transaction in the group is signed — a group that would exceed either tier never partially signs. An asset that
   can't be priced (`AssetValuationException`) or a limit currency whose rate can't be fetched
@@ -720,13 +722,13 @@ setup stage needs.
   is this API's documentation site.
 - **Two-tier spending limits**: `SpendingLimitService` persists `SpendingLimitsDocument { Global:
   SpendingLimitSettings, PerAddress: Dictionary<string, SpendingLimitSettings> }` (key =
-  `BuildAddressKey(primaryAddress, slot)` = `"{primaryAddress}:{slot}"`) instead of a single flat settings
-  object — `ISpendingLimitService.GetLimitsAsync`/`SetLimitsAsync` take a nullable `primaryAddress` selector
+  `BuildAddressKey(seedAddress, slot)` = `"{seedAddress}:{slot}"`) instead of a single flat settings
+  object — `ISpendingLimitService.GetLimitsAsync`/`SetLimitsAsync` take a nullable `seedAddress` selector
   (`null` = `Global`, same convention as `LoadAccountAsync`). `EnsureWithinLimitsAsync` (always called with a
   resolved, non-null identity) checks the global bucket against the *entire* ledger (unfiltered — the
   pre-split behavior, so an account that only ever configures global limits sees no change) and, if a
   per-address bucket is configured for that identity, checks it separately against ledger entries filtered to
-  the same `(primaryAddress, slot)` key — `SpendingLedgerEntry` gained `PrimaryAddress`/`Slot` fields for this
+  the same `(seedAddress, slot)` key — `SpendingLedgerEntry` gained `SeedAddress`/`Slot` fields for this
   (blank/`0` on pre-existing entries, which then only ever count toward the global tier).
   `SpendingLimitExceededException.Window` is prefixed `"global-"`/`"address-"` so callers can tell which tier
   tripped. A settings file predating this split (a flat `SpendingLimitSettings` object) is detected via a raw
@@ -803,7 +805,7 @@ setup stage needs.
   encrypted cloud-drive storage), and its encrypted provider-access-token caching. Use this instead of reading
   the two full guide docs above when working on `/authorize`, `/token`, `/register`, `/userinfo`, `/introspect`,
   `/verify`, `/connect/endsession`, `/logout`, `/wallet/sign/{network}/{address}`, `/wallet/limits`,
-  `/wallet/limits/{network}/{address}`, `/wallet/limits/currencies`, `/wallet/{network}/{address}/info`,
+  `/wallet/{network}/{address}/limits`, `/wallet/limits/currencies`, `/wallet/{network}/{address}/info`,
   `/wallet/{network}/{address}/activate`,
   `JwtIssuerService.cs`, `JwtIssuerController.cs`, `WalletController.cs`, `WalletService.cs`,
   `SpendingLimitService.cs`, `AddressActivationService.cs`, `NetworkResolver.cs`,

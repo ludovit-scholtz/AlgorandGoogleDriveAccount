@@ -28,9 +28,9 @@ namespace BiatecOIDC.BusinessLogic
         /// recorded before per-address spending limits existed (they still count toward the global limit,
         /// just never toward any specific address-scoped one).
         /// </summary>
-        public string PrimaryAddress { get; set; } = string.Empty;
+        public string SeedAddress { get; set; } = string.Empty;
 
-        /// <summary>The ARC-76 derivation slot used within <see cref="PrimaryAddress"/>'s seed.</summary>
+        /// <summary>The ARC-76 derivation slot used within <see cref="SeedAddress"/>'s seed.</summary>
         public int Slot { get; set; }
     }
 }

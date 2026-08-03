@@ -14,7 +14,7 @@ namespace BiatecOIDC.BusinessLogic
         public string Family { get; set; } = string.Empty;
 
         /// <summary>Which seed's key signs for <see cref="Address"/> - its own identifying (Algorand slot-0) address.</summary>
-        public string PrimaryAddress { get; set; } = string.Empty;
+        public string SeedAddress { get; set; } = string.Empty;
 
         /// <summary>ARC-76 derivation slot within that seed.</summary>
         public int Slot { get; set; }

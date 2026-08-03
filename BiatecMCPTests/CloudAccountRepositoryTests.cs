@@ -192,14 +192,14 @@ namespace BiatecMCPTests
             await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
             var newSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
 
-            await repository.SwitchPrimarySeedAsync(TestEmail, "Fake", newSeed.PrimaryAddress, "token");
+            await repository.SwitchPrimarySeedAsync(TestEmail, "Fake", newSeed.SeedAddress, "token");
 
             var seeds = await repository.ListSeedsAsync(TestEmail, "Fake", "token");
-            Assert.That(seeds.Single(s => s.IsPrimary).PrimaryAddress, Is.EqualTo(newSeed.PrimaryAddress));
+            Assert.That(seeds.Single(s => s.IsPrimary).SeedAddress, Is.EqualTo(newSeed.SeedAddress));
 
             // LoadAccountAsync now derives from the newly-primary seed - a materially different account.
             var accountAfterSwitch = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
-            Assert.That(accountAfterSwitch.Address.EncodeAsString(), Is.EqualTo(newSeed.PrimaryAddress));
+            Assert.That(accountAfterSwitch.Address.EncodeAsString(), Is.EqualTo(newSeed.SeedAddress));
         }
 
         [Test]
@@ -236,9 +236,9 @@ namespace BiatecMCPTests
             var primaryAccount = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
             var secondSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
 
-            var account = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token", secondSeed.PrimaryAddress);
+            var account = await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token", secondSeed.SeedAddress);
 
-            Assert.That(account.Address.EncodeAsString(), Is.EqualTo(secondSeed.PrimaryAddress));
+            Assert.That(account.Address.EncodeAsString(), Is.EqualTo(secondSeed.SeedAddress));
             Assert.That(account.Address.EncodeAsString(), Is.Not.EqualTo(primaryAccount.Address.EncodeAsString()));
         }
 
@@ -285,9 +285,9 @@ namespace BiatecMCPTests
             await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
             var secondSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
 
-            var derived = await repository.DeriveAddressAsync(TestEmail, "Fake", secondSeed.PrimaryAddress, 0, "token");
+            var derived = await repository.DeriveAddressAsync(TestEmail, "Fake", secondSeed.SeedAddress, 0, "token");
 
-            Assert.That(derived, Is.EqualTo(secondSeed.PrimaryAddress));
+            Assert.That(derived, Is.EqualTo(secondSeed.SeedAddress));
         }
 
         [Test]
@@ -348,7 +348,7 @@ namespace BiatecMCPTests
             var secondSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
 
             var derivedFromPrimary = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", null, 0, "token");
-            var derivedFromSecond = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", secondSeed.PrimaryAddress, 0, "token");
+            var derivedFromSecond = await repository.DeriveEvmAddressAsync(TestEmail, "Fake", secondSeed.SeedAddress, 0, "token");
 
             Assert.That(derivedFromSecond, Is.Not.EqualTo(derivedFromPrimary));
         }
@@ -384,9 +384,9 @@ namespace BiatecMCPTests
             await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
             var secondSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
 
-            var resolved = await repository.ResolveSeedAddressAsync(TestEmail, "Fake", secondSeed.PrimaryAddress, "token");
+            var resolved = await repository.ResolveSeedAddressAsync(TestEmail, "Fake", secondSeed.SeedAddress, "token");
 
-            Assert.That(resolved, Is.EqualTo(secondSeed.PrimaryAddress));
+            Assert.That(resolved, Is.EqualTo(secondSeed.SeedAddress));
         }
 
         [Test]

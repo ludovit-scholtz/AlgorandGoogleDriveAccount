@@ -40,61 +40,21 @@ namespace BiatecMCP.Model
         public List<SeedResponse> Seeds { get; set; } = new();
     }
 
-    /// <summary>One seed's identifying address, as returned by <c>GET /wallet/address</c>.</summary>
-    public class AddressResponse
-    {
-        /// <summary>This seed's identifying (ARC-76 slot-0) address.</summary>
-        public string Address { get; set; } = string.Empty;
-
-        /// <summary>Whether this is the seed currently used for normal signing when no <c>PrimaryAddress</c> is given.</summary>
-        public bool IsPrimary { get; set; }
-    }
-
-    /// <summary>Response body for <c>GET /wallet/address</c>.</summary>
-    public class ListAddressesResponse
-    {
-        /// <summary>Every seed's identifying address in the caller's vault. Exactly one has <see cref="AddressResponse.IsPrimary"/> set.</summary>
-        public List<AddressResponse> Addresses { get; set; } = new();
-    }
-
-    /// <summary>Response body for <c>GET /wallet/address/{primaryAddress}/{slot?}</c>.</summary>
+    /// <summary>
+    /// Response body for <c>GET /wallet/address/{seedAddress}/{slot?}</c> - the derived address for every
+    /// currently-supported chain family in one call (there's no per-EVM-chain concept at this layer, and
+    /// AVM is genesis-independent).
+    /// </summary>
     public class DerivedAddressResponse
     {
-        /// <summary>The derived ARC-76 address.</summary>
+        /// <summary>The derived Algorand-family (AVM) address.</summary>
         public string Address { get; set; } = string.Empty;
 
-        /// <summary>The seed's identifying (slot-0) address, echoed back.</summary>
-        public string PrimaryAddress { get; set; } = string.Empty;
-
-        /// <summary>The ARC-76 derivation slot that was used, echoed back.</summary>
-        public int Slot { get; set; }
-    }
-
-    /// <summary>One seed's EVM address, as returned by <c>GET /wallet/evm/address</c>. Same across every EVM chain (Ethereum, Gnosis, Arbitrum, Base, ...) - there's no per-chain concept at this layer.</summary>
-    public class EvmAddressResponse
-    {
-        /// <summary>This seed's EVM address (slot 0), <c>"0x..."</c>.</summary>
-        public string Address { get; set; } = string.Empty;
-
-        /// <summary>Whether this is the seed currently used for normal signing when no <c>PrimaryAddress</c> is given.</summary>
-        public bool IsPrimary { get; set; }
-    }
-
-    /// <summary>Response body for <c>GET /wallet/evm/address</c>.</summary>
-    public class ListEvmAddressesResponse
-    {
-        /// <summary>Every seed's EVM address in the caller's vault. Exactly one has <see cref="EvmAddressResponse.IsPrimary"/> set.</summary>
-        public List<EvmAddressResponse> Addresses { get; set; } = new();
-    }
-
-    /// <summary>Response body for <c>GET /wallet/evm/address/{primaryAddress}/{slot?}</c>.</summary>
-    public class DerivedEvmAddressResponse
-    {
-        /// <summary>The derived EVM address.</summary>
-        public string Address { get; set; } = string.Empty;
+        /// <summary>The derived Ethereum-family (EVM) address, <c>"0x..."</c>.</summary>
+        public string EvmAddress { get; set; } = string.Empty;
 
         /// <summary>The seed's identifying (Algorand slot-0) address, echoed back.</summary>
-        public string PrimaryAddress { get; set; } = string.Empty;
+        public string SeedAddress { get; set; } = string.Empty;
 
         /// <summary>The ARC-76 derivation slot that was used, echoed back.</summary>
         public int Slot { get; set; }
@@ -104,7 +64,7 @@ namespace BiatecMCP.Model
     public class ActivateAddressRequest
     {
         /// <summary>Which seed's key signs for the address being activated - its own identifying (Algorand slot-0) address.</summary>
-        public string PrimaryAddress { get; set; } = string.Empty;
+        public string SeedAddress { get; set; } = string.Empty;
 
         /// <summary>ARC-76 derivation slot within that seed. Defaults to <c>0</c>.</summary>
         public int Slot { get; set; }
@@ -129,9 +89,9 @@ namespace BiatecMCP.Model
         public bool IsActive { get; set; }
 
         /// <summary>Which seed signs for <see cref="Address"/> - <c>null</c> if <see cref="IsActive"/> is <c>false</c>.</summary>
-        public string? PrimaryAddress { get; set; }
+        public string? SeedAddress { get; set; }
 
-        /// <summary>ARC-76 slot of <see cref="PrimaryAddress"/> - meaningless if <see cref="IsActive"/> is <c>false</c>.</summary>
+        /// <summary>ARC-76 slot of <see cref="SeedAddress"/> - meaningless if <see cref="IsActive"/> is <c>false</c>.</summary>
         public int Slot { get; set; }
     }
 }

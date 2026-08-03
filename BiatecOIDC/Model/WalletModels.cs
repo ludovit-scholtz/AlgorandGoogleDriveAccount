@@ -2,7 +2,7 @@ namespace BiatecOIDC.Model
 {
     /// <summary>
     /// Request body for <c>POST /wallet/sign/{network}/{address}</c> - <c>address</c> (route segment) is
-    /// which identity signs; there is no <c>PrimaryAddress</c>/<c>Slot</c> selector here anymore (see
+    /// which identity signs; there is no <c>SeedAddress</c>/<c>Slot</c> selector here anymore (see
     /// <c>WalletController.SignTransactionGroup</c>'s remarks for how <c>address</c> resolves to one).
     /// </summary>
     public class SignTransactionGroupRequest
@@ -45,7 +45,7 @@ namespace BiatecOIDC.Model
 
     /// <summary>
     /// Response body for <c>GET</c>/<c>PUT /wallet/limits</c> (the global bucket) and
-    /// <c>GET</c>/<c>PUT /wallet/limits/{network}/{address}</c> (a per-address bucket).
+    /// <c>GET</c>/<c>PUT /wallet/{network}/{address}/limits</c> (a per-address bucket).
     /// </summary>
     public class SpendingLimitResponse
     {
@@ -68,9 +68,9 @@ namespace BiatecOIDC.Model
         public string? Network { get; set; }
 
         /// <summary>Which seed's bucket this is - resolved from <see cref="Address"/>. <c>null</c> for the global bucket.</summary>
-        public string? PrimaryAddress { get; set; }
+        public string? SeedAddress { get; set; }
 
-        /// <summary>ARC-76 slot of <see cref="PrimaryAddress"/>'s bucket - meaningless when <see cref="PrimaryAddress"/> is <c>null</c>.</summary>
+        /// <summary>ARC-76 slot of <see cref="SeedAddress"/>'s bucket - meaningless when <see cref="SeedAddress"/> is <c>null</c>.</summary>
         public int Slot { get; set; }
     }
 
@@ -125,61 +125,22 @@ namespace BiatecOIDC.Model
         public string Address { get; set; } = string.Empty;
     }
 
-    /// <summary>One seed's identifying address, as returned by <c>GET /wallet/address</c>.</summary>
-    public class AddressResponse
-    {
-        /// <summary>This seed's identifying (ARC-76 slot-0) address.</summary>
-        public string Address { get; set; } = string.Empty;
-
-        /// <summary>Whether this is the seed currently used for normal signing (<c>POST /wallet/sign</c>) when no <c>PrimaryAddress</c> is given.</summary>
-        public bool IsPrimary { get; set; }
-    }
-
-    /// <summary>Response body for <c>GET /wallet/address</c>.</summary>
-    public class ListAddressesResponse
-    {
-        /// <summary>Every seed's identifying address in the caller's vault. Exactly one has <see cref="AddressResponse.IsPrimary"/> set.</summary>
-        public List<AddressResponse> Addresses { get; set; } = new();
-    }
-
-    /// <summary>Response body for <c>GET /wallet/address/{primaryAddress}/{slot?}</c>.</summary>
+    /// <summary>
+    /// Response body for <c>GET /wallet/address/{seedAddress}/{slot?}</c> - the derived address for every
+    /// currently-supported chain family (there is no per-EVM-chain concept at this layer, and AVM is
+    /// genesis-independent - see <c>CLAUDE.md</c>'s "EVM (Ethereum-family) support" note), rather than a
+    /// single-family derive endpoint per family.
+    /// </summary>
     public class DerivedAddressResponse
     {
-        /// <summary>The derived ARC-76 address at <see cref="Slot"/> for the seed identified by <see cref="PrimaryAddress"/>.</summary>
+        /// <summary>The derived Algorand-family (AVM) address at <see cref="Slot"/> for the seed identified by <see cref="SeedAddress"/>.</summary>
         public string Address { get; set; } = string.Empty;
 
-        /// <summary>The seed's identifying (slot-0) address, echoed back.</summary>
-        public string PrimaryAddress { get; set; } = string.Empty;
-
-        /// <summary>The ARC-76 derivation slot that was used, echoed back.</summary>
-        public int Slot { get; set; }
-    }
-
-    /// <summary>One seed's EVM address, as returned by <c>GET /wallet/evm/address</c>. Same seed as <see cref="AddressResponse"/> - just derived via <c>ARC76.GetEVMEmailAccount</c> instead of <c>ARC76.GetEmailAccount</c>, so it's the same address across every EVM chain.</summary>
-    public class EvmAddressResponse
-    {
-        /// <summary>This seed's EVM address (slot 0), <c>"0x..."</c>.</summary>
-        public string Address { get; set; } = string.Empty;
-
-        /// <summary>Whether this is the seed currently used for normal signing (<c>POST /wallet/sign</c>) when no <c>PrimaryAddress</c> is given.</summary>
-        public bool IsPrimary { get; set; }
-    }
-
-    /// <summary>Response body for <c>GET /wallet/evm/address</c>.</summary>
-    public class ListEvmAddressesResponse
-    {
-        /// <summary>Every seed's EVM address in the caller's vault. Exactly one has <see cref="EvmAddressResponse.IsPrimary"/> set.</summary>
-        public List<EvmAddressResponse> Addresses { get; set; } = new();
-    }
-
-    /// <summary>Response body for <c>GET /wallet/evm/address/{primaryAddress}/{slot?}</c>.</summary>
-    public class DerivedEvmAddressResponse
-    {
-        /// <summary>The derived EVM address at <see cref="Slot"/> for the seed identified by <see cref="PrimaryAddress"/>.</summary>
-        public string Address { get; set; } = string.Empty;
+        /// <summary>The derived Ethereum-family (EVM) address at <see cref="Slot"/> for the same seed, <c>"0x..."</c>.</summary>
+        public string EvmAddress { get; set; } = string.Empty;
 
         /// <summary>The seed's identifying (Algorand slot-0) address, echoed back.</summary>
-        public string PrimaryAddress { get; set; } = string.Empty;
+        public string SeedAddress { get; set; } = string.Empty;
 
         /// <summary>The ARC-76 derivation slot that was used, echoed back.</summary>
         public int Slot { get; set; }
@@ -189,7 +150,7 @@ namespace BiatecOIDC.Model
     public class ActivateAddressRequest
     {
         /// <summary>Which seed's key signs for the address being activated - its own identifying (Algorand slot-0) address.</summary>
-        public string PrimaryAddress { get; set; } = string.Empty;
+        public string SeedAddress { get; set; } = string.Empty;
 
         /// <summary>ARC-76 derivation slot within that seed. Defaults to <c>0</c>.</summary>
         public int Slot { get; set; }
@@ -213,15 +174,15 @@ namespace BiatecOIDC.Model
         /// <summary>
         /// Whether Biatec currently knows which key signs for <see cref="Address"/> - either it's a seed's
         /// own primary address (implicit), it was derived at least once via
-        /// <c>GET /wallet/address/{primaryAddress}/{slot}</c> (or its EVM counterpart), or it was explicitly
+        /// <c>GET /wallet/address/{seedAddress}/{slot}</c> (or its EVM counterpart), or it was explicitly
         /// activated via <c>POST /wallet/{network}/{address}/activate</c> after an on-chain rekey check.
         /// </summary>
         public bool IsActive { get; set; }
 
         /// <summary>Which seed signs for <see cref="Address"/> - <c>null</c> if <see cref="IsActive"/> is <c>false</c>.</summary>
-        public string? PrimaryAddress { get; set; }
+        public string? SeedAddress { get; set; }
 
-        /// <summary>ARC-76 slot of <see cref="PrimaryAddress"/> - meaningless if <see cref="IsActive"/> is <c>false</c>.</summary>
+        /// <summary>ARC-76 slot of <see cref="SeedAddress"/> - meaningless if <see cref="IsActive"/> is <c>false</c>.</summary>
         public int Slot { get; set; }
     }
 }

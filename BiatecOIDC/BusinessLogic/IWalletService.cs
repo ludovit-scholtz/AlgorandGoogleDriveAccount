@@ -21,7 +21,7 @@ namespace BiatecOIDC.BusinessLogic
         /// </param>
         /// <param name="transactionsMsgPack">One or more raw, unsigned (or partially-signed multisig) transactions, msgpack-encoded.</param>
         /// <param name="accessToken">The caller-supplied provider access token used to read/decrypt the self-custody account file and the spending-limit data.</param>
-        /// <param name="primaryAddress">
+        /// <param name="seedAddress">
         /// Selects which seed signs (<c>null</c> = the vault's current primary seed) - resolved once, up
         /// front, via <c>ICloudAccountRepository.ResolveSeedAddressAsync</c>, and used consistently for
         /// both the spending-limit check and every transaction's actual signing, so a concurrent
@@ -32,7 +32,7 @@ namespace BiatecOIDC.BusinessLogic
         /// <exception cref="AssetValuationException">A spent asset's USD value could not be determined.</exception>
         /// <exception cref="SpendingLimitExceededException">The group's total spend exceeds a configured global or address-specific daily/weekly/monthly limit.</exception>
         /// <exception cref="FormatException">A transaction could not be decoded.</exception>
-        /// <exception cref="InvalidOperationException"><paramref name="primaryAddress"/> is given but no seed in the vault has that address.</exception>
-        Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? primaryAddress = null, int slot = 0);
+        /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
+        Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? seedAddress = null, int slot = 0);
     }
 }

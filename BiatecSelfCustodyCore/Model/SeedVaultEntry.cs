@@ -18,7 +18,7 @@ namespace BiatecSelfCustodyCore.Model
         /// Used instead of a separate opaque id, since it's already the natural, stable identifier for
         /// "this seed" from the caller's perspective.
         /// </summary>
-        public string PrimaryAddress { get; set; } = string.Empty;
+        public string SeedAddress { get; set; } = string.Empty;
 
         /// <summary>When this seed was generated.</summary>
         public DateTimeOffset CreatedUtc { get; set; }

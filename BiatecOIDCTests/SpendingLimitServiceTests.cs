@@ -157,7 +157,7 @@ namespace BiatecOIDCTests
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 });
             await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
             {
-                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 80m, AssetId = 0, Kind = "Payment", PrimaryAddress = TestAddress, Slot = 0 }
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 80m, AssetId = 0, Kind = "Payment", SeedAddress = TestAddress, Slot = 0 }
             });
 
             // 80 already spent + 30 more would be 110, over the 100 limit.
@@ -175,7 +175,7 @@ namespace BiatecOIDCTests
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { WeeklyLimit = 1000 });
             await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
             {
-                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 5000m, AssetId = 0, Kind = "Payment", PrimaryAddress = TestAddress, Slot = 0 }
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 5000m, AssetId = 0, Kind = "Payment", SeedAddress = TestAddress, Slot = 0 }
             });
 
             // Daily has no limit configured, so a huge existing spend today doesn't block a new one...
@@ -193,7 +193,7 @@ namespace BiatecOIDCTests
             // This entry is already outside every window (including monthly, the longest) the moment it's recorded.
             await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
             {
-                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow.AddDays(-45), AmountUsd = 999_999m, AssetId = 0, Kind = "Payment", PrimaryAddress = TestAddress, Slot = 0 }
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow.AddDays(-45), AmountUsd = 999_999m, AssetId = 0, Kind = "Payment", SeedAddress = TestAddress, Slot = 0 }
             });
 
             // If the stale entry weren't pruned, even a tiny new spend would appear to exceed the monthly limit.
@@ -266,7 +266,7 @@ namespace BiatecOIDCTests
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 }, TestAddress, 0);
             await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
             {
-                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 90m, AssetId = 0, Kind = "Payment", PrimaryAddress = otherAddress, Slot = 0 }
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 90m, AssetId = 0, Kind = "Payment", SeedAddress = otherAddress, Slot = 0 }
             });
 
             // The 90 was spent by a different address - TestAddress's own 100 limit is untouched by it.
@@ -281,7 +281,7 @@ namespace BiatecOIDCTests
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 });
             await _service.RecordSpendAsync(TestEmail, TestProvider, "token", new[]
             {
-                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 90m, AssetId = 0, Kind = "Payment", PrimaryAddress = otherAddress, Slot = 0 }
+                new SpendingLedgerEntry { TimestampUtc = DateTimeOffset.UtcNow, AmountUsd = 90m, AssetId = 0, Kind = "Payment", SeedAddress = otherAddress, Slot = 0 }
             });
 
             // The global limit counts every address's spend together - 90 (other address) + 30 (this one) exceeds 100.

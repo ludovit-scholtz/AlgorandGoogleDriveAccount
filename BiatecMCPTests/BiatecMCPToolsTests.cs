@@ -142,7 +142,7 @@ namespace BiatecMCPTests
                 .ReturnsAsync(new ListSeedsResponse { Seeds = { new SeedResponse { Address = "PRIMARY", IsPrimary = true } } });
             _walletClient
                 .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 1, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DerivedAddressResponse { Address = "SECOND-ADDRESS", PrimaryAddress = "PRIMARY", Slot = 1 });
+                .ReturnsAsync(new DerivedAddressResponse { Address = "SECOND-ADDRESS", SeedAddress = "PRIMARY", Slot = 1 });
 
             var result = await CreateTool().GetAccountAddress(slot: 1);
 
@@ -156,9 +156,9 @@ namespace BiatecMCPTests
             SetBearerToken("tok");
             _walletClient
                 .Setup(c => c.GetAddressAsync("tok", "OTHER-SEED", 0, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DerivedAddressResponse { Address = "OTHER-DERIVED", PrimaryAddress = "OTHER-SEED", Slot = 0 });
+                .ReturnsAsync(new DerivedAddressResponse { Address = "OTHER-DERIVED", SeedAddress = "OTHER-SEED", Slot = 0 });
 
-            var result = await CreateTool().GetAccountAddress(primaryAddress: "OTHER-SEED");
+            var result = await CreateTool().GetAccountAddress(seedAddress: "OTHER-SEED");
 
             Assert.That(result.Address, Is.EqualTo("OTHER-DERIVED"));
             _walletClient.Verify(c => c.ListSeedsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -169,10 +169,10 @@ namespace BiatecMCPTests
         {
             SetBearerToken("tok");
             _walletClient
-                .Setup(c => c.ListAddressesAsync("tok", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ListAddressesResponse
+                .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ListSeedsResponse
                 {
-                    Addresses = { new AddressResponse { Address = "A1", IsPrimary = true }, new AddressResponse { Address = "A2", IsPrimary = false } }
+                    Seeds = { new SeedResponse { Address = "A1", IsPrimary = true }, new SeedResponse { Address = "A2", IsPrimary = false } }
                 });
 
             var result = await CreateTool().ListAlgorandAddresses();
@@ -231,11 +231,11 @@ namespace BiatecMCPTests
             Assert.That(result.Address, Is.EqualTo("SOMEADDRESS"));
             Assert.That(result.Family, Is.EqualTo("Avm"));
             Assert.That(result.Network, Is.EqualTo("Algorand Mainnet"));
-            _walletClient.Verify(c => c.ListEvmAddressesAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _walletClient.Verify(c => c.GetAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
-        public async Task GetCryptoAddress_EvmNetwork_CallsEvmWalletClient()
+        public async Task GetCryptoAddress_EvmNetwork_CallsWalletClient()
         {
             SetBearerToken("tok");
             _networkResolver
@@ -245,8 +245,8 @@ namespace BiatecMCPTests
                 .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ListSeedsResponse { Seeds = { new SeedResponse { Address = "PRIMARY", IsPrimary = true } } });
             _walletClient
-                .Setup(c => c.GetEvmAddressAsync("tok", "PRIMARY", 0, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DerivedEvmAddressResponse { Address = "0xEVM" });
+                .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { EvmAddress = "0xEVM" });
 
             var result = await CreateTool().GetCryptoAddress("Ethereum");
 
@@ -333,12 +333,12 @@ namespace BiatecMCPTests
             SetBearerToken("tok");
             _walletClient
                 .Setup(c => c.GetAddressInfoAsync("tok", "algorand", "ADDR1", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true, PrimaryAddress = "SEED1", Slot = 2 });
+                .ReturnsAsync(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true, SeedAddress = "SEED1", Slot = 2 });
 
             var result = await CreateTool().GetAddressInfo("algorand", "ADDR1");
 
             Assert.That(result.IsActive, Is.True);
-            Assert.That(result.PrimaryAddress, Is.EqualTo("SEED1"));
+            Assert.That(result.SeedAddress, Is.EqualTo("SEED1"));
             Assert.That(result.Slot, Is.EqualTo(2));
             Assert.That(result.Error, Is.Empty);
         }
@@ -425,12 +425,12 @@ namespace BiatecMCPTests
             SetBearerToken("tok");
             _walletClient
                 .Setup(c => c.GetAddressAsync("tok", "OTHER-SEED", 10, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DerivedAddressResponse { Address = "OTHER-SEED", PrimaryAddress = "OTHER-SEED", Slot = 10 });
+                .ReturnsAsync(new DerivedAddressResponse { Address = "OTHER-SEED", SeedAddress = "OTHER-SEED", Slot = 10 });
 
             // No Algod network is configured for "mainnet-v1.0" in this test's AlgodConfiguration, so the
             // call fails deterministically once it reaches that stage - proving the sender was resolved
             // through the wallet API first (an unconfigured genesisId throws ArgumentException).
-            var result = await CreateTool().CreatePaymentTransaction(receiverAccount: "SOME", amount: 1, primaryAddress: "OTHER-SEED", slot: 10);
+            var result = await CreateTool().CreatePaymentTransaction(receiverAccount: "SOME", amount: 1, seedAddress: "OTHER-SEED", slot: 10);
 
             _walletClient.Verify(c => c.GetAddressAsync("tok", "OTHER-SEED", 10, It.IsAny<CancellationToken>()), Times.Once);
             Assert.That(result.ErrorType, Does.Contain("ArgumentException"));

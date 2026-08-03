@@ -53,14 +53,14 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
-        public async Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null, string? primaryAddress = null)
+        public async Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null)
         {
             var storageProvider = _catalog.Resolve(provider);
 
             try
             {
                 var context = await ResolveContextAsync(storageProvider, accessToken);
-                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, primaryAddress);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
                 return AlgorandARC76AccountDotNet.ARC76.GetEmailAccount(email, seed.Mnemonic, slot);
             }
@@ -83,14 +83,14 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
-        public async Task<string> DeriveAddressAsync(string email, string provider, string? primaryAddress, int slot, string? accessToken = null)
+        public async Task<string> DeriveAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null)
         {
             var storageProvider = _catalog.Resolve(provider);
 
             try
             {
                 var context = await ResolveContextAsync(storageProvider, accessToken);
-                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, primaryAddress);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
                 return AlgorandARC76AccountDotNet.ARC76.GetEmailAccount(email, seed.Mnemonic, slot).Address.EncodeAsString();
             }
@@ -113,14 +113,14 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
-        public async Task<string> DeriveEvmAddressAsync(string email, string provider, string? primaryAddress, int slot, string? accessToken = null)
+        public async Task<string> DeriveEvmAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null)
         {
             var storageProvider = _catalog.Resolve(provider);
 
             try
             {
                 var context = await ResolveContextAsync(storageProvider, accessToken);
-                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, primaryAddress);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
                 return AlgorandARC76AccountDotNet.ARC76.GetEVMEmailAccount(email, seed.Mnemonic, slot).GetPublicAddress();
             }
@@ -143,16 +143,16 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
-        public async Task<string> ResolveSeedAddressAsync(string email, string provider, string? primaryAddress, string? accessToken = null)
+        public async Task<string> ResolveSeedAddressAsync(string email, string provider, string? seedAddress, string? accessToken = null)
         {
             var storageProvider = _catalog.Resolve(provider);
 
             try
             {
                 var context = await ResolveContextAsync(storageProvider, accessToken);
-                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, primaryAddress);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
-                return seed.PrimaryAddress;
+                return seed.SeedAddress;
             }
             catch (UnauthorizedAccessException)
             {
@@ -174,24 +174,24 @@ namespace BiatecSelfCustodyCore.Repository
         }
 
         /// <summary>
-        /// Resolves <paramref name="primaryAddress"/> to a concrete <see cref="SeedVaultEntry"/> - <c>null</c>
+        /// Resolves <paramref name="seedAddress"/> to a concrete <see cref="SeedVaultEntry"/> - <c>null</c>
         /// resolves to (and, if needed, auto-creates) the vault's current primary seed, exactly like the
         /// pre-multi-address behavior; a non-null value must already exist in the vault and is never
         /// auto-created, since the caller named a specific seed.
         /// </summary>
-        private async Task<SeedVaultEntry> ResolveSeedEntryAsync(string email, ICloudStorageProvider storageProvider, VaultContext context, string? primaryAddress)
+        private async Task<SeedVaultEntry> ResolveSeedEntryAsync(string email, ICloudStorageProvider storageProvider, VaultContext context, string? seedAddress)
         {
-            if (primaryAddress == null)
+            if (seedAddress == null)
             {
                 var vault = await LoadVaultEnsuringAtLeastOneSeedAsync(email, storageProvider, context);
                 return ResolvePrimary(vault);
             }
 
             var lookupVault = await LoadVaultOrEmptyAsync(email, storageProvider, context);
-            var seed = lookupVault.Seeds.FirstOrDefault(s => string.Equals(s.PrimaryAddress, primaryAddress, StringComparison.Ordinal));
+            var seed = lookupVault.Seeds.FirstOrDefault(s => string.Equals(s.SeedAddress, seedAddress, StringComparison.Ordinal));
             if (seed == null)
             {
-                throw new InvalidOperationException($"No seed with address '{primaryAddress}' exists for this account.");
+                throw new InvalidOperationException($"No seed with address '{seedAddress}' exists for this account.");
             }
 
             return seed;
@@ -211,7 +211,7 @@ namespace BiatecSelfCustodyCore.Repository
 
                 return vault.Seeds
                     .OrderBy(s => s.CreatedUtc)
-                    .Select(s => new SeedSummary(s.PrimaryAddress, s.CreatedUtc, s.IsPrimary))
+                    .Select(s => new SeedSummary(s.SeedAddress, s.CreatedUtc, s.IsPrimary))
                     .ToList();
             }
             catch (UnauthorizedAccessException)
@@ -248,8 +248,8 @@ namespace BiatecSelfCustodyCore.Repository
 
                 await SaveVaultWithConcurrencyCheckAsync(storageProvider, context, email, vault, baselineRawBytes);
 
-                _logger.LogInformation("Generated a new seed ({Address}) for {Email}.", entry.PrimaryAddress, email);
-                return new SeedSummary(entry.PrimaryAddress, entry.CreatedUtc, entry.IsPrimary);
+                _logger.LogInformation("Generated a new seed ({Address}) for {Email}.", entry.SeedAddress, email);
+                return new SeedSummary(entry.SeedAddress, entry.CreatedUtc, entry.IsPrimary);
             }
             catch (UnauthorizedAccessException)
             {
@@ -270,7 +270,7 @@ namespace BiatecSelfCustodyCore.Repository
             }
         }
 
-        public async Task SwitchPrimarySeedAsync(string email, string provider, string primaryAddress, string? accessToken = null)
+        public async Task SwitchPrimarySeedAsync(string email, string provider, string seedAddress, string? accessToken = null)
         {
             var storageProvider = _catalog.Resolve(provider);
 
@@ -280,10 +280,10 @@ namespace BiatecSelfCustodyCore.Repository
                 var vault = await LoadVaultOrEmptyAsync(email, storageProvider, context);
                 var baselineRawBytes = await DownloadActiveRawBytesAsync(storageProvider, context);
 
-                var target = vault.Seeds.FirstOrDefault(s => string.Equals(s.PrimaryAddress, primaryAddress, StringComparison.Ordinal));
+                var target = vault.Seeds.FirstOrDefault(s => string.Equals(s.SeedAddress, seedAddress, StringComparison.Ordinal));
                 if (target == null)
                 {
-                    throw new InvalidOperationException($"No seed with address '{primaryAddress}' exists for this account.");
+                    throw new InvalidOperationException($"No seed with address '{seedAddress}' exists for this account.");
                 }
 
                 foreach (var seed in vault.Seeds)
@@ -292,7 +292,7 @@ namespace BiatecSelfCustodyCore.Repository
                 }
 
                 await SaveVaultWithConcurrencyCheckAsync(storageProvider, context, email, vault, baselineRawBytes);
-                _logger.LogInformation("Switched the primary seed to {Address} for {Email}.", primaryAddress, email);
+                _logger.LogInformation("Switched the primary seed to {Address} for {Email}.", seedAddress, email);
             }
             catch (UnauthorizedAccessException)
             {
@@ -462,7 +462,7 @@ namespace BiatecSelfCustodyCore.Repository
             return new SeedVaultEntry
             {
                 Mnemonic = mnemonic,
-                PrimaryAddress = address,
+                SeedAddress = address,
                 CreatedUtc = DateTimeOffset.UtcNow,
                 IsPrimary = isPrimary
             };

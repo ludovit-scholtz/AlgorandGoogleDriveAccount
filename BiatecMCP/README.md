@@ -65,30 +65,30 @@ BiatecOIDC or the network; only `signTransaction`, `activateCryptoAddress`, and 
 require the `sign` scope.
 Every tool's own description tells the connected AI assistant which tool to call next, so a plain "pay X"
 request is handled as three chained tool calls automatically. `signTransaction`, `getAddressInfo`, and
-`activateCryptoAddress` all take the address itself (rather than `primaryAddress`/`slot`), matching BiatecOIDC's
+`activateCryptoAddress` all take the address itself (rather than `seedAddress`/`slot`), matching BiatecOIDC's
 address-centric wallet route shape (`/wallet/sign/{network}/{address}`, etc.) — the `create*` tools and
-`getAlgorandAddress` still take the optional `primaryAddress`/`slot` pair to *build*/*derive* against a specific
+`getAlgorandAddress` still take the optional `seedAddress`/`slot` pair to *build*/*derive* against a specific
 seed/slot, since that's a different concern (choosing which identity produces the address/transaction).
 
 - **`getAlgorandAddress`** — returns an Algorand address for the signed-in account. With no arguments, returns the
   default identity (from the bearer token's own `algorand_address` claim, falling back to the primary seed from
   `GET /wallet/seeds`). Pass `slot` (ARC-76 derivation index — `1` for the "second address", `2` for the "third",
-  etc.) and/or `primaryAddress` (a specific seed's identifying address, from `listAlgorandAddresses`) to derive a
+  etc.) and/or `seedAddress` (a specific seed's identifying address, from `listAlgorandAddresses`) to derive a
   different address instead — this also registers the derived address for later `signTransaction`/
   `getAddressInfo` calls by address alone.
 - **`listAlgorandAddresses`** — lists every seed's identifying address in the account, and which one is primary.
-  Use an address from here as `primaryAddress` on the other tools.
+  Use an address from here as `seedAddress` on the other tools.
 - **`getAddressInfo`** — reports whether a given `(network, address)` is currently active (resolvable to a
-  signing seed/slot), and if so, which `primaryAddress`/`slot` backs it. No authentication beyond a valid
+  signing seed/slot), and if so, which `seedAddress`/`slot` backs it. No authentication beyond a valid
   bearer token required.
-- **`activateCryptoAddress`** — registers an address → `(primaryAddress, slot)` pairing, requires the `sign`
+- **`activateCryptoAddress`** — registers an address → `(seedAddress, slot)` pairing, requires the `sign`
   scope. If the address already matches what that seed/slot derives to, this is just an explicit alternative
   to the automatic registration `getAlgorandAddress`/`getCryptoAddress` already do. The important case is
   **rekeying an external Algorand address to a Biatec-controlled key**: mint a spare seed (ask for a new seed
   via BiatecOIDC's `/wallet/seeds`), submit and confirm an on-chain transaction that sets that external
   address's `rekey` field to the new seed's address (via `signTransaction` with a `rekey`-scoped token, signed
   by the *existing* key), then call `activateCryptoAddress` with the external address and the new seed's
-  `primaryAddress`/`slot` — BiatecOIDC verifies the on-chain rekey before registering it, and only then does
+  `seedAddress`/`slot` — BiatecOIDC verifies the on-chain rekey before registering it, and only then does
   `signTransaction` start working for that address under the new key.
 - **`listSupportedNetworks`** — lists every blockchain network currently usable with `getCryptoAddress`/
   `getCryptoBalance`: every live Algorand-family chain, plus a few well-known Ethereum-family chains
@@ -159,7 +159,7 @@ seed/slot, since that's a different concern (choosing which identity produces th
   network="algorand", address="<Sender>")` → `executeAlgorandTransaction(...)` — three chained calls, signing
   with the default identity (primary seed, slot 0).
 - *"pay to address ABCD...WXYZ 1 algo with note biatec with my arc76 address SEED2...ADDR and slot 10"* → same
-  chain, with `primaryAddress="SEED2...ADDR", slot=10` passed to `createPaymentTransaction`, then
+  chain, with `seedAddress="SEED2...ADDR", slot=10` passed to `createPaymentTransaction`, then
   `signTransaction(..., network="algorand", address="<the derived slot-10 address>")`.
 - *"do self transfer with 1 algo amount and note field biatecmcp"* → `createPaymentTransaction(amount=1000000,
   note="biatecmcp")` (empty `receiverAccount` self-transfers) → `signTransaction(..., network="algorand",
@@ -183,10 +183,10 @@ seed/slot, since that's a different concern (choosing which identity produces th
   address="<Sender>")` → `executeAlgorandTransaction`.
 - *"is my address ABCD...WXYZ active"* → `getAddressInfo(network="algorand", address="ABCD...WXYZ")`.
 - *"I rekeyed ABCD...WXYZ on-chain to my new seed EFGH...ADDR at slot 0 — register it"* →
-  `activateCryptoAddress(network="algorand", address="ABCD...WXYZ", primaryAddress="EFGH...ADDR", slot=0)` —
+  `activateCryptoAddress(network="algorand", address="ABCD...WXYZ", seedAddress="EFGH...ADDR", slot=0)` —
   now `signTransaction(..., network="algorand", address="ABCD...WXYZ")` signs with the new key.
 
-Spending limits (`PUT /wallet/limits`/`PUT /wallet/limits/{network}/{address}` on BiatecOIDC) can be configured
+Spending limits (`PUT /wallet/limits`/`PUT /wallet/{network}/{address}/limits` on BiatecOIDC) can be configured
 globally (apply to every address) and/or per address — a transaction is blocked if it would exceed either,
 enforced by `signTransaction`'s underlying `POST /wallet/sign/{network}/{address}` call. See
 [BiatecOIDC/OIDC_INTEGRATION_GUIDE.md](../BiatecOIDC/OIDC_INTEGRATION_GUIDE.md) for the wallet API's full

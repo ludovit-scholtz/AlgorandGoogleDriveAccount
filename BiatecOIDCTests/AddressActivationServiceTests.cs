@@ -66,7 +66,7 @@ namespace BiatecOIDCTests
 
             Assert.That(resolved, Is.Not.Null);
             Assert.That(resolved!.Family, Is.EqualTo("Avm"));
-            Assert.That(resolved.PrimaryAddress, Is.EqualTo("SEED1"));
+            Assert.That(resolved.SeedAddress, Is.EqualTo("SEED1"));
             Assert.That(resolved.Slot, Is.EqualTo(3));
         }
 
@@ -78,7 +78,7 @@ namespace BiatecOIDCTests
 
             var resolved = await _service.TryResolveAsync(TestEmail, TestProvider, "token", "ADDR1");
 
-            Assert.That(resolved!.PrimaryAddress, Is.EqualTo("SEED2"));
+            Assert.That(resolved!.SeedAddress, Is.EqualTo("SEED2"));
             Assert.That(resolved.Slot, Is.EqualTo(5));
             var all = await _service.ListAsync(TestEmail, TestProvider, "token");
             Assert.That(all, Has.Count.EqualTo(1));

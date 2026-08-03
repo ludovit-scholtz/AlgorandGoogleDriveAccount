@@ -72,14 +72,14 @@ namespace BiatecMCP.MCP
             public string Error { get; set; } = string.Empty;
         }
 
-        [McpServerTool(Name = "getAlgorandAddress"), Description("Returns the Algorand address of the signed-in Biatec account. Use slot=1 for the 'second address', slot=2 for the 'third', etc.; use primaryAddress (see listAlgorandAddresses) to derive from a different seed entirely.")]
+        [McpServerTool(Name = "getAlgorandAddress"), Description("Returns the Algorand address of the signed-in Biatec account. Use slot=1 for the 'second address', slot=2 for the 'third', etc.; use seedAddress (see listAlgorandAddresses) to derive from a different seed entirely.")]
         public async Task<GetAccountAddressResponse> GetAccountAddress(
             [Description("ARC-76 derivation slot. 0 = the default/first address (matches the signed-in identity), 1 = the 'second address', etc.")] int slot = 0,
-            [Description("A specific seed's identifying address (see listAlgorandAddresses) to derive from instead of the primary seed.")] string? primaryAddress = null)
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to derive from instead of the primary seed.")] string? seedAddress = null)
         {
             try
             {
-                var address = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                var address = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                 if (string.IsNullOrWhiteSpace(address))
                 {
                     return new GetAccountAddressResponse
@@ -106,18 +106,18 @@ namespace BiatecMCP.MCP
 
         public class ListAlgorandAddressesResponse
         {
-            public List<Model.AddressResponse> Addresses { get; set; } = new();
+            public List<Model.SeedResponse> Addresses { get; set; } = new();
             public string Error { get; set; } = string.Empty;
         }
 
-        [McpServerTool(Name = "listAlgorandAddresses"), Description("Lists every seed's identifying address in the signed-in Biatec account, and which one is primary. Use an address from here as any create*/getAlgorandAddress tool's primaryAddress parameter.")]
+        [McpServerTool(Name = "listAlgorandAddresses"), Description("Lists every seed's identifying address in the signed-in Biatec account, and which one is primary. Use an address from here as any create*/getAlgorandAddress tool's seedAddress parameter.")]
         public async Task<ListAlgorandAddressesResponse> ListAlgorandAddresses()
         {
             try
             {
                 var bearerToken = GetBearerToken();
-                var result = await _walletClient.ListAddressesAsync(bearerToken);
-                return new ListAlgorandAddressesResponse { Addresses = result.Addresses };
+                var result = await _walletClient.ListSeedsAsync(bearerToken);
+                return new ListAlgorandAddressesResponse { Addresses = result.Seeds };
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -167,7 +167,7 @@ namespace BiatecMCP.MCP
         public async Task<GetCryptoAddressResponse> GetCryptoAddress(
             [Description("Which network to derive the address for. Call listSupportedNetworks to see valid values.")] string network,
             [Description("ARC-76 derivation slot. 0 = the default/first address, 1 = the 'second address', etc.")] int slot = 0,
-            [Description("A specific seed's identifying address (see listAlgorandAddresses) to derive from instead of the primary seed.")] string? primaryAddress = null)
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to derive from instead of the primary seed.")] string? seedAddress = null)
         {
             try
             {
@@ -179,7 +179,7 @@ namespace BiatecMCP.MCP
 
                 if (resolved.Family == ChainFamily.Avm)
                 {
-                    var address = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                    var address = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                     if (string.IsNullOrWhiteSpace(address))
                     {
                         return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Error = NoAlgorandAddressMessage };
@@ -188,7 +188,7 @@ namespace BiatecMCP.MCP
                     return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Address = address };
                 }
 
-                var evmAddress = await ResolveEvmAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                var evmAddress = await ResolveEvmAddressAsync(slot: slot, seedAddress: seedAddress);
                 if (string.IsNullOrWhiteSpace(evmAddress))
                 {
                     return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Evm), Error = NoEvmAddressMessage };
@@ -241,7 +241,7 @@ namespace BiatecMCP.MCP
         public async Task<GetCryptoBalanceResponse> GetCryptoBalance(
             [Description("Which network to query. Call listSupportedNetworks to see valid values.")] string network,
             [Description("Address to check the balance of. Omit to check the signed-in account's own address on this network.")] string? address = null,
-            [Description("A specific seed's identifying address to use when 'address' is omitted.")] string? primaryAddress = null,
+            [Description("A specific seed's identifying address to use when 'address' is omitted.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to use when 'address' is omitted. Defaults to 0.")] int slot = 0)
         {
             try
@@ -254,7 +254,7 @@ namespace BiatecMCP.MCP
 
                 if (resolved.Family == ChainFamily.Avm)
                 {
-                    var resolvedAddress = address ?? await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                    var resolvedAddress = address ?? await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                     if (string.IsNullOrWhiteSpace(resolvedAddress))
                     {
                         return new GetCryptoBalanceResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Error = NoAlgorandAddressMessage };
@@ -280,7 +280,7 @@ namespace BiatecMCP.MCP
                     };
                 }
 
-                var evmAddress = address ?? await ResolveEvmAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                var evmAddress = address ?? await ResolveEvmAddressAsync(slot: slot, seedAddress: seedAddress);
                 if (string.IsNullOrWhiteSpace(evmAddress))
                 {
                     return new GetCryptoBalanceResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Evm), Error = NoEvmAddressMessage };
@@ -349,12 +349,12 @@ namespace BiatecMCP.MCP
             [Description("Amount to transfer, in the asset's base units (microAlgos for native ALGO).")] ulong amount = 0,
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
             [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
-            [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
             try
             {
-                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                 if (string.IsNullOrWhiteSpace(senderAddress))
                 {
                     return new CreateTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
@@ -397,7 +397,7 @@ namespace BiatecMCP.MCP
             [Description("ASA id to opt in to. Must be a positive number for an asset that exists.")] ulong assetId = 0,
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
             [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
-            [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
             if (assetId == 0)
@@ -407,7 +407,7 @@ namespace BiatecMCP.MCP
 
             try
             {
-                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                 if (string.IsNullOrWhiteSpace(senderAddress))
                 {
                     return new CreateTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
@@ -450,7 +450,7 @@ namespace BiatecMCP.MCP
             [Description("Optional URL with more information about the asset.")] string? url = null,
             [Description("Whether newly-opted-in holders start frozen (requires the freeze address to unfreeze them).")] bool defaultFrozen = false,
             [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
-            [Description("A specific seed's identifying address (see listAlgorandAddresses) to create the asset from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to create the asset from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to create the asset from. Defaults to 0 (matches the signed-in identity).")] int slot = 0,
             [Description("Manager address. Defaults to the creator's own address.")] string? manager = null,
             [Description("Reserve address. Defaults to the creator's own address.")] string? reserve = null,
@@ -459,7 +459,7 @@ namespace BiatecMCP.MCP
         {
             try
             {
-                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                 if (string.IsNullOrWhiteSpace(senderAddress))
                 {
                     return new CreateTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
@@ -517,7 +517,7 @@ namespace BiatecMCP.MCP
             [Description("Amount to swap, in fromAssetId's base units.")] long amount,
             [Description("Minimum acceptable output amount, in toAssetId's base units. 0 = no minimum.")] long receiveMinimum = 0,
             [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
-            [Description("A specific seed's identifying address to swap from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("A specific seed's identifying address to swap from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to swap from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
             var response = new CreateSwapTransactionResponse();
@@ -544,7 +544,7 @@ namespace BiatecMCP.MCP
                     return response;
                 }
 
-                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                 if (string.IsNullOrWhiteSpace(senderAddress))
                 {
                     response.Error = NoAlgorandAddressMessage;
@@ -630,7 +630,7 @@ namespace BiatecMCP.MCP
             [Description("Destination token identifier, as defined in Aramid's bridge configuration for this route.")] string destinationToken,
             [Description("Optional memo forwarded to the destination chain, max 50 characters, letters/numbers/whitespace/./,/-/_//,@,*,+,$,% only.")] string? note = null,
             [Description("Which network to bridge from. Only Algorand mainnet ('algorand'/'mainnet-v1.0') is supported today.")] string network = "mainnet-v1.0",
-            [Description("A specific seed's identifying address to bridge from instead of the primary seed.")] string? primaryAddress = null,
+            [Description("A specific seed's identifying address to bridge from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to bridge from. Defaults to 0.")] int slot = 0)
         {
             if (!AlgorandMainnetAliases.Any(alias => string.Equals(alias, network, StringComparison.OrdinalIgnoreCase)) ||
@@ -641,7 +641,7 @@ namespace BiatecMCP.MCP
 
             try
             {
-                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, primaryAddress: primaryAddress);
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                 if (string.IsNullOrWhiteSpace(senderAddress))
                 {
                     return new CreateBridgeTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
@@ -1041,7 +1041,7 @@ namespace BiatecMCP.MCP
             public string Network { get; set; } = string.Empty;
             public string Family { get; set; } = string.Empty;
             public bool IsActive { get; set; }
-            public string? PrimaryAddress { get; set; }
+            public string? SeedAddress { get; set; }
             public int Slot { get; set; }
             public string Error { get; set; } = string.Empty;
             public string ErrorType { get; set; } = string.Empty;
@@ -1063,7 +1063,7 @@ namespace BiatecMCP.MCP
                     Network = info.Network,
                     Family = info.Family,
                     IsActive = info.IsActive,
-                    PrimaryAddress = info.PrimaryAddress,
+                    SeedAddress = info.SeedAddress,
                     Slot = info.Slot
                 };
             }
@@ -1096,7 +1096,7 @@ namespace BiatecMCP.MCP
         public async Task<ActivateCryptoAddressResponse> ActivateCryptoAddress(
             [Description("Which network 'address' belongs to. EVM networks are only accepted for a native address (EVM has no rekey concept).")] string network,
             [Description("The address to activate.")] string address,
-            [Description("Which seed's key signs for 'address' - its own identifying address (see listAlgorandAddresses).")] string primaryAddress,
+            [Description("Which seed's key signs for 'address' - its own identifying address (see listAlgorandAddresses).")] string seedAddress,
             [Description("ARC-76 derivation slot within that seed. Defaults to 0.")] int slot = 0)
         {
             var authError = RequireSignClaim();
@@ -1108,7 +1108,7 @@ namespace BiatecMCP.MCP
             try
             {
                 var bearerToken = GetBearerToken();
-                var info = await _walletClient.ActivateAddressAsync(bearerToken, network, address, primaryAddress, slot);
+                var info = await _walletClient.ActivateAddressAsync(bearerToken, network, address, seedAddress, slot);
                 return new ActivateCryptoAddressResponse
                 {
                     Address = info.Address,
@@ -1279,19 +1279,19 @@ namespace BiatecMCP.MCP
 
         /// <summary>
         /// Resolves an Algorand address for signing/reporting. For the default identity (<paramref name="slot"/>
-        /// <c>0</c>, no <paramref name="primaryAddress"/>), first tries the already-validated bearer
+        /// <c>0</c>, no <paramref name="seedAddress"/>), first tries the already-validated bearer
         /// token's own <c>algorand_address</c> claim (no extra network call - see BiatecOIDC's
         /// <c>JwtIssuerService.CreateAccessToken</c>), falling back to <c>GET /wallet/seeds</c> (the
         /// primary seed's address) if that claim is absent - e.g. because storage-provider consent was
         /// granted after this specific token was issued. For any non-default identity, resolves via
-        /// BiatecOIDC's <c>GET /wallet/address/{primaryAddress}/{slot}</c> - <paramref name="primaryAddress"/>
+        /// BiatecOIDC's <c>GET /wallet/address/{seedAddress}/{slot}</c> - <paramref name="seedAddress"/>
         /// itself defaults to the vault's current primary seed (via <c>GET /wallet/seeds</c>) if not given,
         /// since only <paramref name="slot"/> was requested. Returns <c>null</c> (never throws) if no
         /// address is available at all.
         /// </summary>
-        private async Task<string?> ResolveAlgorandAddressAsync(string? bearerToken = null, int slot = 0, string? primaryAddress = null)
+        private async Task<string?> ResolveAlgorandAddressAsync(string? bearerToken = null, int slot = 0, string? seedAddress = null)
         {
-            if (slot == 0 && primaryAddress == null)
+            if (slot == 0 && seedAddress == null)
             {
                 var claimAddress = _httpContextAccessor.HttpContext?.User?.FindFirstValue("algorand_address");
                 if (!string.IsNullOrWhiteSpace(claimAddress))
@@ -1302,7 +1302,7 @@ namespace BiatecMCP.MCP
 
             var token = bearerToken ?? GetBearerToken();
 
-            if (primaryAddress == null)
+            if (seedAddress == null)
             {
                 var seeds = await _walletClient.ListSeedsAsync(token);
                 var primary = seeds.Seeds.FirstOrDefault(s => s.IsPrimary) ?? seeds.Seeds.FirstOrDefault();
@@ -1316,10 +1316,10 @@ namespace BiatecMCP.MCP
                     return primary.Address;
                 }
 
-                primaryAddress = primary.Address;
+                seedAddress = primary.Address;
             }
 
-            var derived = await _walletClient.GetAddressAsync(token, primaryAddress, slot);
+            var derived = await _walletClient.GetAddressAsync(token, seedAddress, slot);
             return derived.Address;
         }
 
@@ -1329,11 +1329,11 @@ namespace BiatecMCP.MCP
         /// always calls BiatecOIDC's wallet API). Returns <c>null</c> (never throws) if no address is
         /// available at all.
         /// </summary>
-        private async Task<string?> ResolveEvmAddressAsync(string? bearerToken = null, int slot = 0, string? primaryAddress = null)
+        private async Task<string?> ResolveEvmAddressAsync(string? bearerToken = null, int slot = 0, string? seedAddress = null)
         {
             var token = bearerToken ?? GetBearerToken();
 
-            if (primaryAddress == null)
+            if (seedAddress == null)
             {
                 var seeds = await _walletClient.ListSeedsAsync(token);
                 var primary = seeds.Seeds.FirstOrDefault(s => s.IsPrimary) ?? seeds.Seeds.FirstOrDefault();
@@ -1342,11 +1342,11 @@ namespace BiatecMCP.MCP
                     return null;
                 }
 
-                primaryAddress = primary.Address;
+                seedAddress = primary.Address;
             }
 
-            var derived = await _walletClient.GetEvmAddressAsync(token, primaryAddress, slot);
-            return derived.Address;
+            var derived = await _walletClient.GetAddressAsync(token, seedAddress, slot);
+            return derived.EvmAddress;
         }
 
         /// <summary>

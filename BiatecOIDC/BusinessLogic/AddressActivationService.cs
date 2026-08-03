@@ -50,7 +50,7 @@ namespace BiatecOIDC.BusinessLogic
             return document.Entries.FirstOrDefault(e => string.Equals(e.Address, address, StringComparison.Ordinal));
         }
 
-        public async Task<AddressActivationEntry> ActivateAsync(string email, string provider, string? accessToken, string address, string family, string primaryAddress, int slot, CancellationToken cancellationToken = default)
+        public async Task<AddressActivationEntry> ActivateAsync(string email, string provider, string? accessToken, string address, string family, string seedAddress, int slot, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
             if (string.IsNullOrWhiteSpace(address))
@@ -63,7 +63,7 @@ namespace BiatecOIDC.BusinessLogic
             {
                 Address = address,
                 Family = family,
-                PrimaryAddress = primaryAddress,
+                SeedAddress = seedAddress,
                 Slot = slot,
                 ActivatedUtc = DateTimeOffset.UtcNow
             };
@@ -72,7 +72,7 @@ namespace BiatecOIDC.BusinessLogic
             document.Entries.Add(entry);
 
             await SaveDocumentAsync(email, provider, accessToken, document);
-            _logger.LogInformation("Activated address {Address} ({Family}) for {Email}, backed by seed {PrimaryAddress} slot {Slot}.", address, family, email, primaryAddress, slot);
+            _logger.LogInformation("Activated address {Address} ({Family}) for {Email}, backed by seed {SeedAddress} slot {Slot}.", address, family, email, seedAddress, slot);
             return entry;
         }
 

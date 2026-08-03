@@ -119,36 +119,11 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public async Task ListAddressesAsync_ForwardsBearerTokenAndParsesResponse()
+        public async Task GetAddressAsync_ForwardsBearerTokenAndParsesMultiNetworkResponse()
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = JsonContent.Create(new ListAddressesResponse
-                {
-                    Addresses =
-                    {
-                        new AddressResponse { Address = "ADDR1", IsPrimary = false },
-                        new AddressResponse { Address = "ADDR2", IsPrimary = true }
-                    }
-                })
-            });
-            var client = CreateClient(handler, out var captured);
-
-            var result = await client.ListAddressesAsync("the-bearer-token");
-
-            Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
-            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/address"));
-            Assert.That(captured.LastRequest.Headers.Authorization!.Parameter, Is.EqualTo("the-bearer-token"));
-            Assert.That(result.Addresses, Has.Count.EqualTo(2));
-            Assert.That(result.Addresses.Single(a => a.IsPrimary).Address, Is.EqualTo("ADDR2"));
-        }
-
-        [Test]
-        public async Task GetAddressAsync_ForwardsBearerTokenAndParsesResponse()
-        {
-            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = JsonContent.Create(new DerivedAddressResponse { Address = "DERIVED", PrimaryAddress = "ADDR1", Slot = 3 })
+                Content = JsonContent.Create(new DerivedAddressResponse { Address = "DERIVED", EvmAddress = "0xDERIVED", SeedAddress = "ADDR1", Slot = 3 })
             });
             var client = CreateClient(handler, out var captured);
 
@@ -157,6 +132,7 @@ namespace BiatecMCPTests
             Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
             Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/address/ADDR1/3"));
             Assert.That(result.Address, Is.EqualTo("DERIVED"));
+            Assert.That(result.EvmAddress, Is.EqualTo("0xDERIVED"));
         }
 
         [Test]
@@ -171,63 +147,6 @@ namespace BiatecMCPTests
             var client = CreateClient(handler, out _);
 
             var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.GetAddressAsync("token", "X", 0));
-
-            Assert.That(ex!.ErrorCode, Is.EqualTo("seed_not_found"));
-        }
-
-        [Test]
-        public async Task ListEvmAddressesAsync_ForwardsBearerTokenAndParsesResponse()
-        {
-            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = JsonContent.Create(new ListEvmAddressesResponse
-                {
-                    Addresses =
-                    {
-                        new EvmAddressResponse { Address = "0xEVM1", IsPrimary = false },
-                        new EvmAddressResponse { Address = "0xEVM2", IsPrimary = true }
-                    }
-                })
-            });
-            var client = CreateClient(handler, out var captured);
-
-            var result = await client.ListEvmAddressesAsync("the-bearer-token");
-
-            Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
-            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/evm/address"));
-            Assert.That(captured.LastRequest.Headers.Authorization!.Parameter, Is.EqualTo("the-bearer-token"));
-            Assert.That(result.Addresses, Has.Count.EqualTo(2));
-            Assert.That(result.Addresses.Single(a => a.IsPrimary).Address, Is.EqualTo("0xEVM2"));
-        }
-
-        [Test]
-        public async Task GetEvmAddressAsync_ForwardsBearerTokenAndParsesResponse()
-        {
-            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = JsonContent.Create(new DerivedEvmAddressResponse { Address = "0xDERIVED", PrimaryAddress = "ADDR1", Slot = 3 })
-            });
-            var client = CreateClient(handler, out var captured);
-
-            var result = await client.GetEvmAddressAsync("the-bearer-token", "ADDR1", 3);
-
-            Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
-            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/evm/address/ADDR1/3"));
-            Assert.That(result.Address, Is.EqualTo("0xDERIVED"));
-        }
-
-        [Test]
-        public void GetEvmAddressAsync_UnknownSeed_ThrowsWalletApiException()
-        {
-            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
-            {
-                Content = new StringContent(
-                    """{"title":"seed_not_found","detail":"No seed with address 'X' exists."}""",
-                    Encoding.UTF8, "application/problem+json")
-            });
-            var client = CreateClient(handler, out _);
-
-            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.GetEvmAddressAsync("token", "X", 0));
 
             Assert.That(ex!.ErrorCode, Is.EqualTo("seed_not_found"));
         }
@@ -261,7 +180,7 @@ namespace BiatecMCPTests
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = JsonContent.Create(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true, PrimaryAddress = "SEED1", Slot = 2 })
+                Content = JsonContent.Create(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true, SeedAddress = "SEED1", Slot = 2 })
             });
             var client = CreateClient(handler, out var captured);
 
@@ -270,7 +189,7 @@ namespace BiatecMCPTests
             Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
             Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/algorand/ADDR1/info"));
             Assert.That(result.IsActive, Is.True);
-            Assert.That(result.PrimaryAddress, Is.EqualTo("SEED1"));
+            Assert.That(result.SeedAddress, Is.EqualTo("SEED1"));
             Assert.That(result.Slot, Is.EqualTo(2));
         }
 
@@ -279,7 +198,7 @@ namespace BiatecMCPTests
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = JsonContent.Create(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true, PrimaryAddress = "SEED1", Slot = 3 })
+                Content = JsonContent.Create(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true, SeedAddress = "SEED1", Slot = 3 })
             });
             var client = CreateClient(handler, out var captured);
 
@@ -288,7 +207,7 @@ namespace BiatecMCPTests
             Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Post));
             Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/algorand/ADDR1/activate"));
             using var body = JsonDocument.Parse(captured.LastRequestBody!);
-            Assert.That(body.RootElement.GetProperty("primaryAddress").GetString(), Is.EqualTo("SEED1"));
+            Assert.That(body.RootElement.GetProperty("seedAddress").GetString(), Is.EqualTo("SEED1"));
             Assert.That(body.RootElement.GetProperty("slot").GetInt32(), Is.EqualTo(3));
             Assert.That(result.IsActive, Is.True);
         }

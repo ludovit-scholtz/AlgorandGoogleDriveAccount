@@ -57,24 +57,9 @@ namespace BiatecMCP.BusinessLogic
                 ?? new ListSeedsResponse();
         }
 
-        public async Task<ListAddressesResponse> ListAddressesAsync(string bearerToken, CancellationToken cancellationToken = default)
+        public async Task<DerivedAddressResponse> GetAddressAsync(string bearerToken, string seedAddress, int slot, CancellationToken cancellationToken = default)
         {
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, "wallet/address");
-            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
-
-            using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw await BuildExceptionAsync(response, cancellationToken);
-            }
-
-            return await response.Content.ReadFromJsonAsync<ListAddressesResponse>(cancellationToken)
-                ?? new ListAddressesResponse();
-        }
-
-        public async Task<DerivedAddressResponse> GetAddressAsync(string bearerToken, string primaryAddress, int slot, CancellationToken cancellationToken = default)
-        {
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, $"wallet/address/{Uri.EscapeDataString(primaryAddress)}/{slot}");
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, $"wallet/address/{Uri.EscapeDataString(seedAddress)}/{slot}");
             httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
 
             using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
@@ -85,36 +70,6 @@ namespace BiatecMCP.BusinessLogic
 
             return await response.Content.ReadFromJsonAsync<DerivedAddressResponse>(cancellationToken)
                 ?? new DerivedAddressResponse();
-        }
-
-        public async Task<ListEvmAddressesResponse> ListEvmAddressesAsync(string bearerToken, CancellationToken cancellationToken = default)
-        {
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, "wallet/evm/address");
-            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
-
-            using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw await BuildExceptionAsync(response, cancellationToken);
-            }
-
-            return await response.Content.ReadFromJsonAsync<ListEvmAddressesResponse>(cancellationToken)
-                ?? new ListEvmAddressesResponse();
-        }
-
-        public async Task<DerivedEvmAddressResponse> GetEvmAddressAsync(string bearerToken, string primaryAddress, int slot, CancellationToken cancellationToken = default)
-        {
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, $"wallet/evm/address/{Uri.EscapeDataString(primaryAddress)}/{slot}");
-            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
-
-            using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw await BuildExceptionAsync(response, cancellationToken);
-            }
-
-            return await response.Content.ReadFromJsonAsync<DerivedEvmAddressResponse>(cancellationToken)
-                ?? new DerivedEvmAddressResponse();
         }
 
         public async Task<AddressInfoResponse> GetAddressInfoAsync(string bearerToken, string network, string address, CancellationToken cancellationToken = default)
@@ -132,9 +87,9 @@ namespace BiatecMCP.BusinessLogic
                 ?? new AddressInfoResponse();
         }
 
-        public async Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string address, string primaryAddress, int slot, CancellationToken cancellationToken = default)
+        public async Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string address, string seedAddress, int slot, CancellationToken cancellationToken = default)
         {
-            var request = new ActivateAddressRequest { PrimaryAddress = primaryAddress, Slot = slot };
+            var request = new ActivateAddressRequest { SeedAddress = seedAddress, Slot = slot };
             using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"wallet/{Uri.EscapeDataString(network)}/{Uri.EscapeDataString(address)}/activate")
             {
                 Content = JsonContent.Create(request)

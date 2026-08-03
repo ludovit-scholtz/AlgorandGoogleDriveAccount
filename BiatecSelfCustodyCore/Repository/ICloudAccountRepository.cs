@@ -4,13 +4,13 @@ namespace BiatecSelfCustodyCore.Repository
 {
     /// <summary>
     /// Identifies one <see cref="Model.SeedVaultEntry"/> to a caller without ever exposing its mnemonic -
-    /// <see cref="PrimaryAddress"/> (the seed's slot-0 derived address) is what the caller uses to refer to
+    /// <see cref="SeedAddress"/> (the seed's slot-0 derived address) is what the caller uses to refer to
     /// it, e.g. when switching which seed is primary.
     /// </summary>
-    /// <param name="PrimaryAddress">This seed's identifying address (see <see cref="Model.SeedVaultEntry.PrimaryAddress"/>).</param>
+    /// <param name="SeedAddress">This seed's identifying address (see <see cref="Model.SeedVaultEntry.SeedAddress"/>).</param>
     /// <param name="CreatedUtc">When this seed was generated.</param>
     /// <param name="IsPrimary">Whether this is the seed currently used for normal signing.</param>
-    public sealed record SeedSummary(string PrimaryAddress, DateTimeOffset CreatedUtc, bool IsPrimary);
+    public sealed record SeedSummary(string SeedAddress, DateTimeOffset CreatedUtc, bool IsPrimary);
 
     /// <summary>
     /// Loads (creating on first use) the AES-encrypted Algorand seed vault file from whichever cloud
@@ -39,34 +39,34 @@ namespace BiatecSelfCustodyCore.Repository
         /// Redis). If omitted, the token is resolved ambiently from the current signed-in user's
         /// cookie session for <paramref name="provider"/>.
         /// </param>
-        /// <param name="primaryAddress">
+        /// <param name="seedAddress">
         /// Selects which seed to derive from, by its own identifying (slot-0) address - see
-        /// <see cref="Model.SeedVaultEntry.PrimaryAddress"/>. <c>null</c> (the default) keeps the
+        /// <see cref="Model.SeedVaultEntry.SeedAddress"/>. <c>null</c> (the default) keeps the
         /// original behavior: derive from whichever seed is currently primary, auto-creating the
         /// vault's first seed if none exists yet. A non-null value must name an existing seed - this
         /// method does not auto-create for a caller that named a specific seed - and throws
         /// <see cref="InvalidOperationException"/> if it doesn't exist.
         /// </param>
-        Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null, string? primaryAddress = null);
+        Task<Account> LoadAccountAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null);
 
         /// <summary>
         /// Derives (without signing or mutating anything) the ARC-76 address at <paramref name="slot"/>
-        /// for the seed identified by <paramref name="primaryAddress"/> (<c>null</c> = the vault's
+        /// for the seed identified by <paramref name="seedAddress"/> (<c>null</c> = the vault's
         /// current primary seed). Throws <see cref="InvalidOperationException"/> if
-        /// <paramref name="primaryAddress"/> is given but no seed in the vault has that address.
+        /// <paramref name="seedAddress"/> is given but no seed in the vault has that address.
         /// </summary>
-        Task<string> DeriveAddressAsync(string email, string provider, string? primaryAddress, int slot, string? accessToken = null);
+        Task<string> DeriveAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null);
 
         /// <summary>
         /// Derives (without signing or mutating anything) the EVM address at <paramref name="slot"/> for the
-        /// seed identified by <paramref name="primaryAddress"/> (<c>null</c> = the vault's current primary
+        /// seed identified by <paramref name="seedAddress"/> (<c>null</c> = the vault's current primary
         /// seed) - the same mnemonic used for <see cref="DeriveAddressAsync"/>, just derived via
         /// <c>ARC76.GetEVMEmailAccount</c> instead of <c>ARC76.GetEmailAccount</c>, so every existing seed
         /// already has an EVM identity without any new consent flow or storage format. Throws
-        /// <see cref="InvalidOperationException"/> if <paramref name="primaryAddress"/> is given but no seed
+        /// <see cref="InvalidOperationException"/> if <paramref name="seedAddress"/> is given but no seed
         /// in the vault has that address.
         /// </summary>
-        Task<string> DeriveEvmAddressAsync(string email, string provider, string? primaryAddress, int slot, string? accessToken = null);
+        Task<string> DeriveEvmAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null);
 
         /// <summary>
         /// Resolves and validates a seed selector to its identifying address, without deriving any
@@ -75,9 +75,9 @@ namespace BiatecSelfCustodyCore.Repository
         /// non-null value is validated against the vault and returned unchanged. Used to resolve a
         /// stable signing identity once per request (e.g. for keying per-address spending limits)
         /// before any slot-specific derivation happens. Throws <see cref="InvalidOperationException"/>
-        /// if <paramref name="primaryAddress"/> is given but no seed in the vault has that address.
+        /// if <paramref name="seedAddress"/> is given but no seed in the vault has that address.
         /// </summary>
-        Task<string> ResolveSeedAddressAsync(string email, string provider, string? primaryAddress, string? accessToken = null);
+        Task<string> ResolveSeedAddressAsync(string email, string provider, string? seedAddress, string? accessToken = null);
 
         /// <summary>Lists every seed ever generated for this user, most-recently-created last. Never includes a mnemonic.</summary>
         Task<IReadOnlyList<SeedSummary>> ListSeedsAsync(string email, string provider, string? accessToken = null);
@@ -92,11 +92,11 @@ namespace BiatecSelfCustodyCore.Repository
         Task<SeedSummary> CreateSeedAsync(string email, string provider, string? accessToken = null);
 
         /// <summary>
-        /// Marks the seed identified by <paramref name="primaryAddress"/> as primary (and every other seed
+        /// Marks the seed identified by <paramref name="seedAddress"/> as primary (and every other seed
         /// as non-primary) for future <see cref="LoadAccountAsync"/> calls. Throws
         /// <see cref="InvalidOperationException"/> if no seed in the vault has that address.
         /// </summary>
-        Task SwitchPrimarySeedAsync(string email, string provider, string primaryAddress, string? accessToken = null);
+        Task SwitchPrimarySeedAsync(string email, string provider, string seedAddress, string? accessToken = null);
 
         /// <summary>
         /// Returns the vault file's current name and raw encrypted bytes (still encrypted - never decrypted

@@ -112,7 +112,7 @@ namespace BiatecOIDCTests
                 TestEmail, TestProvider, "access-token",
                 It.Is<IReadOnlyList<SpendingLedgerEntry>>(entries =>
                     entries.Count == 1 && entries[0].AmountUsd == 500_000m && entries[0].Kind == "Payment" &&
-                    entries[0].PrimaryAddress == ResolvedAddress && entries[0].Slot == 0),
+                    entries[0].SeedAddress == ResolvedAddress && entries[0].Slot == 0),
                 It.IsAny<CancellationToken>()), Times.Once);
         }
 

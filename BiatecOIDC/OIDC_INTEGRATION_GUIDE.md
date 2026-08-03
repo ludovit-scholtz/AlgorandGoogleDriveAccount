@@ -66,24 +66,15 @@ for a given client (don't mix the two for the same integration).
     "Wallet API" below). Body is just `{ "transactions": [...] }` now - see "Address-centric wallet API"
     below for how `address` resolves to a signing seed/slot, and how this differs from the old
     `POST /wallet/sign`.
-- `GET /wallet/address`
-  - Lists every seed's identifying (slot-0) address in the caller's vault, and which one is primary. Same
-    data as `GET /wallet/seeds` below, addressed for the multi-address signing use case. Only requires
-    being authenticated.
-- `GET /wallet/address/{primaryAddress}/{slot?}`
-  - Derives (without signing anything) the ARC-76 address at `slot` (default `0`) for the seed identified
-    by `primaryAddress`. Only requires being authenticated. As a side effect, a non-zero `slot` becomes
-    resolvable by address alone afterwards (see "Address-centric wallet API" below) - a slot-0 address
-    already is, since it's the seed's own identifying address.
-- `GET /wallet/evm/address`
-  - Lists every seed's EVM (Ethereum-family) address in the caller's vault, and which one is primary - same
-    seeds as `GET /wallet/address`, just derived via `ARC76.GetEVMEmailAccount` instead of
-    `ARC76.GetEmailAccount`, so it's the same address across every EVM chain. Only requires being
-    authenticated. See "EVM (Ethereum-family) support" below.
-- `GET /wallet/evm/address/{primaryAddress}/{slot?}`
-  - Derives (without signing anything) the EVM address at `slot` (default `0`) for the seed identified by
-    `primaryAddress`. Only requires being authenticated. Always becomes resolvable by address afterwards
-    (unlike Algorand slot 0, an EVM address is never a seed's own identifying address by itself).
+- `GET /wallet/address/{seedAddress}/{slot?}`
+  - Derives (without signing anything) the address at `slot` (default `0`) for the seed identified by
+    `seedAddress`, for **every currently-supported chain family in one call** - both the Algorand-family
+    (AVM) address and the Ethereum-family (EVM) address, since there's no per-chain concept at this layer
+    (an AVM address is genesis-independent, an EVM address is the same across every EVM chain). Only
+    requires being authenticated. As a side effect, the AVM address becomes resolvable by address alone
+    afterwards if `slot` is non-zero (a slot-0 AVM address already is, since it's the seed's own identifying
+    address); the EVM address always does, since it's never a seed's own identifying address by itself. To
+    list every seed's identifying address (rather than derive one slot), use `GET /wallet/seeds` instead.
 - `GET /wallet/{network}/{address}/info`
   - Reports whether Biatec currently knows which key signs for `address` on `network` - a seed's own
     primary address, a previously-derived address (any slot), or one explicitly activated (below). Only
@@ -98,10 +89,10 @@ for a given client (don't mix the two for the same integration).
 - `PUT /wallet/limits`
   - Sets the caller's own account-wide daily/weekly/monthly spending limits and their currency. Requires
     the `manage-limits` scope.
-- `GET /wallet/limits/{network}/{address}`
+- `GET /wallet/{network}/{address}/limits`
   - Reads the daily/weekly/monthly spending limits for the bucket tied to `address`, instead of the
     account-wide global bucket. Only requires being authenticated.
-- `PUT /wallet/limits/{network}/{address}`
+- `PUT /wallet/{network}/{address}/limits`
   - Sets the daily/weekly/monthly spending limits for the bucket tied to `address`. Requires the
     `manage-limits` scope.
 - `GET /wallet/limits/currencies`
@@ -144,27 +135,30 @@ that can silently go stale if a chain's public infrastructure changes.
 ## Address-centric wallet API
 
 **Breaking change**: `POST /wallet/sign` and `GET`/`PUT /wallet/limits` used to take an optional
-`primaryAddress`/`slot` selector (a body field for sign, query params for limits) to pick which seed/slot
+`seedAddress`/`slot` selector (a body field for sign, query params for limits) to pick which seed/slot
 signs or owns a spending-limit bucket, defaulting to the vault's primary seed at slot 0. That selector is
 gone - the *address itself* is now a route segment, alongside a `network` segment (a friendly chain name
 like `algorand`/`voi`, or a raw genesis id):
 
 | Before | After |
 |---|---|
-| `POST /wallet/sign` with body `{ "transactions": [...], "primaryAddress": "SEED", "slot": 5 }` | `POST /wallet/sign/algorand/{address}` with body `{ "transactions": [...] }` |
-| `GET /wallet/limits?primaryAddress=SEED&slot=5` | `GET /wallet/limits/algorand/{address}` |
-| `PUT /wallet/limits?primaryAddress=SEED&slot=5` | `PUT /wallet/limits/algorand/{address}` |
+| `POST /wallet/sign` with body `{ "transactions": [...], "seedAddress": "SEED", "slot": 5 }` | `POST /wallet/sign/algorand/{address}` with body `{ "transactions": [...] }` |
+| `GET /wallet/limits?seedAddress=SEED&slot=5` | `GET /wallet/algorand/{address}/limits` |
+| `PUT /wallet/limits?seedAddress=SEED&slot=5` | `PUT /wallet/algorand/{address}/limits` |
 | `GET`/`PUT /wallet/limits` (no selector - global bucket) | unchanged |
+| `GET /wallet/address` (list) | removed - use `GET /wallet/seeds` instead (same data) |
+| `GET /wallet/evm/address` (list) | removed - use `GET /wallet/{network}/{address}/info` to check a specific address, or `GET /wallet/seeds` + `GET /wallet/address/{seedAddress}/{slot?}` per seed |
+| `GET /wallet/evm/address/{seedAddress}/{slot?}` (derive) | removed - `GET /wallet/address/{seedAddress}/{slot?}` now derives and returns both the AVM and EVM address in one call |
 
 `address` must be a **known** address - resolved to the seed/slot that actually signs for it via:
 
 1. **A seed's own primary address** (its ARC-76 slot-0 address) - recognized for free, no extra step ever needed.
-2. **A previously-derived address at any slot** - calling `GET /wallet/address/{primaryAddress}/{slot}` (or
-   its EVM counterpart) derives *and registers* that address, so it becomes usable by address alone from
-   then on. This is the same call you'd make anyway to find out what the address even is, so in practice
-   this never requires an extra step either.
+2. **A previously-derived address at any slot** - calling `GET /wallet/address/{seedAddress}/{slot}` derives
+   *and registers* both the AVM and EVM address for that seed/slot, so either becomes usable by address
+   alone from then on. This is the same call you'd make anyway to find out what the address even is, so in
+   practice this never requires an extra step either.
 3. **An explicitly activated address** - `POST /wallet/{network}/{address}/activate`, body
-   `{ "primaryAddress": "...", "slot": 0 }`. This is the entry point for **rekeying an external Algorand
+   `{ "seedAddress": "...", "slot": 0 }`. This is the entry point for **rekeying an external Algorand
    account to a Biatec-controlled key**: rekey the external account to one of this account's addresses
    (mint a fresh seed via `POST /wallet/seeds` if you want a dedicated one), submit and confirm that rekey
    transaction on-chain yourself, then call `/activate` naming which seed/slot now controls it. Biatec
@@ -174,12 +168,12 @@ like `algorand`/`voi`, or a raw genesis id):
    registers it immediately, equivalent to step 2 - calling it is rarely necessary since deriving the
    address already does this.
 
-This pairing (`address` → `primaryAddress`/`slot`) is stored **encrypted on your own cloud drive** (Google
+This pairing (`address` → `seedAddress`/`slot`) is stored **encrypted on your own cloud drive** (Google
 Drive/OneDrive, whichever you're signed in with), in a file separate from the seed vault itself - never on
 Biatec's own infrastructure, same principle as the seed vault and spending-limit data.
 
 `GET /wallet/{network}/{address}/info` reports an address's current status:
-`{ "address", "network", "family", "isActive", "primaryAddress", "slot" }` - `primaryAddress`/`slot` are
+`{ "address", "network", "family", "isActive", "seedAddress", "slot" }` - `seedAddress`/`slot` are
 `null`/`0` when `isActive` is `false`.
 
 A plain (non-multisig) transaction's own `snd` (sender) field must match the route's `address` exactly, or
@@ -194,8 +188,8 @@ derives both, via the `AlgorandARC76Account` package's `ARC76.GetEVMEmailAccount
 counterpart of `ARC76.GetEmailAccount`). No new consent flow or storage format was needed for this. Unlike
 Algorand's `genesisId`-per-network split, there is **no per-EVM-chain concept at this API layer** - one EVM
 address (per seed/slot) is valid across every EVM chain (Ethereum, Gnosis, Arbitrum, Base, ...), so
-`GET /wallet/evm/address`/`GET /wallet/evm/address/{primaryAddress}/{slot?}` (above) take no chain parameter
-at all.
+`GET /wallet/address/{seedAddress}/{slot?}` (above) - which derives both the AVM and EVM address for a
+seed/slot in one call - takes no chain parameter for the EVM half at all.
 
 Scope today is address derivation only - EVM transaction building/signing/broadcasting is not implemented
 (BiatecMCP's `getCryptoBalance` tool queries EVM balances directly against a public RPC, without ever
@@ -366,13 +360,13 @@ device/backend, not just the one the user originally signed in on.
 - **`GET`/`PUT /wallet/limits`** (`GET` only needs to be authenticated; `PUT` needs `manage-limits`) — read/
   set the account-wide global spending-limit bucket. Shape:
   `{ "currencyCode": "USD", "dailyLimit": 100, "weeklyLimit": 500, "monthlyLimit": 2000, "address": null,
-  "network": null, "primaryAddress": null, "slot": 0 }` (`0` on any of the three limit fields means that
+  "network": null, "seedAddress": null, "slot": 0 }` (`0` on any of the three limit fields means that
   window is unbounded). A bucket that's never been configured gets an all-zero, USD-denominated default
   rather than a 404. `currencyCode` defaults to `"USD"` if omitted/blank on `PUT`; an unsupported code is
   rejected with `400 unsupported_currency` (see `GET /wallet/limits/currencies` for the supported list).
-- **`GET`/`PUT /wallet/limits/{network}/{address}`** — same shapes/claims as the global bucket above, but for
+- **`GET`/`PUT /wallet/{network}/{address}/limits`** — same shapes/claims as the global bucket above, but for
   the per-address bucket tied to `address` (resolved the same way as `POST /wallet/sign`'s `address`) - the
-  response's `address`/`network`/`primaryAddress`/`slot` fields are populated instead of `null`. The limits
+  response's `address`/`network`/`seedAddress`/`slot` fields are populated instead of `null`. The limits
   belong to the wallet owner, not to your application — they apply the same way across every app the owner
   has authorized with a `sign`-scoped token.
 - **`GET /wallet/limits/currencies`** (only needs to be authenticated) — every currency `PUT /wallet/limits`
@@ -392,26 +386,26 @@ device/backend, not just the one the user originally signed in on.
 
 ## Multi-address signing
 
-Under the hood, every signing identity is still a `(primaryAddress, slot)` pair: `primaryAddress` selects
-*which seed* (its own identifying slot-0 address, from `GET /wallet/address`/`GET /wallet/seeds`), `slot`
+Under the hood, every signing identity is still a `(seedAddress, slot)` pair: `seedAddress` selects
+*which seed* (its own identifying slot-0 address, from `GET /wallet/seeds`), `slot`
 selects the ARC-76 derivation index *within* that seed (default `0`). What changed is how you *address* one
-at the API surface - see "Address-centric wallet API" above: instead of passing `primaryAddress`/`slot`
+at the API surface - see "Address-centric wallet API" above: instead of passing `seedAddress`/`slot`
 directly to `POST /wallet/sign`/`PUT /wallet/limits`, you pass the resulting **address** in the route, and
 Biatec resolves it back to the seed/slot that signs for it. This is addressable independently of which seed
 is currently "primary" - you don't need to call `PUT /wallet/seeds/primary` to sign with a non-default
 identity, just derive/activate the address you want and use it directly.
 
-- **`GET /wallet/address`** (only needs to be authenticated) — lists every seed's identifying address and
-  whether it's primary: `{ "addresses": [ { "address": "ABC...", "isPrimary": true }, ... ] }`. Same underlying
-  data as `GET /wallet/seeds`, without the mnemonic-adjacent framing.
-- **`GET /wallet/address/{primaryAddress}/{slot?}`** (only needs to be authenticated) — derives (without
-  signing anything) the ARC-76 address at `slot` (default `0`) for the named seed: `{ "address": "derived...",
-  "primaryAddress": "ABC...", "slot": 3 }`. `400 seed_not_found` if `primaryAddress` doesn't match any seed in
-  the vault. Also registers that derived address for later `POST /wallet/sign/{network}/{address}` calls (see
-  "Address-centric wallet API" above).
-- Spending limits are two-tiered per the `GET`/`PUT /wallet/limits`/`GET`/`PUT /wallet/limits/{network}/{address}`
+- **`GET /wallet/seeds`** (only needs to be authenticated) — lists every seed's identifying address and
+  whether it's primary: `{ "seeds": [ { "address": "ABC...", "createdUtc": "...", "isPrimary": true }, ... ] }`.
+- **`GET /wallet/address/{seedAddress}/{slot?}`** (only needs to be authenticated) — derives (without
+  signing anything) the address at `slot` (default `0`) for the named seed, for every currently-supported
+  chain family in one call: `{ "address": "derived-avm...", "evmAddress": "0xderived-evm...",
+  "seedAddress": "ABC...", "slot": 3 }`. `400 seed_not_found` if `seedAddress` doesn't match any seed in
+  the vault. Also registers both derived addresses for later `POST /wallet/sign/{network}/{address}` calls
+  (see "Address-centric wallet API" above).
+- Spending limits are two-tiered per the `GET`/`PUT /wallet/limits`/`GET`/`PUT /wallet/{network}/{address}/limits`
   bullets above: a **global** bucket that counts every signed transaction from any address together, and
-  independent **per-address** buckets. A transaction signed with a given `(primaryAddress, slot)` identity is
+  independent **per-address** buckets. A transaction signed with a given `(seedAddress, slot)` identity is
   checked against both - it's blocked if it would exceed either.
 
 ## Multi-seed vault and rekey

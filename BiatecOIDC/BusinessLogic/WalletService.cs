@@ -27,7 +27,7 @@ namespace BiatecOIDC.BusinessLogic
             _logger = logger;
         }
 
-        public async Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? primaryAddress = null, int slot = 0)
+        public async Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? seedAddress = null, int slot = 0)
         {
             if (string.IsNullOrWhiteSpace(email))
             {
@@ -41,7 +41,7 @@ namespace BiatecOIDC.BusinessLogic
 
             // Resolved once, up front, so the spending-limit check and every actual signing call below
             // agree on the same identity even if the vault's primary seed changes mid-request.
-            var resolvedAddress = await _accountRepository.ResolveSeedAddressAsync(email, provider, primaryAddress, accessToken);
+            var resolvedAddress = await _accountRepository.ResolveSeedAddressAsync(email, provider, seedAddress, accessToken);
 
             // Decode every transaction up front (cheap, purely local) before doing any network calls -
             // an undecodable transaction should fail fast, not after a round-trip to the router.
@@ -69,7 +69,7 @@ namespace BiatecOIDC.BusinessLogic
                     AmountUsd = usdValue,
                     AssetId = info.AssetId,
                     Kind = info.Kind.ToString(),
-                    PrimaryAddress = resolvedAddress,
+                    SeedAddress = resolvedAddress,
                     Slot = slot
                 });
             }

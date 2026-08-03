@@ -85,8 +85,8 @@ namespace BiatecOIDC.Controllers
         /// <param name="network">Which chain <paramref name="address"/> belongs to (e.g. <c>algorand</c>, <c>voi</c>) - see <c>GET /chains</c>.</param>
         /// <param name="address">
         /// Which identity signs - a seed's own primary address, an address previously derived via
-        /// <c>GET /wallet/address/{primaryAddress}/{slot}</c> (or its EVM counterpart), or an address
-        /// activated via <c>POST /wallet/{network}/{address}/activate</c> (e.g. after an on-chain rekey to a
+        /// <c>GET /wallet/address/{seedAddress}/{slot}</c>, or an address activated via
+        /// <c>POST /wallet/{network}/{address}/activate</c> (e.g. after an on-chain rekey to a
         /// Biatec-controlled key).
         /// </param>
         /// <param name="request">The transactions to sign (base64 msgpack).</param>
@@ -189,14 +189,14 @@ namespace BiatecOIDC.Controllers
                 return BadRequest(new ProblemDetails
                 {
                     Title = "address_not_active",
-                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{primaryAddress}}/{{slot}}, or activate an externally rekeyed address via POST /wallet/{network}/{address}/activate first."
+                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate an externally rekeyed address via POST /wallet/{network}/{address}/activate first."
                 });
             }
 
             try
             {
                 var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, signer.Value.PrimaryAddress, signer.Value.Slot));
+                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, signer.Value.SeedAddress, signer.Value.Slot));
                 return Ok(new SignTransactionGroupResponse
                 {
                     SignedTransactions = signed.Select(Convert.ToBase64String).ToList()
@@ -255,8 +255,8 @@ namespace BiatecOIDC.Controllers
             try
             {
                 var settings = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, resolvedAccessToken,
-                    token => _spendingLimitService.GetLimitsAsync(email, provider, token, primaryAddress: null, slot: 0));
-                return Ok(ToResponse(settings, address: null, network: null, primaryAddress: null, slot: 0));
+                    token => _spendingLimitService.GetLimitsAsync(email, provider, token, seedAddress: null, slot: 0));
+                return Ok(ToResponse(settings, address: null, network: null, seedAddress: null, slot: 0));
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -296,7 +296,7 @@ namespace BiatecOIDC.Controllers
             try
             {
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings, primaryAddress: null, slot: 0));
+                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings, seedAddress: null, slot: 0));
             }
             catch (UnsupportedCurrencyException ex)
             {
@@ -308,7 +308,7 @@ namespace BiatecOIDC.Controllers
             }
 
             _logger.LogInformation("{Email} updated their spending limits (currency {Currency}).", email, settings.CurrencyCode);
-            return Ok(ToResponse(settings, address: null, network: null, primaryAddress: null, slot: 0));
+            return Ok(ToResponse(settings, address: null, network: null, seedAddress: null, slot: 0));
         }
 
         /// <summary>Returns the caller's current daily/weekly/monthly spending limits for the bucket tied to <paramref name="address"/>.</summary>
@@ -319,7 +319,7 @@ namespace BiatecOIDC.Controllers
         /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
-        [HttpGet("limits/{network}/{address}")]
+        [HttpGet("{network}/{address}/limits")]
         public async Task<IActionResult> GetSpendingLimitForAddress(string network, string address)
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
@@ -346,8 +346,8 @@ namespace BiatecOIDC.Controllers
             try
             {
                 var settings = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, resolvedAccessToken,
-                    token => _spendingLimitService.GetLimitsAsync(email, provider, token, signer.Value.PrimaryAddress, signer.Value.Slot));
-                return Ok(ToResponse(settings, address, network, signer.Value.PrimaryAddress, signer.Value.Slot));
+                    token => _spendingLimitService.GetLimitsAsync(email, provider, token, signer.Value.SeedAddress, signer.Value.Slot));
+                return Ok(ToResponse(settings, address, network, signer.Value.SeedAddress, signer.Value.Slot));
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -365,7 +365,7 @@ namespace BiatecOIDC.Controllers
         /// <response code="403">The token lacks the <c>manage-limits</c> claim.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
-        [HttpPut("limits/{network}/{address}")]
+        [HttpPut("{network}/{address}/limits")]
         public async Task<IActionResult> UpdateSpendingLimitForAddress(string network, string address, [FromBody] UpdateSpendingLimitRequest request)
         {
             var authError = TryAuthenticate(WalletScopes.ManageLimits, out var principal);
@@ -400,7 +400,7 @@ namespace BiatecOIDC.Controllers
             try
             {
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings, signer.Value.PrimaryAddress, signer.Value.Slot));
+                    token => _spendingLimitService.SetLimitsAsync(email, provider, token, settings, signer.Value.SeedAddress, signer.Value.Slot));
             }
             catch (UnsupportedCurrencyException ex)
             {
@@ -412,55 +412,25 @@ namespace BiatecOIDC.Controllers
             }
 
             _logger.LogInformation("{Email} updated their spending limits for {Address} on {Network} (currency {Currency}).", email, address, network, settings.CurrencyCode);
-            return Ok(ToResponse(settings, address, network, signer.Value.PrimaryAddress, signer.Value.Slot));
-        }
-
-        /// <summary>Lists every seed's identifying address in the caller's vault, and which one is primary.</summary>
-        /// <response code="200">The caller's seed addresses.</response>
-        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
-        [AllowAnonymous]
-        [RequiresBearerToken]
-        [HttpGet("address")]
-        public async Task<IActionResult> ListAddresses()
-        {
-            var authError = TryAuthenticate(requiredClaim: null, out var principal);
-            if (authError != null)
-            {
-                return authError;
-            }
-
-            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
-            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
-            var accessToken = ResolveProviderAccessToken(principal, email);
-
-            try
-            {
-                var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _accountRepository.ListSeedsAsync(email, provider, token));
-                return Ok(new ListAddressesResponse
-                {
-                    Addresses = seeds.Select(s => new AddressResponse { Address = s.PrimaryAddress, IsPrimary = s.IsPrimary }).ToList()
-                });
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
-            }
+            return Ok(ToResponse(settings, address, network, signer.Value.SeedAddress, signer.Value.Slot));
         }
 
         /// <summary>
-        /// Derives (without signing anything) the ARC-76 address at <paramref name="slot"/> for the seed
-        /// identified by <paramref name="primaryAddress"/> (see <see cref="ListAddresses"/>).
+        /// Derives (without signing anything) the address at <paramref name="slot"/> for the seed
+        /// identified by <paramref name="seedAddress"/> (see <c>GET /wallet/seeds</c>), for every
+        /// currently-supported chain family in one call - there is no per-chain derive endpoint per family
+        /// anymore (an Algorand-family address is genesis-independent, and an Ethereum-family address is the
+        /// same across every EVM chain - see <c>CLAUDE.md</c>'s "EVM (Ethereum-family) support" note).
         /// </summary>
-        /// <param name="primaryAddress">The seed's own identifying (slot-0) address.</param>
+        /// <param name="seedAddress">The seed's own identifying (slot-0) address.</param>
         /// <param name="slot">ARC-76 derivation index within that seed. Defaults to <c>0</c>.</param>
-        /// <response code="200">The derived address.</response>
+        /// <response code="200">The derived addresses.</response>
         /// <response code="400">No seed with that address exists in the caller's vault.</response>
         /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
-        [HttpGet("address/{primaryAddress}/{slot:int?}")]
-        public async Task<IActionResult> GetAddress(string primaryAddress, int? slot)
+        [HttpGet("address/{seedAddress}/{slot:int?}")]
+        public async Task<IActionResult> GetAddress(string seedAddress, int? slot)
         {
             var authError = TryAuthenticate(requiredClaim: null, out var principal);
             if (authError != null)
@@ -476,109 +446,27 @@ namespace BiatecOIDC.Controllers
             try
             {
                 var address = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _accountRepository.DeriveAddressAsync(email, provider, primaryAddress, resolvedSlot, token));
+                    token => _accountRepository.DeriveAddressAsync(email, provider, seedAddress, resolvedSlot, token));
 
-                // A slot-0 address is already its own seed's identifying address (recognized for free,
+                // A slot-0 AVM address is already its own seed's identifying address (recognized for free,
                 // without ever touching the activation registry - see ResolveSignerAsync). Only a non-zero
                 // slot needs an explicit entry so it becomes resolvable by address alone later (e.g. from
                 // POST /wallet/sign/{network}/{address}).
                 if (resolvedSlot != 0)
                 {
                     await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                        token => _addressActivationService.ActivateAsync(email, provider, token, address, nameof(ChainFamily.Avm), primaryAddress, resolvedSlot));
+                        token => _addressActivationService.ActivateAsync(email, provider, token, address, nameof(ChainFamily.Avm), seedAddress, resolvedSlot));
                 }
 
-                return Ok(new DerivedAddressResponse { Address = address, PrimaryAddress = primaryAddress, Slot = resolvedSlot });
-            }
-            catch (InvalidOperationException ex)
-            {
-                return BadRequest(new ProblemDetails { Title = "seed_not_found", Detail = ex.Message });
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
-            }
-        }
+                var evmAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.DeriveEvmAddressAsync(email, provider, seedAddress, resolvedSlot, token));
 
-        /// <summary>
-        /// Lists every seed's EVM address in the caller's vault, and which one is primary. Same seeds as
-        /// <see cref="ListAddresses"/> - just derived via <c>ARC76.GetEVMEmailAccount</c> instead of
-        /// <c>ARC76.GetEmailAccount</c>, so it's the same address across every EVM chain (Ethereum, Gnosis,
-        /// Arbitrum, Base, ...) - there is no per-chain concept at this layer.
-        /// </summary>
-        /// <response code="200">The caller's seed EVM addresses.</response>
-        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
-        [AllowAnonymous]
-        [RequiresBearerToken]
-        [HttpGet("evm/address")]
-        public async Task<IActionResult> ListEvmAddresses()
-        {
-            var authError = TryAuthenticate(requiredClaim: null, out var principal);
-            if (authError != null)
-            {
-                return authError;
-            }
-
-            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
-            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
-            var accessToken = ResolveProviderAccessToken(principal, email);
-
-            try
-            {
-                var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _accountRepository.ListSeedsAsync(email, provider, token));
-                var addresses = new List<EvmAddressResponse>();
-                foreach (var seed in seeds)
-                {
-                    var evmAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                        token => _accountRepository.DeriveEvmAddressAsync(email, provider, seed.PrimaryAddress, 0, token));
-                    // Unlike Algorand slot 0, an EVM address is never a seed's own identifying address - it
-                    // always needs an activation-registry entry to be resolvable by address alone later.
-                    await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                        token => _addressActivationService.ActivateAsync(email, provider, token, evmAddress, nameof(ChainFamily.Evm), seed.PrimaryAddress, 0));
-                    addresses.Add(new EvmAddressResponse { Address = evmAddress, IsPrimary = seed.IsPrimary });
-                }
-
-                return Ok(new ListEvmAddressesResponse { Addresses = addresses });
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
-            }
-        }
-
-        /// <summary>
-        /// Derives (without signing anything) the EVM address at <paramref name="slot"/> for the seed
-        /// identified by <paramref name="primaryAddress"/> (see <see cref="ListEvmAddresses"/>).
-        /// </summary>
-        /// <param name="primaryAddress">The seed's own identifying (Algorand slot-0) address.</param>
-        /// <param name="slot">ARC-76 derivation index within that seed. Defaults to <c>0</c>.</param>
-        /// <response code="200">The derived EVM address.</response>
-        /// <response code="400">No seed with that address exists in the caller's vault.</response>
-        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
-        [AllowAnonymous]
-        [RequiresBearerToken]
-        [HttpGet("evm/address/{primaryAddress}/{slot:int?}")]
-        public async Task<IActionResult> GetEvmAddress(string primaryAddress, int? slot)
-        {
-            var authError = TryAuthenticate(requiredClaim: null, out var principal);
-            if (authError != null)
-            {
-                return authError;
-            }
-
-            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
-            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
-            var accessToken = ResolveProviderAccessToken(principal, email);
-            var resolvedSlot = slot ?? 0;
-
-            try
-            {
-                var address = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _accountRepository.DeriveEvmAddressAsync(email, provider, primaryAddress, resolvedSlot, token));
+                // Unlike Algorand slot 0, an EVM address is never a seed's own identifying address - it
+                // always needs an activation-registry entry to be resolvable by address alone later.
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _addressActivationService.ActivateAsync(email, provider, token, address, nameof(ChainFamily.Evm), primaryAddress, resolvedSlot));
-                return Ok(new DerivedEvmAddressResponse { Address = address, PrimaryAddress = primaryAddress, Slot = resolvedSlot });
+                    token => _addressActivationService.ActivateAsync(email, provider, token, evmAddress, nameof(ChainFamily.Evm), seedAddress, resolvedSlot));
+
+                return Ok(new DerivedAddressResponse { Address = address, EvmAddress = evmAddress, SeedAddress = seedAddress, Slot = resolvedSlot });
             }
             catch (InvalidOperationException ex)
             {
@@ -630,7 +518,7 @@ namespace BiatecOIDC.Controllers
                     Network = network,
                     Family = resolvedNetwork.Family.ToString(),
                     IsActive = signer != null,
-                    PrimaryAddress = signer?.PrimaryAddress,
+                    SeedAddress = signer?.SeedAddress,
                     Slot = signer?.Slot ?? 0
                 });
             }
@@ -641,13 +529,13 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
-        /// Registers that <c>(primaryAddress, slot)</c>'s key signs for <paramref name="address"/> - the
+        /// Registers that <c>(seedAddress, slot)</c>'s key signs for <paramref name="address"/> - the
         /// entry point for AVM rekey support: rekey an external account to one of this account's addresses
-        /// (see <c>GET /wallet/address/{primaryAddress}/{slot}</c> for candidates, or mint a fresh one via
+        /// (see <c>GET /wallet/address/{seedAddress}/{slot}</c> for candidates, or mint a fresh one via
         /// <c>POST /wallet/seeds</c>), confirm the rekey transaction on-chain, then call this so
         /// <c>POST /wallet/sign/{network}/{address}</c> recognizes <paramref name="address"/> going forward.
         /// For a native address (one that's exactly the derived address for that seed/slot already), this
-        /// just registers it immediately - the same thing <c>GET /wallet/address/{primaryAddress}/{slot}</c>
+        /// just registers it immediately - the same thing <c>GET /wallet/address/{seedAddress}/{slot}</c>
         /// already does automatically, so calling this for a native address is rarely necessary.
         /// </summary>
         /// <param name="network">Which chain <paramref name="address"/> belongs to - see <c>GET /chains</c>. EVM chains are only accepted for a native address (EVM has no rekey concept).</param>
@@ -689,12 +577,12 @@ namespace BiatecOIDC.Controllers
                 if (resolvedNetwork.Family == ChainFamily.Avm)
                 {
                     derivedAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                        token => _accountRepository.DeriveAddressAsync(email, provider, request.PrimaryAddress, request.Slot, token));
+                        token => _accountRepository.DeriveAddressAsync(email, provider, request.SeedAddress, request.Slot, token));
                 }
                 else
                 {
                     derivedAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                        token => _accountRepository.DeriveEvmAddressAsync(email, provider, request.PrimaryAddress, request.Slot, token));
+                        token => _accountRepository.DeriveEvmAddressAsync(email, provider, request.SeedAddress, request.Slot, token));
                 }
 
                 if (!string.Equals(derivedAddress, address, StringComparison.Ordinal))
@@ -704,7 +592,7 @@ namespace BiatecOIDC.Controllers
                         return BadRequest(new ProblemDetails
                         {
                             Title = "invalid_request",
-                            Detail = "An EVM address cannot be repointed to a different key - EVM has no rekey concept. Activate the seed's own EVM address instead (GET /wallet/evm/address/{primaryAddress}/{slot})."
+                            Detail = "An EVM address cannot be repointed to a different key - EVM has no rekey concept. Activate the seed's own EVM address instead (GET /wallet/address/{seedAddress}/{slot})."
                         });
                     }
 
@@ -730,7 +618,7 @@ namespace BiatecOIDC.Controllers
                 }
 
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _addressActivationService.ActivateAsync(email, provider, token, address, resolvedNetwork.Family.ToString(), request.PrimaryAddress, request.Slot));
+                    token => _addressActivationService.ActivateAsync(email, provider, token, address, resolvedNetwork.Family.ToString(), request.SeedAddress, request.Slot));
 
                 return Ok(new AddressInfoResponse
                 {
@@ -738,7 +626,7 @@ namespace BiatecOIDC.Controllers
                     Network = network,
                     Family = resolvedNetwork.Family.ToString(),
                     IsActive = true,
-                    PrimaryAddress = request.PrimaryAddress,
+                    SeedAddress = request.SeedAddress,
                     Slot = request.Slot
                 });
             }
@@ -815,7 +703,7 @@ namespace BiatecOIDC.Controllers
                     token => _accountRepository.ListSeedsAsync(email, provider, token));
                 return Ok(new ListSeedsResponse
                 {
-                    Seeds = seeds.Select(s => new SeedResponse { Address = s.PrimaryAddress, CreatedUtc = s.CreatedUtc, IsPrimary = s.IsPrimary }).ToList()
+                    Seeds = seeds.Select(s => new SeedResponse { Address = s.SeedAddress, CreatedUtc = s.CreatedUtc, IsPrimary = s.IsPrimary }).ToList()
                 });
             }
             catch (UnauthorizedAccessException ex)
@@ -856,7 +744,7 @@ namespace BiatecOIDC.Controllers
             {
                 var seed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.CreateSeedAsync(email, provider, token));
-                return Ok(new SeedResponse { Address = seed.PrimaryAddress, CreatedUtc = seed.CreatedUtc, IsPrimary = seed.IsPrimary });
+                return Ok(new SeedResponse { Address = seed.SeedAddress, CreatedUtc = seed.CreatedUtc, IsPrimary = seed.IsPrimary });
             }
             catch (VaultConcurrencyConflictException ex)
             {
@@ -1012,7 +900,7 @@ namespace BiatecOIDC.Controllers
             return refreshed?.AccessToken;
         }
 
-        private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings, string? address, string? network, string? primaryAddress, int slot) => new()
+        private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings, string? address, string? network, string? seedAddress, int slot) => new()
         {
             CurrencyCode = settings.CurrencyCode,
             DailyLimit = settings.DailyLimit,
@@ -1020,30 +908,30 @@ namespace BiatecOIDC.Controllers
             MonthlyLimit = settings.MonthlyLimit,
             Address = address,
             Network = network,
-            PrimaryAddress = primaryAddress,
+            SeedAddress = seedAddress,
             Slot = slot
         };
 
         /// <summary>
-        /// Resolves <paramref name="address"/> to the <c>(primaryAddress, slot)</c> that signs for it - a
+        /// Resolves <paramref name="address"/> to the <c>(seedAddress, slot)</c> that signs for it - a
         /// seed's own Algorand primary address (checked first, for free, no activation-registry read needed),
         /// else whatever <see cref="IAddressActivationService"/> has on file (populated automatically by
-        /// <see cref="GetAddress"/>/<see cref="GetEvmAddress"/>, or explicitly by
+        /// <see cref="GetAddress"/>, or explicitly by
         /// <see cref="ActivateAddress"/>). Returns <c>null</c> if <paramref name="address"/> is neither.
         /// </summary>
-        private async Task<(string PrimaryAddress, int Slot)?> ResolveSignerAsync(ClaimsPrincipal principal, string email, string provider, string? accessToken, string address)
+        private async Task<(string SeedAddress, int Slot)?> ResolveSignerAsync(ClaimsPrincipal principal, string email, string provider, string? accessToken, string address)
         {
             var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                 token => _accountRepository.ListSeedsAsync(email, provider, token));
-            var nativeSeed = seeds.FirstOrDefault(s => string.Equals(s.PrimaryAddress, address, StringComparison.Ordinal));
+            var nativeSeed = seeds.FirstOrDefault(s => string.Equals(s.SeedAddress, address, StringComparison.Ordinal));
             if (nativeSeed != null)
             {
-                return (nativeSeed.PrimaryAddress, 0);
+                return (nativeSeed.SeedAddress, 0);
             }
 
             var entry = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                 token => _addressActivationService.TryResolveAsync(email, provider, token, address));
-            return entry == null ? null : (entry.PrimaryAddress, entry.Slot);
+            return entry == null ? null : (entry.SeedAddress, entry.Slot);
         }
 
         /// <summary>

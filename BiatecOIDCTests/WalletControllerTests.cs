@@ -544,7 +544,7 @@ namespace BiatecOIDCTests
                 .ReturnsAsync(new List<SeedSummary>()); // no native match
             _mockAddressActivationService
                 .Setup(s => s.TryResolveAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), externalAddress.EncodeAsString(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new AddressActivationEntry { Address = externalAddress.EncodeAsString(), Family = "Avm", PrimaryAddress = "SEED-ADDR", Slot = 5 });
+                .ReturnsAsync(new AddressActivationEntry { Address = externalAddress.EncodeAsString(), Family = "Avm", SeedAddress = "SEED-ADDR", Slot = 5 });
             _mockWalletService
                 .Setup(w => w.SignTransactionGroupAsync(TestEmail, It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), "SEED-ADDR", 5))
                 .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
@@ -728,7 +728,7 @@ namespace BiatecOIDCTests
             SetupValidToken("valid-token");
             _mockAddressActivationService
                 .Setup(s => s.TryResolveAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "SOME-ADDR", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new AddressActivationEntry { Address = "SOME-ADDR", Family = "Avm", PrimaryAddress = "SEED-ADDR", Slot = 3 });
+                .ReturnsAsync(new AddressActivationEntry { Address = "SOME-ADDR", Family = "Avm", SeedAddress = "SEED-ADDR", Slot = 3 });
             _mockAccountRepository
                 .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(new List<SeedSummary>());
@@ -742,7 +742,7 @@ namespace BiatecOIDCTests
             Assert.That(okResult, Is.Not.Null);
             var response = okResult!.Value as SpendingLimitResponse;
             Assert.That(response!.DailyLimit, Is.EqualTo(7));
-            Assert.That(response.PrimaryAddress, Is.EqualTo("SEED-ADDR"));
+            Assert.That(response.SeedAddress, Is.EqualTo("SEED-ADDR"));
             Assert.That(response.Slot, Is.EqualTo(3));
             Assert.That(response.Address, Is.EqualTo("SOME-ADDR"));
             Assert.That(response.Network, Is.EqualTo(TestNetwork));
@@ -781,7 +781,7 @@ namespace BiatecOIDCTests
             SetupValidToken("valid-token", new Claim("manage-limits", "true"));
             _mockAddressActivationService
                 .Setup(s => s.TryResolveAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "SOME-ADDR", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new AddressActivationEntry { Address = "SOME-ADDR", Family = "Avm", PrimaryAddress = "SEED-ADDR", Slot = 4 });
+                .ReturnsAsync(new AddressActivationEntry { Address = "SOME-ADDR", Family = "Avm", SeedAddress = "SEED-ADDR", Slot = 4 });
             _mockAccountRepository
                 .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(new List<SeedSummary>());
@@ -804,48 +804,19 @@ namespace BiatecOIDCTests
             Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
         }
 
-        // ───────────────────────── Address listing / derivation ─────────────────────────
+        // ───────────────────────── Address derivation (multi-network) ─────────────────────────
 
         [Test]
-        public async Task ListAddresses_ReturnsSeedsWithIsPrimary()
-        {
-            SetBearerHeader("valid-token");
-            SetupValidToken("valid-token");
-            _mockAccountRepository
-                .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
-                .ReturnsAsync(new List<SeedSummary>
-                {
-                    new("ADDR1", DateTimeOffset.UtcNow, true),
-                    new("ADDR2", DateTimeOffset.UtcNow, false)
-                });
-
-            var result = await _controller.ListAddresses();
-
-            var okResult = result as OkObjectResult;
-            Assert.That(okResult, Is.Not.Null);
-            var response = okResult!.Value as ListAddressesResponse;
-            Assert.That(response!.Addresses, Has.Count.EqualTo(2));
-            Assert.That(response.Addresses[0].Address, Is.EqualTo("ADDR1"));
-            Assert.That(response.Addresses[0].IsPrimary, Is.True);
-            Assert.That(response.Addresses[1].IsPrimary, Is.False);
-        }
-
-        [Test]
-        public async Task ListAddresses_NoBearerToken_ReturnsUnauthorized()
-        {
-            var result = await _controller.ListAddresses();
-
-            Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
-        }
-
-        [Test]
-        public async Task GetAddress_KnownSeed_ReturnsDerivedAddress()
+        public async Task GetAddress_KnownSeed_ReturnsDerivedAvmAndEvmAddresses()
         {
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token");
             _mockAccountRepository
                 .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 2, It.IsAny<string?>()))
                 .ReturnsAsync("DERIVED-ADDR");
+            _mockAccountRepository
+                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 2, It.IsAny<string?>()))
+                .ReturnsAsync("0xDERIVED");
 
             var result = await _controller.GetAddress("ADDR1", 2);
 
@@ -853,39 +824,49 @@ namespace BiatecOIDCTests
             Assert.That(okResult, Is.Not.Null);
             var response = okResult!.Value as DerivedAddressResponse;
             Assert.That(response!.Address, Is.EqualTo("DERIVED-ADDR"));
-            Assert.That(response.PrimaryAddress, Is.EqualTo("ADDR1"));
+            Assert.That(response.EvmAddress, Is.EqualTo("0xDERIVED"));
+            Assert.That(response.SeedAddress, Is.EqualTo("ADDR1"));
             Assert.That(response.Slot, Is.EqualTo(2));
         }
 
         [Test]
-        public async Task GetAddress_NonZeroSlot_ActivatesTheDerivedAddress()
+        public async Task GetAddress_NonZeroSlot_ActivatesBothDerivedAddresses()
         {
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token");
             _mockAccountRepository
                 .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 2, It.IsAny<string?>()))
                 .ReturnsAsync("DERIVED-ADDR");
+            _mockAccountRepository
+                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 2, It.IsAny<string?>()))
+                .ReturnsAsync("0xDERIVED");
 
             await _controller.GetAddress("ADDR1", 2);
 
             _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "DERIVED-ADDR", "Avm", "ADDR1", 2, It.IsAny<CancellationToken>()), Times.Once);
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "0xDERIVED", "Evm", "ADDR1", 2, It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
-        public async Task GetAddress_NoSlotGiven_DefaultsToZeroAndDoesNotActivate()
+        public async Task GetAddress_NoSlotGiven_DefaultsToZeroAndDoesNotActivateAvmButActivatesEvm()
         {
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token");
             _mockAccountRepository
                 .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
                 .ReturnsAsync("DERIVED-ADDR");
+            _mockAccountRepository
+                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("0xDERIVED");
 
             var result = await _controller.GetAddress("ADDR1", null);
 
             Assert.That(result, Is.InstanceOf<OkObjectResult>());
             _mockAccountRepository.Verify(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()), Times.Once);
-            // Slot 0 is already the seed's own identifying address - no activation-registry entry needed.
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            // Slot 0 AVM is already the seed's own identifying address - no activation-registry entry needed.
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), "DERIVED-ADDR", "Avm", It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            // An EVM address is never a seed's own identifying address, even at slot 0 - always activated.
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "0xDERIVED", "Evm", "ADDR1", 0, It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
@@ -910,104 +891,6 @@ namespace BiatecOIDCTests
             Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
         }
 
-        [Test]
-        public async Task ListEvmAddresses_ReturnsDerivedEvmAddressesWithIsPrimary()
-        {
-            SetBearerHeader("valid-token");
-            SetupValidToken("valid-token");
-            _mockAccountRepository
-                .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
-                .ReturnsAsync(new List<SeedSummary>
-                {
-                    new("ADDR1", DateTimeOffset.UtcNow, true),
-                    new("ADDR2", DateTimeOffset.UtcNow, false)
-                });
-            _mockAccountRepository
-                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
-                .ReturnsAsync("0xEVM1");
-            _mockAccountRepository
-                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR2", 0, It.IsAny<string?>()))
-                .ReturnsAsync("0xEVM2");
-
-            var result = await _controller.ListEvmAddresses();
-
-            var okResult = result as OkObjectResult;
-            Assert.That(okResult, Is.Not.Null);
-            var response = okResult!.Value as ListEvmAddressesResponse;
-            Assert.That(response!.Addresses, Has.Count.EqualTo(2));
-            Assert.That(response.Addresses[0].Address, Is.EqualTo("0xEVM1"));
-            Assert.That(response.Addresses[0].IsPrimary, Is.True);
-            Assert.That(response.Addresses[1].Address, Is.EqualTo("0xEVM2"));
-            Assert.That(response.Addresses[1].IsPrimary, Is.False);
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "0xEVM1", "Evm", "ADDR1", 0, It.IsAny<CancellationToken>()), Times.Once);
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "0xEVM2", "Evm", "ADDR2", 0, It.IsAny<CancellationToken>()), Times.Once);
-        }
-
-        [Test]
-        public async Task ListEvmAddresses_NoBearerToken_ReturnsUnauthorized()
-        {
-            var result = await _controller.ListEvmAddresses();
-
-            Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
-        }
-
-        [Test]
-        public async Task GetEvmAddress_KnownSeed_ReturnsDerivedAddressAndActivatesIt()
-        {
-            SetBearerHeader("valid-token");
-            SetupValidToken("valid-token");
-            _mockAccountRepository
-                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 2, It.IsAny<string?>()))
-                .ReturnsAsync("0xDERIVED");
-
-            var result = await _controller.GetEvmAddress("ADDR1", 2);
-
-            var okResult = result as OkObjectResult;
-            Assert.That(okResult, Is.Not.Null);
-            var response = okResult!.Value as DerivedEvmAddressResponse;
-            Assert.That(response!.Address, Is.EqualTo("0xDERIVED"));
-            Assert.That(response.PrimaryAddress, Is.EqualTo("ADDR1"));
-            Assert.That(response.Slot, Is.EqualTo(2));
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "0xDERIVED", "Evm", "ADDR1", 2, It.IsAny<CancellationToken>()), Times.Once);
-        }
-
-        [Test]
-        public async Task GetEvmAddress_NoSlotGiven_DefaultsToZero()
-        {
-            SetBearerHeader("valid-token");
-            SetupValidToken("valid-token");
-            _mockAccountRepository
-                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
-                .ReturnsAsync("0xDERIVED");
-
-            var result = await _controller.GetEvmAddress("ADDR1", null);
-
-            Assert.That(result, Is.InstanceOf<OkObjectResult>());
-            _mockAccountRepository.Verify(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()), Times.Once);
-        }
-
-        [Test]
-        public async Task GetEvmAddress_UnknownSeed_ReturnsBadRequest()
-        {
-            SetBearerHeader("valid-token");
-            SetupValidToken("valid-token");
-            _mockAccountRepository
-                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "NOTAREALADDRESS", 0, It.IsAny<string?>()))
-                .ThrowsAsync(new InvalidOperationException("No seed with address 'NOTAREALADDRESS' exists for this account."));
-
-            var result = await _controller.GetEvmAddress("NOTAREALADDRESS", null);
-
-            Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
-        }
-
-        [Test]
-        public async Task GetEvmAddress_NoBearerToken_ReturnsUnauthorized()
-        {
-            var result = await _controller.GetEvmAddress("ADDR1", null);
-
-            Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
-        }
-
         // ───────────────────────── GET /wallet/{network}/{address}/info ─────────────────────────
 
         [Test]
@@ -1022,7 +905,7 @@ namespace BiatecOIDCTests
             Assert.That(okResult, Is.Not.Null);
             var response = okResult!.Value as AddressInfoResponse;
             Assert.That(response!.IsActive, Is.True);
-            Assert.That(response.PrimaryAddress, Is.EqualTo(TestAddress));
+            Assert.That(response.SeedAddress, Is.EqualTo(TestAddress));
             Assert.That(response.Slot, Is.EqualTo(0));
             Assert.That(response.Family, Is.EqualTo("Avm"));
         }
@@ -1037,13 +920,13 @@ namespace BiatecOIDCTests
                 .ReturnsAsync(new List<SeedSummary>());
             _mockAddressActivationService
                 .Setup(s => s.TryResolveAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "SOME-ADDR", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new AddressActivationEntry { Address = "SOME-ADDR", Family = "Avm", PrimaryAddress = "SEED-ADDR", Slot = 9 });
+                .ReturnsAsync(new AddressActivationEntry { Address = "SOME-ADDR", Family = "Avm", SeedAddress = "SEED-ADDR", Slot = 9 });
 
             var result = await _controller.GetAddressInfo(TestNetwork, "SOME-ADDR");
 
             var response = (result as OkObjectResult)!.Value as AddressInfoResponse;
             Assert.That(response!.IsActive, Is.True);
-            Assert.That(response.PrimaryAddress, Is.EqualTo("SEED-ADDR"));
+            Assert.That(response.SeedAddress, Is.EqualTo("SEED-ADDR"));
             Assert.That(response.Slot, Is.EqualTo(9));
         }
 
@@ -1060,7 +943,7 @@ namespace BiatecOIDCTests
 
             var response = (result as OkObjectResult)!.Value as AddressInfoResponse;
             Assert.That(response!.IsActive, Is.False);
-            Assert.That(response.PrimaryAddress, Is.Null);
+            Assert.That(response.SeedAddress, Is.Null);
         }
 
         [Test]
@@ -1098,7 +981,7 @@ namespace BiatecOIDCTests
                 .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "SEED-ADDR", 3, It.IsAny<string?>()))
                 .ReturnsAsync("DERIVED-ADDR");
 
-            var result = await _controller.ActivateAddress(TestNetwork, "DERIVED-ADDR", new ActivateAddressRequest { PrimaryAddress = "SEED-ADDR", Slot = 3 });
+            var result = await _controller.ActivateAddress(TestNetwork, "DERIVED-ADDR", new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 3 });
 
             var okResult = result as OkObjectResult;
             Assert.That(okResult, Is.Not.Null);
@@ -1118,7 +1001,7 @@ namespace BiatecOIDCTests
                 .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "SEED-ADDR", 0, It.IsAny<string?>()))
                 .ReturnsAsync("0xDERIVED");
 
-            var result = await _controller.ActivateAddress("ethereum", "0xSOMEOTHERADDRESS", new ActivateAddressRequest { PrimaryAddress = "SEED-ADDR", Slot = 0 });
+            var result = await _controller.ActivateAddress("ethereum", "0xSOMEOTHERADDRESS", new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 0 });
 
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
             _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -1131,7 +1014,7 @@ namespace BiatecOIDCTests
             SetupValidToken("valid-token", new Claim("sign", "true"));
             _mockNetworkResolver.Setup(r => r.ResolveAsync("notanetwork", It.IsAny<CancellationToken>())).ReturnsAsync((ResolvedNetwork?)null);
 
-            var result = await _controller.ActivateAddress("notanetwork", TestAddress, new ActivateAddressRequest { PrimaryAddress = "SEED-ADDR", Slot = 0 });
+            var result = await _controller.ActivateAddress("notanetwork", TestAddress, new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 0 });
 
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
         }
@@ -1145,7 +1028,7 @@ namespace BiatecOIDCTests
                 .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "NOTAREALSEED", 0, It.IsAny<string?>()))
                 .ThrowsAsync(new InvalidOperationException("No seed with address 'NOTAREALSEED' exists for this account."));
 
-            var result = await _controller.ActivateAddress(TestNetwork, TestAddress, new ActivateAddressRequest { PrimaryAddress = "NOTAREALSEED", Slot = 0 });
+            var result = await _controller.ActivateAddress(TestNetwork, TestAddress, new ActivateAddressRequest { SeedAddress = "NOTAREALSEED", Slot = 0 });
 
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
         }
@@ -1156,7 +1039,7 @@ namespace BiatecOIDCTests
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token");
 
-            var result = await _controller.ActivateAddress(TestNetwork, TestAddress, new ActivateAddressRequest { PrimaryAddress = "SEED-ADDR", Slot = 0 });
+            var result = await _controller.ActivateAddress(TestNetwork, TestAddress, new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 0 });
 
             var objectResult = result as ObjectResult;
             Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
@@ -1165,7 +1048,7 @@ namespace BiatecOIDCTests
         [Test]
         public async Task ActivateAddress_NoBearerToken_ReturnsUnauthorized()
         {
-            var result = await _controller.ActivateAddress(TestNetwork, TestAddress, new ActivateAddressRequest { PrimaryAddress = "SEED-ADDR", Slot = 0 });
+            var result = await _controller.ActivateAddress(TestNetwork, TestAddress, new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 0 });
 
             Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
         }
