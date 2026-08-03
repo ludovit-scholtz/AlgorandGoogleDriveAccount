@@ -23,6 +23,22 @@ namespace BiatecOIDC
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen(c =>
             {
+                // Swagger UI renders OpenApiInfo.Description as markdown at the very top of the page, above
+                // the endpoint list - loaded from OIDC_INTEGRATION_GUIDE.md (copied to the output directory
+                // by BiatecOIDC.csproj) so the same integration guide developers read in the repo is what
+                // shows up for anyone browsing /swagger directly. Falls back to a short inline description
+                // if the file is somehow missing (e.g. a non-standard run mode) rather than failing startup.
+                var guidePath = Path.Combine(AppContext.BaseDirectory, "OIDC_INTEGRATION_GUIDE.md");
+                var guideDescription = File.Exists(guidePath)
+                    ? File.ReadAllText(guidePath)
+                    : "Biatec OIDC identity provider and self-custody wallet API. See OIDC_INTEGRATION_GUIDE.md in the repository for the full integration guide.";
+                c.SwaggerDoc("v1", new OpenApiInfo
+                {
+                    Title = "Biatec OIDC & Wallet API",
+                    Version = "v1",
+                    Description = guideDescription
+                });
+
                 // The wallet API (/wallet/sign, /wallet/limits) and a few JwtIssuerController endpoints
                 // (/userinfo, /verify) authenticate the caller via a manually-parsed Authorization: Bearer
                 // header rather than [Authorize] (see BearerAuthOperationFilter / RequiresBearerTokenAttribute

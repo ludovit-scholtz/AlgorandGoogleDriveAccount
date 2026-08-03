@@ -32,4 +32,12 @@
     <ProjectReference Include="..\BiatecSelfCustodyCore\BiatecSelfCustodyCore.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Copied to the publish/output directory so Program.cs can load it at runtime as Swagger UI's
+         top-of-page documentation (OpenApiInfo.Description) - see the AddSwaggerGen call. -->
+    <Content Include="OIDC_INTEGRATION_GUIDE.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

@@ -1092,12 +1092,12 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "activateCryptoAddress"),
-         Description("Registers that a specific seed/slot's key signs for 'address' on 'network' - the entry point for AVM rekey support. Flow: rekey an external Algorand account to one of this account's addresses (see getAlgorandAddress/listAlgorandAddresses for candidates, or mint a fresh seed first), submit and confirm that rekey transaction on-chain yourself, then call this so signTransaction recognizes 'address' going forward. For a native address (already exactly the derived address for that seed/slot), this just registers it immediately - getAlgorandAddress/getCryptoAddress already does this automatically for any slot, so calling this for a native address is rarely necessary. Requires the 'sign' scope.")]
+         Description("Registers that a specific seed/slot's key signs for 'address' on 'network' - the entry point for AVM rekey support. Flow: rekey an external Algorand account to one of this account's addresses (see getAlgorandAddress/listAlgorandAddresses for candidates, or mint a fresh seed first), submit and confirm that rekey transaction on-chain yourself, then call this so signTransaction recognizes 'address' going forward. For a native address (already exactly the derived address for that seed/slot), this just registers it immediately - getAlgorandAddress/getCryptoAddress already does this automatically for any slot, so calling this for a native address is rarely necessary. Call listActiveAddresses to see everything already registered. Requires the 'sign' scope.")]
         public async Task<ActivateCryptoAddressResponse> ActivateCryptoAddress(
             [Description("Which network 'address' belongs to. EVM networks are only accepted for a native address (EVM has no rekey concept).")] string network,
-            [Description("The address to activate.")] string address,
             [Description("Which seed's key signs for 'address' - its own identifying address (see listAlgorandAddresses).")] string seedAddress,
-            [Description("ARC-76 derivation slot within that seed. Defaults to 0.")] int slot = 0)
+            [Description("ARC-76 derivation slot within that seed.")] int slot,
+            [Description("The address to activate.")] string address)
         {
             var authError = RequireSignClaim();
             if (authError != null)
@@ -1108,7 +1108,7 @@ namespace BiatecMCP.MCP
             try
             {
                 var bearerToken = GetBearerToken();
-                var info = await _walletClient.ActivateAddressAsync(bearerToken, network, address, seedAddress, slot);
+                var info = await _walletClient.ActivateAddressAsync(bearerToken, network, seedAddress, slot, address);
                 return new ActivateCryptoAddressResponse
                 {
                     Address = info.Address,
@@ -1128,6 +1128,37 @@ namespace BiatecMCP.MCP
             catch (Exception ex)
             {
                 return new ActivateCryptoAddressResponse { Error = SanitizeForToolResponse(ex, nameof(ActivateCryptoAddress)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        public class ListActiveAddressesResponse
+        {
+            public List<Model.ActiveAddressResponse> Addresses { get; set; } = new();
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "listActiveAddresses"),
+         Description("Lists every address currently resolvable to a signing seed/slot - every seed's own slot-0 Algorand address (active implicitly) plus every explicitly-activated address (any non-zero AVM slot, every EVM address, and any externally-rekeyed AVM address registered via activateCryptoAddress). Use an address from here directly with signTransaction.")]
+        public async Task<ListActiveAddressesResponse> ListActiveAddresses()
+        {
+            try
+            {
+                var bearerToken = GetBearerToken();
+                var result = await _walletClient.ListActiveAddressesAsync(bearerToken);
+                return new ListActiveAddressesResponse { Addresses = result.Addresses };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new ListActiveAddressesResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (WalletApiException ex)
+            {
+                return new ListActiveAddressesResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (Exception ex)
+            {
+                return new ListActiveAddressesResponse { Error = SanitizeForToolResponse(ex, nameof(ListActiveAddresses)), ErrorType = ex.GetType().ToString() };
             }
         }
 

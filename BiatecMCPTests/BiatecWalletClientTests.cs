@@ -202,13 +202,12 @@ namespace BiatecMCPTests
             });
             var client = CreateClient(handler, out var captured);
 
-            var result = await client.ActivateAddressAsync("the-bearer-token", "algorand", "ADDR1", "SEED1", 3);
+            var result = await client.ActivateAddressAsync("the-bearer-token", "algorand", "SEED1", 3, "ADDR1");
 
             Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Post));
-            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/algorand/ADDR1/activate"));
+            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/algorand/SEED1/3/activate"));
             using var body = JsonDocument.Parse(captured.LastRequestBody!);
-            Assert.That(body.RootElement.GetProperty("seedAddress").GetString(), Is.EqualTo("SEED1"));
-            Assert.That(body.RootElement.GetProperty("slot").GetInt32(), Is.EqualTo(3));
+            Assert.That(body.RootElement.GetProperty("address").GetString(), Is.EqualTo("ADDR1"));
             Assert.That(result.IsActive, Is.True);
         }
 
@@ -223,9 +222,29 @@ namespace BiatecMCPTests
             });
             var client = CreateClient(handler, out _);
 
-            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.ActivateAddressAsync("token", "algorand", "ADDR1", "SEED1", 0));
+            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.ActivateAddressAsync("token", "algorand", "SEED1", 0, "ADDR1"));
 
             Assert.That(ex!.ErrorCode, Is.EqualTo("rekey_not_confirmed"));
+        }
+
+        [Test]
+        public async Task ListActiveAddressesAsync_ForwardsBearerTokenAndParsesResponse()
+        {
+            var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new ListActiveAddressesResponse
+                {
+                    Addresses = { new ActiveAddressResponse { Address = "ADDR1", Family = "Avm", SeedAddress = "ADDR1", Slot = 0 } }
+                })
+            });
+            var client = CreateClient(handler, out var captured);
+
+            var result = await client.ListActiveAddressesAsync("the-bearer-token");
+
+            Assert.That(captured.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
+            Assert.That(captured.LastRequest.RequestUri!.AbsolutePath, Is.EqualTo("/wallet/active-addresses"));
+            Assert.That(captured.LastRequest.Headers.Authorization!.Parameter, Is.EqualTo("the-bearer-token"));
+            Assert.That(result.Addresses, Has.Count.EqualTo(1));
         }
     }
 }

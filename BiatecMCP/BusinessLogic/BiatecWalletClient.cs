@@ -87,10 +87,10 @@ namespace BiatecMCP.BusinessLogic
                 ?? new AddressInfoResponse();
         }
 
-        public async Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string address, string seedAddress, int slot, CancellationToken cancellationToken = default)
+        public async Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string seedAddress, int slot, string address, CancellationToken cancellationToken = default)
         {
-            var request = new ActivateAddressRequest { SeedAddress = seedAddress, Slot = slot };
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"wallet/{Uri.EscapeDataString(network)}/{Uri.EscapeDataString(address)}/activate")
+            var request = new ActivateAddressRequest { Address = address };
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"wallet/{Uri.EscapeDataString(network)}/{Uri.EscapeDataString(seedAddress)}/{slot}/activate")
             {
                 Content = JsonContent.Create(request)
             };
@@ -104,6 +104,21 @@ namespace BiatecMCP.BusinessLogic
 
             return await response.Content.ReadFromJsonAsync<AddressInfoResponse>(cancellationToken)
                 ?? new AddressInfoResponse();
+        }
+
+        public async Task<ListActiveAddressesResponse> ListActiveAddressesAsync(string bearerToken, CancellationToken cancellationToken = default)
+        {
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, "wallet/active-addresses");
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+            using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw await BuildExceptionAsync(response, cancellationToken);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ListActiveAddressesResponse>(cancellationToken)
+                ?? new ListActiveAddressesResponse();
         }
 
         private static async Task<WalletApiException> BuildExceptionAsync(HttpResponseMessage response, CancellationToken cancellationToken)

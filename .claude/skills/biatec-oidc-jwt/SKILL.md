@@ -1,12 +1,12 @@
 ---
 name: biatec-oidc-jwt
-description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its address-centric wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector, ICloudAccountRepository's multi-seed vault and multi-address (seedAddress+slot) signing, IAddressActivationService's address-activation registry and AVM rekey support, INetworkResolver, DriveService.SignEvmTransactionAsync's EVM (Ethereum-family) transaction signing, IVaultBackupService) — endpoints (POST /wallet/{network}/{address}/sign - AVM and EVM both, GET/PUT /wallet/{network}/{address}/limits, GET /wallet/{network}/{address}/info, POST /wallet/{network}/{address}/activate), claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped, and the strict `rekey` scope required for any rekey transaction), redirect-URI/logout allowlist rules, signing-key format, global-and-per-address daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, the encrypted provider-access-token caching embedded in issued tokens, including its automatic renewal from
+description: Reference for this repo's OIDC/JWT identity provider (JwtIssuerService, JwtIssuerController, RedirectUriMatcher) and its address-centric wallet API (WalletController, ISpendingLimitService, IAssetValuationService, IExchangeRateService, IProviderAccessTokenProtector, AlgorandTransactionInspector, ICloudAccountRepository's multi-seed vault and multi-address (seedAddress+slot) signing, IAddressActivationService's address-activation registry and AVM rekey support, INetworkResolver, DriveService.SignEvmTransactionAsync's EVM (Ethereum-family) transaction signing, IVaultBackupService) — endpoints (POST /wallet/{network}/{address}/sign - AVM and EVM both, GET/PUT /wallet/{network}/{address}/limits, GET /wallet/{network}/{address}/info, GET /wallet/active-addresses, POST /wallet/{network}/{seedAddress}/{slot}/activate), claims/scopes (including the two-tier scope handling - a recognized-but-non-allowlisted scope like `manage-limits` hard-fails with invalid_scope naming it, while an unrecognized scope like a literal ".default" is silently dropped, and the strict `rekey` scope required for any rekey transaction), redirect-URI/logout allowlist rules, signing-key format, global-and-per-address daily/weekly/monthly spending-limit enforcement via the Biatec Router + Czech National Bank FX rates, the encrypted provider-access-token caching embedded in issued tokens, including its automatic renewal from
 a cached provider refresh token (both on Biatec token refresh and, opportunistically, mid-request in
 WalletController), the multi-seed vault (GET/POST /wallet/seeds, PUT /wallet/seeds/primary,
 GET /wallet/address/{seedAddress}/{slot?}), the address activation registry that maps an address back to
 its (seedAddress, slot) - stored encrypted on the user's own drive, separate from the seed vault - and
 explicit cross-cloud vault backup (POST/GET /wallet/backup/*).
-Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/{network}/{address}/sign, /wallet/limits, /wallet/{network}/{address}/limits, /wallet/limits/currencies, /wallet/{network}/{address}/info, /wallet/{network}/{address}/activate, /wallet/seeds, /wallet/address, /wallet/backup, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, AddressActivationService.cs, NetworkResolver.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, CloudAccountRepository.cs, DriveService.cs, EvmTransactionRequestParser.cs, VaultBackupService.cs, VaultBackupController.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
+Load this before changing anything under /authorize, /token, /userinfo, /introspect, /verify, /connect/endsession, /logout, /wallet/{network}/{address}/sign, /wallet/limits, /wallet/{network}/{address}/limits, /wallet/limits/currencies, /wallet/{network}/{address}/info, /wallet/active-addresses, /wallet/{network}/{seedAddress}/{slot}/activate, /wallet/seeds, /wallet/address, /wallet/backup, JwtIssuerService.cs, JwtIssuerController.cs, WalletController.cs, WalletService.cs, SpendingLimitService.cs, AddressActivationService.cs, NetworkResolver.cs, ProviderAccessTokenProtector.cs, BiatecRouterValuationService.cs, CnbExchangeRateService.cs, AlgorandTransactionInspector.cs, RedirectUriMatcher.cs, CloudAccountRepository.cs, DriveService.cs, EvmTransactionRequestParser.cs, VaultBackupService.cs, VaultBackupController.cs, or JwtIssuer:*/SpendingLimits:*/ExchangeRates:*/ProviderTokenProtection:* config, instead of re-reading OIDC_INTEGRATION_GUIDE.md and BIATEC_OIDC_LOGOUT_REQUIREMENTS.md in full.
 ---
 
 # Biatec OIDC / JWT issuer
@@ -99,7 +99,7 @@ way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `V
   seed's own primary (slot-0) address (free, no file access), then against
   `IAddressActivationService.TryResolveAsync` (see "Address activation registry" below) - 400
   `address_not_active` if neither resolves, naming `GET /wallet/address/{seedAddress}/{slot}` (native) or
-  `POST /wallet/{network}/{address}/activate` (rekeyed) as the fix. Body: `{ "transactions": [...] }` - no
+  `POST /wallet/{network}/{seedAddress}/{slot}/activate` (rekeyed) as the fix. Body: `{ "transactions": [...] }` - no
   `seedAddress`/`slot` field anymore (this is a breaking change from the old shape) - but each entry's own
   encoding, and everything else this endpoint checks, depends on whether `network` resolves to the AVM or EVM
   family:
@@ -157,14 +157,21 @@ way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `V
   `{ Address, Network, Family, IsActive, SeedAddress?, Slot? }` for any address, whether active or not (the
   latter two are `null` when inactive) - checks the seed-primary short-circuit first, then
   `IAddressActivationService.TryResolveAsync`, same resolution `POST /wallet/{network}/{address}/sign` uses.
-- `POST /wallet/{network}/{address}/activate` — requires `sign`. Body: `{ "seedAddress": "...", "slot": 0 }`.
-  Derives the expected address for that seed/slot/family; if it equals `address` exactly, activates
+- `POST /wallet/{network}/{seedAddress}/{slot}/activate` — requires `sign`. `seedAddress`/`slot` are route
+  segments; body is just `{ "address": "..." }` (the address being registered). Derives the expected address
+  for that seed/slot/family; if it equals the body's `address` exactly, activates
   immediately (a manual alternative to the same auto-activation `GET /wallet/address/{seedAddress}/{slot}`
   already does). If it differs, only AVM is allowed (EVM has no rekey concept - 400 otherwise) - resolves the
   network's algod connection via `INetworkResolver`, calls `DefaultApi.AccountInformationAsync(address)`, and
   requires `.AuthAddr` to equal the derived address (unset `AuthAddr` = never rekeyed). Verification failure →
   409 `rekey_not_confirmed`, nothing stored - see "Address activation registry" below for the full design. This
   is the entry point for rekeying an external Algorand address to a Biatec-controlled key.
+- `GET /wallet/active-addresses` — only requires a valid bearer token. Reports every currently-active
+  address at once: `{ "addresses": [ { "address", "family", "seedAddress", "slot", "activatedUtc" }, ... ] }` -
+  `WalletController.GetActiveAddresses` concatenates every seed's own slot-0 AVM address (from
+  `ICloudAccountRepository.ListSeedsAsync`, `activatedUtc` = that seed's own `CreatedUtc`) with every entry
+  in `IAddressActivationService.ListAsync` - the same two sources `ResolveSignerAsync` checks one address at
+  a time, just both listed in full here.
 - `GET /wallet/limits` — global bucket only, only requires a valid bearer token (no `manage-limits` claim
   needed to read). `PUT /wallet/limits` requires the `manage-limits` claim, same no-address shape.
   `GET`/`PUT /wallet/{network}/{address}/limits` — the per-address bucket for the identity `address` resolves
@@ -267,7 +274,7 @@ verified-and-stored or rejected-and-not-stored (409 on `/activate`, nothing on d
 Two paths populate it: (1) automatic - `GET /wallet/address/{seedAddress}/{slot?}` (which derives both the
 AVM and EVM address for that seed/slot in one call) calls `ActivateAsync` for each right after deriving, so the
 common case (any slot, any family) needs no manual step; (2) explicit -
-`POST /wallet/{network}/{address}/activate` (above), the only path that can register an address the vault didn't
+`POST /wallet/{network}/{seedAddress}/{slot}/activate` (above), the only path that can register an address the vault didn't
 derive itself - this is what makes rekeying an **external** Algorand address to a Biatec-controlled key work:
 mint a spare seed (`POST /wallet/seeds`, `rekey` claim), submit+confirm an on-chain transaction with `rekey` set
 to that seed's address (through `POST /wallet/{network}/{existingAddress}/sign` with a `rekey`-scoped token, since

@@ -9,6 +9,10 @@ working as a legacy alias for existing integrations). Each host is internally se
 call — they are derived from the request, not hardcoded — so pick one host and use it consistently
 for a given client (don't mix the two for the same integration).
 
+This exact file is also what renders at the top of Swagger UI (`/swagger`) - `Program.cs`'s `AddSwaggerGen`
+call reads it at startup and sets it as the OpenAPI document's `info.description`, so browsing `/swagger`
+directly gets the full integration guide above the endpoint list, not just bare operation names.
+
 ## Goals
 
 - Reuse Google login session from this service.
@@ -81,10 +85,16 @@ for a given client (don't mix the two for the same integration).
   - Reports whether Biatec currently knows which key signs for `address` on `network` - a seed's own
     primary address, a previously-derived address (any slot), or one explicitly activated (below). Only
     requires being authenticated. See "Address-centric wallet API" below.
-- `POST /wallet/{network}/{address}/activate`
-  - Registers that a specific seed/slot's key signs for `address` - the entry point for rekeying an
-    external AVM account to a Biatec-controlled key. Requires the `sign` scope. See "Address-centric
-    wallet API" below for the full flow and verification rules.
+- `POST /wallet/{network}/{seedAddress}/{slot}/activate`
+  - Registers that `seedAddress`/`slot`'s key signs for the address named in the body
+    (`{ "address": "..." }`) - the entry point for rekeying an external AVM account to a
+    Biatec-controlled key. Requires the `sign` scope. See "Address-centric wallet API" below for the full
+    flow and verification rules.
+- `GET /wallet/active-addresses`
+  - Lists every address currently resolvable to a signing seed/slot - every seed's own slot-0 AVM address
+    (active implicitly) plus every entry in the address activation registry (any non-zero AVM slot, every
+    EVM address, and any externally-rekeyed AVM address). Only requires being authenticated. See
+    "Address-centric wallet API" below.
 - `GET /wallet/limits`
   - Reads the caller's own account-wide daily/weekly/monthly spending limits. Only requires being
     authenticated (`openid`) - no `manage-limits` scope needed to read your own limits.
@@ -151,6 +161,8 @@ like `algorand`/`voi`, or a raw genesis id):
 | `GET /wallet/address` (list) | removed - use `GET /wallet/seeds` instead (same data) |
 | `GET /wallet/evm/address` (list) | removed - use `GET /wallet/{network}/{address}/info` to check a specific address, or `GET /wallet/seeds` + `GET /wallet/address/{seedAddress}/{slot?}` per seed |
 | `GET /wallet/evm/address/{seedAddress}/{slot?}` (derive) | removed - `GET /wallet/address/{seedAddress}/{slot?}` now derives and returns both the AVM and EVM address in one call |
+| `POST /wallet/{network}/{address}/activate` with body `{ "seedAddress": "SEED", "slot": 0 }` | `POST /wallet/{network}/{seedAddress}/{slot}/activate` with body `{ "address": "..." }` - `seedAddress`/`slot` are route segments now, the address being activated is the body field |
+| *(no equivalent)* | `GET /wallet/active-addresses` (new) - lists every currently-active address in one call |
 
 `address` must be a **known** address - resolved to the seed/slot that actually signs for it via:
 
@@ -159,8 +171,9 @@ like `algorand`/`voi`, or a raw genesis id):
    *and registers* both the AVM and EVM address for that seed/slot, so either becomes usable by address
    alone from then on. This is the same call you'd make anyway to find out what the address even is, so in
    practice this never requires an extra step either.
-3. **An explicitly activated address** - `POST /wallet/{network}/{address}/activate`, body
-   `{ "seedAddress": "...", "slot": 0 }`. This is the entry point for **rekeying an external Algorand
+3. **An explicitly activated address** - `POST /wallet/{network}/{seedAddress}/{slot}/activate` (note:
+   `seedAddress` and `slot` are route segments here, not body fields - the address being activated is the
+   body), body `{ "address": "..." }`. This is the entry point for **rekeying an external Algorand
    account to a Biatec-controlled key**: rekey the external account to one of this account's addresses
    (mint a fresh seed via `POST /wallet/seeds` if you want a dedicated one), submit and confirm that rekey
    transaction on-chain yourself, then call `/activate` naming which seed/slot now controls it. Biatec
@@ -174,9 +187,12 @@ This pairing (`address` → `seedAddress`/`slot`) is stored **encrypted on your 
 Drive/OneDrive, whichever you're signed in with), in a file separate from the seed vault itself - never on
 Biatec's own infrastructure, same principle as the seed vault and spending-limit data.
 
-`GET /wallet/{network}/{address}/info` reports an address's current status:
+`GET /wallet/{network}/{address}/info` reports one address's current status:
 `{ "address", "network", "family", "isActive", "seedAddress", "slot" }` - `seedAddress`/`slot` are
-`null`/`0` when `isActive` is `false`.
+`null`/`0` when `isActive` is `false`. `GET /wallet/active-addresses` reports every currently-active address
+at once - `{ "addresses": [ { "address", "family", "seedAddress", "slot", "activatedUtc" }, ... ] }` -
+combining every seed's own slot-0 AVM address (its `activatedUtc` is that seed's own creation date) with
+every entry in the activation registry.
 
 A plain (non-multisig) transaction's own `snd` (sender) field must match the route's `address` exactly, or
 `POST /wallet/sign/...` fails with `400 sender_mismatch` - a defense-in-depth check to catch signing under

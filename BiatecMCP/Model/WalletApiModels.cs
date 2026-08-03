@@ -60,19 +60,16 @@ namespace BiatecMCP.Model
         public int Slot { get; set; }
     }
 
-    /// <summary>Request body for <c>POST /wallet/{network}/{address}/activate</c>.</summary>
+    /// <summary>Request body for <c>POST /wallet/{network}/{seedAddress}/{slot}/activate</c>.</summary>
     public class ActivateAddressRequest
     {
-        /// <summary>Which seed's key signs for the address being activated - its own identifying (Algorand slot-0) address.</summary>
-        public string SeedAddress { get; set; } = string.Empty;
-
-        /// <summary>ARC-76 derivation slot within that seed. Defaults to <c>0</c>.</summary>
-        public int Slot { get; set; }
+        /// <summary>The address to register as signed by <c>{seedAddress}</c>/<c>{slot}</c> (the route segments).</summary>
+        public string Address { get; set; } = string.Empty;
     }
 
     /// <summary>
     /// Response body for <c>GET /wallet/{network}/{address}/info</c> and
-    /// <c>POST /wallet/{network}/{address}/activate</c>.
+    /// <c>POST /wallet/{network}/{seedAddress}/{slot}/activate</c>.
     /// </summary>
     public class AddressInfoResponse
     {
@@ -93,5 +90,31 @@ namespace BiatecMCP.Model
 
         /// <summary>ARC-76 slot of <see cref="SeedAddress"/> - meaningless if <see cref="IsActive"/> is <c>false</c>.</summary>
         public int Slot { get; set; }
+    }
+
+    /// <summary>One address in the caller's active-address mapping, as returned by <c>GET /wallet/active-addresses</c>.</summary>
+    public class ActiveAddressResponse
+    {
+        /// <summary>The active address itself.</summary>
+        public string Address { get; set; } = string.Empty;
+
+        /// <summary><c>"Avm"</c> or <c>"Evm"</c>.</summary>
+        public string Family { get; set; } = string.Empty;
+
+        /// <summary>Which seed's key signs for <see cref="Address"/>.</summary>
+        public string SeedAddress { get; set; } = string.Empty;
+
+        /// <summary>ARC-76 derivation slot within that seed.</summary>
+        public int Slot { get; set; }
+
+        /// <summary>When this pairing became active.</summary>
+        public DateTimeOffset ActivatedUtc { get; set; }
+    }
+
+    /// <summary>Response body for <c>GET /wallet/active-addresses</c>.</summary>
+    public class ListActiveAddressesResponse
+    {
+        /// <summary>Every address currently resolvable to a signing seed/slot.</summary>
+        public List<ActiveAddressResponse> Addresses { get; set; } = new();
     }
 }

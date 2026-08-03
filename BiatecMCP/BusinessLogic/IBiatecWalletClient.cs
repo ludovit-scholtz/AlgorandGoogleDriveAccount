@@ -45,6 +45,13 @@ namespace BiatecMCP.BusinessLogic
         /// <see cref="WalletApiException"/> (e.g. <c>rekey_not_confirmed</c> if an external address isn't
         /// yet rekeyed on-chain) on failure.
         /// </summary>
-        Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string address, string seedAddress, int slot, CancellationToken cancellationToken = default);
+        Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string seedAddress, int slot, string address, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Lists every address currently resolvable to a signing seed/slot - every seed's own slot-0 AVM
+        /// address plus every explicitly-activated entry (see <see cref="ActivateAddressAsync"/>). Throws
+        /// <see cref="WalletApiException"/> on failure.
+        /// </summary>
+        Task<ListActiveAddressesResponse> ListActiveAddressesAsync(string bearerToken, CancellationToken cancellationToken = default);
     }
 }

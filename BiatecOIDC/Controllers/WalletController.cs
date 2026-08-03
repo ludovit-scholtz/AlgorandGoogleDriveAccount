@@ -549,6 +549,65 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
+        /// Lists every address currently resolvable to a signing seed/slot - the same resolution
+        /// <see cref="SignTransactionGroup"/>/<see cref="GetAddressInfo"/> use, just for every known address
+        /// at once rather than one at a time. Combines every seed's own slot-0 AVM address (active
+        /// implicitly, never needing a derive/activate call) with every entry in the address activation
+        /// registry (any non-zero AVM slot, every EVM address, and any externally-rekeyed AVM address - see
+        /// <see cref="ActivateAddress"/>).
+        /// </summary>
+        /// <response code="200">The caller's active addresses.</response>
+        /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        [AllowAnonymous]
+        [RequiresBearerToken]
+        [HttpGet("active-addresses")]
+        public async Task<IActionResult> GetActiveAddresses()
+        {
+            var authError = TryAuthenticate(requiredClaim: null, out var principal);
+            if (authError != null)
+            {
+                return authError;
+            }
+
+            var email = principal!.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            try
+            {
+                var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.ListSeedsAsync(email, provider, token));
+                var activated = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _addressActivationService.ListAsync(email, provider, token));
+
+                var addresses = seeds
+                    .Select(s => new ActiveAddressResponse
+                    {
+                        Address = s.SeedAddress,
+                        Family = nameof(ChainFamily.Avm),
+                        SeedAddress = s.SeedAddress,
+                        Slot = 0,
+                        ActivatedUtc = s.CreatedUtc
+                    })
+                    .Concat(activated.Select(a => new ActiveAddressResponse
+                    {
+                        Address = a.Address,
+                        Family = a.Family,
+                        SeedAddress = a.SeedAddress,
+                        Slot = a.Slot,
+                        ActivatedUtc = a.ActivatedUtc
+                    }))
+                    .ToList();
+
+                return Ok(new ListActiveAddressesResponse { Addresses = addresses });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+        }
+
+        /// <summary>
         /// Reports whether Biatec currently knows which key signs for <paramref name="address"/> - a seed's
         /// own primary address, a previously-derived address (any slot), or one explicitly activated via
         /// <see cref="ActivateAddress"/>.
@@ -599,31 +658,32 @@ namespace BiatecOIDC.Controllers
         }
 
         /// <summary>
-        /// Registers that <c>(seedAddress, slot)</c>'s key signs for <paramref name="address"/> - the
-        /// entry point for AVM rekey support: rekey an external account to one of this account's addresses
-        /// (see <c>GET /wallet/address/{seedAddress}/{slot}</c> for candidates, or mint a fresh one via
-        /// <c>POST /wallet/seeds</c>), confirm the rekey transaction on-chain, then call this so
-        /// <c>POST /wallet/{network}/{address}/sign</c> recognizes <paramref name="address"/> going forward.
+        /// Registers that <paramref name="seedAddress"/>/<paramref name="slot"/>'s key signs for
+        /// <c>request.Address</c> - the entry point for AVM rekey support: rekey an external account to one
+        /// of this account's addresses (see <c>GET /wallet/address/{seedAddress}/{slot}</c> for candidates,
+        /// or mint a fresh one via <c>POST /wallet/seeds</c>), confirm the rekey transaction on-chain, then
+        /// call this so <c>POST /wallet/{network}/{address}/sign</c> recognizes that address going forward.
         /// For a native address (one that's exactly the derived address for that seed/slot already), this
         /// just registers it immediately - the same thing <c>GET /wallet/address/{seedAddress}/{slot}</c>
         /// already does automatically, so calling this for a native address is rarely necessary.
         /// </summary>
-        /// <param name="network">Which chain <paramref name="address"/> belongs to - see <c>GET /chains</c>. EVM chains are only accepted for a native address (EVM has no rekey concept).</param>
-        /// <param name="address">The address to activate.</param>
-        /// <param name="request">Which seed/slot's key signs for <paramref name="address"/>.</param>
+        /// <param name="network">Which chain the address belongs to - see <c>GET /chains</c>. EVM chains are only accepted for a native address (EVM has no rekey concept).</param>
+        /// <param name="seedAddress">Which seed's key signs for the address being activated - its own identifying (Algorand slot-0) address.</param>
+        /// <param name="slot">ARC-76 derivation index within that seed.</param>
+        /// <param name="request">The address to activate.</param>
         /// <response code="200">Activated.</response>
-        /// <response code="400"><paramref name="network"/> is unrecognized, <paramref name="request"/> names an unknown seed, or an EVM address doesn't match its seed's own derived address.</response>
+        /// <response code="400"><paramref name="network"/> is unrecognized, <paramref name="seedAddress"/> names an unknown seed, or an EVM address doesn't match its seed's own derived address.</response>
         /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
         /// <response code="403">The token lacks the <c>sign</c> claim.</response>
         /// <response code="409">
-        /// <paramref name="address"/> differs from the seed's derived address (an external/rekey scenario)
+        /// <c>request.Address</c> differs from the seed's derived address (an external/rekey scenario)
         /// but an on-chain check found it isn't currently rekeyed to that derived address - submit and
         /// confirm the on-chain rekey transaction first.
         /// </response>
         [AllowAnonymous]
         [RequiresBearerToken]
-        [HttpPost("{network}/{address}/activate")]
-        public async Task<IActionResult> ActivateAddress(string network, string address, [FromBody] ActivateAddressRequest request)
+        [HttpPost("{network}/{seedAddress}/{slot:int}/activate")]
+        public async Task<IActionResult> ActivateAddress(string network, string seedAddress, int slot, [FromBody] ActivateAddressRequest request)
         {
             var authError = TryAuthenticate(WalletScopes.Sign, out var principal);
             if (authError != null)
@@ -637,6 +697,12 @@ namespace BiatecOIDC.Controllers
                 return BadRequest(new ProblemDetails { Title = "unknown_network", Detail = $"Unknown network '{network}'." });
             }
 
+            if (string.IsNullOrWhiteSpace(request.Address))
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Address is required." });
+            }
+
+            var address = request.Address;
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
@@ -647,12 +713,12 @@ namespace BiatecOIDC.Controllers
                 if (resolvedNetwork.Family == ChainFamily.Avm)
                 {
                     derivedAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                        token => _accountRepository.DeriveAddressAsync(email, provider, request.SeedAddress, request.Slot, token));
+                        token => _accountRepository.DeriveAddressAsync(email, provider, seedAddress, slot, token));
                 }
                 else
                 {
                     derivedAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                        token => _accountRepository.DeriveEvmAddressAsync(email, provider, request.SeedAddress, request.Slot, token));
+                        token => _accountRepository.DeriveEvmAddressAsync(email, provider, seedAddress, slot, token));
                 }
 
                 if (!string.Equals(derivedAddress, address, StringComparison.Ordinal))
@@ -688,7 +754,7 @@ namespace BiatecOIDC.Controllers
                 }
 
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _addressActivationService.ActivateAsync(email, provider, token, address, resolvedNetwork.Family.ToString(), request.SeedAddress, request.Slot));
+                    token => _addressActivationService.ActivateAsync(email, provider, token, address, resolvedNetwork.Family.ToString(), seedAddress, slot));
 
                 return Ok(new AddressInfoResponse
                 {
@@ -696,8 +762,8 @@ namespace BiatecOIDC.Controllers
                     Network = network,
                     Family = resolvedNetwork.Family.ToString(),
                     IsActive = true,
-                    SeedAddress = request.SeedAddress,
-                    Slot = request.Slot
+                    SeedAddress = seedAddress,
+                    Slot = slot
                 });
             }
             catch (InvalidOperationException ex)

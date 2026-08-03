@@ -1081,7 +1081,7 @@ namespace BiatecOIDCTests
                 .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "SEED-ADDR", 3, It.IsAny<string?>()))
                 .ReturnsAsync("DERIVED-ADDR");
 
-            var result = await _controller.ActivateAddress(TestNetwork, "DERIVED-ADDR", new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 3 });
+            var result = await _controller.ActivateAddress(TestNetwork, "SEED-ADDR", 3, new ActivateAddressRequest { Address = "DERIVED-ADDR" });
 
             var okResult = result as OkObjectResult;
             Assert.That(okResult, Is.Not.Null);
@@ -1101,7 +1101,7 @@ namespace BiatecOIDCTests
                 .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "SEED-ADDR", 0, It.IsAny<string?>()))
                 .ReturnsAsync("0xDERIVED");
 
-            var result = await _controller.ActivateAddress("ethereum", "0xSOMEOTHERADDRESS", new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 0 });
+            var result = await _controller.ActivateAddress("ethereum", "SEED-ADDR", 0, new ActivateAddressRequest { Address = "0xSOMEOTHERADDRESS" });
 
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
             _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -1114,7 +1114,7 @@ namespace BiatecOIDCTests
             SetupValidToken("valid-token", new Claim("sign", "true"));
             _mockNetworkResolver.Setup(r => r.ResolveAsync("notanetwork", It.IsAny<CancellationToken>())).ReturnsAsync((ResolvedNetwork?)null);
 
-            var result = await _controller.ActivateAddress("notanetwork", TestAddress, new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 0 });
+            var result = await _controller.ActivateAddress("notanetwork", "SEED-ADDR", 0, new ActivateAddressRequest { Address = TestAddress });
 
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
         }
@@ -1128,9 +1128,22 @@ namespace BiatecOIDCTests
                 .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "NOTAREALSEED", 0, It.IsAny<string?>()))
                 .ThrowsAsync(new InvalidOperationException("No seed with address 'NOTAREALSEED' exists for this account."));
 
-            var result = await _controller.ActivateAddress(TestNetwork, TestAddress, new ActivateAddressRequest { SeedAddress = "NOTAREALSEED", Slot = 0 });
+            var result = await _controller.ActivateAddress(TestNetwork, "NOTAREALSEED", 0, new ActivateAddressRequest { Address = TestAddress });
 
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task ActivateAddress_MissingAddress_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+
+            var result = await _controller.ActivateAddress(TestNetwork, "SEED-ADDR", 0, new ActivateAddressRequest { Address = "" });
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
         }
 
         [Test]
@@ -1139,7 +1152,7 @@ namespace BiatecOIDCTests
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token");
 
-            var result = await _controller.ActivateAddress(TestNetwork, TestAddress, new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 0 });
+            var result = await _controller.ActivateAddress(TestNetwork, "SEED-ADDR", 0, new ActivateAddressRequest { Address = TestAddress });
 
             var objectResult = result as ObjectResult;
             Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
@@ -1148,7 +1161,44 @@ namespace BiatecOIDCTests
         [Test]
         public async Task ActivateAddress_NoBearerToken_ReturnsUnauthorized()
         {
-            var result = await _controller.ActivateAddress(TestNetwork, TestAddress, new ActivateAddressRequest { SeedAddress = "SEED-ADDR", Slot = 0 });
+            var result = await _controller.ActivateAddress(TestNetwork, "SEED-ADDR", 0, new ActivateAddressRequest { Address = TestAddress });
+
+            Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
+        }
+
+        // ───────────────────────── GET /wallet/active-addresses ─────────────────────────
+
+        [Test]
+        public async Task GetActiveAddresses_CombinesSeedsAndActivationRegistry()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new List<SeedSummary> { new("ADDR1", DateTimeOffset.UtcNow, true) });
+            _mockAddressActivationService
+                .Setup(s => s.ListAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new List<AddressActivationEntry>
+                {
+                    new() { Address = "0xEVM1", Family = "Evm", SeedAddress = "ADDR1", Slot = 0, ActivatedUtc = DateTimeOffset.UtcNow }
+                });
+
+            var result = await _controller.GetActiveAddresses();
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as ListActiveAddressesResponse;
+            Assert.That(response!.Addresses, Has.Count.EqualTo(2));
+            Assert.That(response.Addresses[0].Address, Is.EqualTo("ADDR1"));
+            Assert.That(response.Addresses[0].Family, Is.EqualTo("Avm"));
+            Assert.That(response.Addresses[1].Address, Is.EqualTo("0xEVM1"));
+            Assert.That(response.Addresses[1].Family, Is.EqualTo("Evm"));
+        }
+
+        [Test]
+        public async Task GetActiveAddresses_NoBearerToken_ReturnsUnauthorized()
+        {
+            var result = await _controller.GetActiveAddresses();
 
             Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
         }

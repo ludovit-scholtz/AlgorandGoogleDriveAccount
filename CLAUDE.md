@@ -72,18 +72,19 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — 16 MCP tools split into three chainable steps (build → sign → execute) rather than
+  - `MCP/BiatecMCP.cs` — 17 MCP tools split into three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast: `getAlgorandAddress`,
     `listAlgorandAddresses`, `getBridgeConfiguration`, `listSupportedNetworks`, `getCryptoAddress`,
-    `getCryptoBalance`, `getAddressInfo` (read-only - `getAddressInfo` and the three before it are
+    `getCryptoBalance`, `getAddressInfo`, `listActiveAddresses` (read-only - `getAddressInfo`/
+    `listActiveAddresses` and the four before them are
     chain-family-agnostic, see "EVM (Ethereum-family) support" below and "Address-centric wallet API and
     rekey support" in `BiatecOIDC`'s notes); `createPaymentTransaction`, `createOptInTransaction`,
     `createAssetCreateTransaction`,
     `createSwapTransaction`, `createBridgeTransaction` (a real [Aramid Finance](https://aramid.finance)
     bridge integration - see "Aramid bridge integration" below), `createMultisigTransaction` (build-only, no
-    `sign` claim needed - see "Multisig transactions" below); `activateCryptoAddress` (registers an
-    address → seed/slot pairing - the entry point for rekeying an external Algorand address to a
+    `sign` claim needed - see "Multisig transactions" below); `activateCryptoAddress` (registers a
+    seed/slot → address pairing - the entry point for rekeying an external Algorand address to a
     Biatec-controlled key, requires `sign`); `signTransaction` (standalone - forwards
     to BiatecOIDC's `POST /wallet/{network}/{address}/sign`, requires `sign`), `mergeMultisigTransactions`
     (combines independently-signed multisig copies, no BiatecOIDC/Algod call); `executeAlgorandTransaction`
@@ -94,8 +95,10 @@ dependency on `BiatecSelfCustodyCore`.
     server" under Architecture notes below for the full request flow. The `create*`/`getAlgorandAddress`
     tools accept optional `seedAddress`/`slot` parameters to build against/from a specific seed/ARC-76
     slot instead of the default identity (see BiatecOIDC's "Address-centric wallet API and rekey support"
-    note) - `signTransaction`, `getAddressInfo`, and `activateCryptoAddress` instead take the address itself,
-    matching BiatecOIDC's address-centric wallet route shape. Every `network` parameter across these tools
+    note) - `signTransaction` and `getAddressInfo` instead take the address itself, matching BiatecOIDC's
+    address-centric wallet route shape; `activateCryptoAddress` takes `seedAddress`/`slot` as required
+    parameters (route segments on the BiatecOIDC side) plus the `address` being activated (a body field on
+    the BiatecOIDC side). Every `network` parameter across these tools
     (renamed from `genesisId` for consistency with this address-centric surface) resolves against the
     dynamic, liveness-verified `IAlgorandChainRegistry` (see "Multi-chain support" below) when it isn't one
     of the locally-configured `Algod:Networks` entries.
@@ -103,7 +106,8 @@ dependency on `BiatecSelfCustodyCore`.
     `POST /wallet/{network}/{address}/sign`/`GET /wallet/seeds`/
     `GET /wallet/address/{seedAddress}/{slot}` (returns both the AVM and EVM address for that seed/slot in
     one call)/`GET /wallet/{network}/{address}/info`/
-    `POST /wallet/{network}/{address}/activate`, forwarding the caller's
+    `POST /wallet/{network}/{seedAddress}/{slot}/activate`/`GET /wallet/active-addresses`, forwarding the
+    caller's
     bearer token; `WalletApiException` carries BiatecOIDC's `ProblemDetails` title/detail back to the tool
   - `BusinessLogic/IDexQuoteProvider.cs` + `BiatecRouterQuoteProvider.cs`/`FolksRouterQuoteProvider.cs`/
     `HaystackRouterQuoteProvider.cs` + `DexSwapAggregatorService.cs` — `createSwapTransaction`'s quote
@@ -144,8 +148,10 @@ dependency on `BiatecSelfCustodyCore`.
     rekey transaction), `/wallet/limits` get (identity only)/put (`manage-limits` claim),
     `/wallet/{network}/{address}/limits` (same claims, per-address bucket),
     `/wallet/limits/currencies` (identity only), `/wallet/{network}/{address}/info` (identity only),
-    `/wallet/{network}/{address}/activate` (`sign` claim - the address activation registry, see
-    "Address-centric wallet API and rekey support" below), `/wallet/seeds` (identity only - lists every
+    `/wallet/{network}/{seedAddress}/{slot}/activate` (`sign` claim - `seedAddress`/`slot` are route
+    segments, the address being activated is a body field - see "Address-centric wallet API and rekey
+    support" below), `/wallet/active-addresses` (identity only - lists every currently-active address at
+    once), `/wallet/seeds` (identity only - lists every
     seed's address, replacing the removed `/wallet/address` list endpoint), `/wallet/address/{seedAddress}/{slot?}`
     (identity only - derives both the AVM and EVM address for a seed/slot in one call, replacing the removed
     per-family `/wallet/evm/address`/`/wallet/evm/address/{seedAddress}/{slot?}` endpoints, see "EVM
@@ -186,7 +192,7 @@ dependency on `BiatecSelfCustodyCore`.
     caching" architecture note below
   - `BusinessLogic/AddressActivationModels.cs`, `IAddressActivationService.cs`/`AddressActivationService.cs` —
     the address → `(seedAddress, slot)` activation registry backing `/wallet/{network}/{address}/info` and
-    `/wallet/{network}/{address}/activate`, AES-encrypted on the user's own Drive/OneDrive under its own
+    `/wallet/{network}/{seedAddress}/{slot}/activate`, AES-encrypted on the user's own Drive/OneDrive under its own
     `AddressActivations.%AESID%.dat` file (see "Address-centric wallet API and rekey support" below)
   - `BusinessLogic/INetworkResolver.cs`/`NetworkResolver.cs` — `BiatecOIDC`'s own lightweight `network`
     route-segment resolver (AVM via the existing `IAlgorandChainRegistry`, EVM as name-recognition-only, no
@@ -470,9 +476,11 @@ setup stage needs.
   `SubmitSignedTransactionsAsync` helper, also requiring `sign`. `mergeMultisigTransactions` combines
   independently-signed copies of a `createMultisigTransaction` envelope (no BiatecOIDC/Algod call - pure
   local combination via the Algorand4 SDK). `createBridgeTransaction` builds a real Aramid Finance bridge
-  transaction (see "Aramid bridge integration" below). `getAddressInfo(network, address)` and
-  `activateCryptoAddress(network, address, seedAddress, slot)` are thin wrappers over
-  `GET`/`POST /wallet/{network}/{address}/info`/`activate` — `activateCryptoAddress`'s own `[Description]`
+  transaction (see "Aramid bridge integration" below). `getAddressInfo(network, address)`,
+  `listActiveAddresses()`, and `activateCryptoAddress(network, seedAddress, slot, address)` are thin
+  wrappers over `GET /wallet/{network}/{address}/info`, `GET /wallet/active-addresses`, and
+  `POST /wallet/{network}/{seedAddress}/{slot}/activate` respectively — `activateCryptoAddress`'s own
+  `[Description]`
   spells out the full external-rekey flow end to end (mint a spare seed via the existing seed tools, submit
   and confirm the on-chain rekey transaction outside Biatec, then call this to register the pairing). Every
   tool's
@@ -646,6 +654,13 @@ setup stage needs.
   MSAL-flavored OIDC clients auto-append regardless of configuration) is silently dropped instead, since there's
   nothing to fix and failing login over library-injected noise would be worse. The actual grant is always visible
   in the token response's `scope` field.
+- **Swagger UI documentation**: `BiatecOIDC/Program.cs`'s `AddSwaggerGen` call reads
+  `OIDC_INTEGRATION_GUIDE.md` (copied to the output/publish directory by `BiatecOIDC.csproj`'s `<Content>`
+  item, since the Dockerfile's `dotnet publish` won't otherwise include a source-tree markdown file) at
+  startup and sets its full text as the generated OpenAPI document's `info.description` - Swagger UI renders
+  that as markdown at the very top of the page, above the endpoint list, so anyone browsing `/swagger`
+  directly gets the same integration guide developers read in the repo. Falls back to a short inline string
+  if the file is somehow missing rather than failing startup.
 - **Multi-address signing**: every signing identity is still, underneath, a `(seedAddress, slot)` pair —
   `seedAddress` selects *which seed* (its own identifying slot-0 address; `null`/omitted = the vault's
   current primary seed, byte-for-byte unchanged from before this existed), `slot` selects the ARC-76
@@ -679,13 +694,17 @@ setup stage needs.
   pending/inactive tri-state. Two paths populate it: (1) automatic — `GET /wallet/address/{seedAddress}/{slot?}`
   (which derives and activates both the AVM and EVM address for that seed/slot in one call) calls
   `ActivateAsync` for each right after deriving, so the common case (any slot, including EVM) needs no
-  manual step at all; (2) explicit — `POST /wallet/{network}/{address}/activate`
-  (`sign` claim, body `{SeedAddress, Slot}`), the entry point for **rekeying an external Algorand address to
-  a Biatec-controlled key**: if the derived address for that seed/slot doesn't already equal `address`, it's
+  manual step at all; (2) explicit — `POST /wallet/{network}/{seedAddress}/{slot}/activate` (`seedAddress`
+  and `slot` are route segments here, not body fields; `sign` claim, body `{Address}`), the entry point for
+  **rekeying an external Algorand address to a Biatec-controlled key**: if the derived address for that
+  seed/slot doesn't already equal the body's `Address`, it's
   only allowed for the AVM family, and is verified on-chain (`DefaultApi.AccountInformationAsync(address).AuthAddr`
   must equal the derived address) before anything is stored — 409 `rekey_not_confirmed` if the on-chain rekey
   hasn't actually happened yet. `GET /wallet/{network}/{address}/info` reports `{Address, Network, Family,
-  IsActive, SeedAddress?, Slot?}` for any address, active or not. `WalletController.SignTransactionGroup`
+  IsActive, SeedAddress?, Slot?}` for one address, active or not; `GET /wallet/active-addresses` reports
+  every currently-active address at once (`{Addresses: [{Address, Family, SeedAddress, Slot, ActivatedUtc}, ...]}`
+  — every seed's own slot-0 AVM address, whose `ActivatedUtc` is that seed's own `CreatedUtc`, concatenated
+  with every entry in the registry). `WalletController.SignTransactionGroup`
   resolves `{network}/{address}` to `(seedAddress, slot)` via this registry (checking each seed's own
   primary address first, for free, before ever touching the file) before calling the unchanged
   `WalletService.SignTransactionGroupAsync` — plus a defense-in-depth `sender_mismatch` check
@@ -702,8 +721,9 @@ setup stage needs.
   `GET /wallet/limits/currencies` (every currency a limit can be set in, with its current USD rate),
   `GET /wallet/address/{seedAddress}/{slot?}` (derives both the AVM and EVM address for that seed/slot in one
   call — see "EVM (Ethereum-family) support" below — this *derives from* a seed/slot, so there's no address
-  to substitute for what's being computed, and its route is unchanged), `GET /wallet/{network}/{address}/info`
-  and `POST /wallet/{network}/{address}/activate` (new — see above), and `GET`/`POST /wallet/seeds` +
+  to substitute for what's being computed, and its route is unchanged), `GET /wallet/{network}/{address}/info`,
+  `GET /wallet/active-addresses` (lists every currently-active address at once — see above), and
+  `POST /wallet/{network}/{seedAddress}/{slot}/activate` (see above), and `GET`/`POST /wallet/seeds` +
   `PUT /wallet/seeds/primary` (the multi-seed vault — see the bullet above; `GET /wallet/seeds` also replaces
   the removed `GET /wallet/address` list endpoint).
   `POST /wallet/{network}/{address}/sign` and
@@ -713,7 +733,7 @@ setup stage needs.
   the client's `AllowedScopes` allowlists it — existing clients don't get these implicitly; `GET /wallet/limits`,
   `GET /wallet/{network}/{address}/limits`, `GET /wallet/limits/currencies`, `GET /wallet/{network}/{address}/info`,
   and `GET /wallet/seeds` only require a validly authenticated caller (no
-  dedicated claim, since they're read-only). `POST /wallet/{network}/{address}/activate` requires `sign` (the
+  dedicated claim, since they're read-only). `POST /wallet/{network}/{seedAddress}/{slot}/activate` requires `sign` (the
   risky on-chain action has already happened by the time it's called). `POST /wallet/{network}/{address}/sign`
   additionally requires the stricter `rekey`
   claim — gated the same allowlist way — whenever the transaction group contains a transaction with Algorand's
@@ -829,7 +849,7 @@ setup stage needs.
   the two full guide docs above when working on `/authorize`, `/token`, `/register`, `/userinfo`, `/introspect`,
   `/verify`, `/connect/endsession`, `/logout`, `/wallet/{network}/{address}/sign`, `/wallet/limits`,
   `/wallet/{network}/{address}/limits`, `/wallet/limits/currencies`, `/wallet/{network}/{address}/info`,
-  `/wallet/{network}/{address}/activate`,
+  `/wallet/{network}/{seedAddress}/{slot}/activate`,
   `JwtIssuerService.cs`, `JwtIssuerController.cs`, `WalletController.cs`, `WalletService.cs`,
   `SpendingLimitService.cs`, `AddressActivationService.cs`, `NetworkResolver.cs`,
   `ProviderAccessTokenProtector.cs`, `BiatecRouterValuationService.cs`,

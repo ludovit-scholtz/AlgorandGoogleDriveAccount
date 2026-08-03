@@ -66,11 +66,13 @@ Wallet operations are three separate, chainable steps — **build** an unsigned 
 BiatecOIDC or the network; only `signTransaction`, `activateCryptoAddress`, and `executeAlgorandTransaction`
 require the `sign` scope.
 Every tool's own description tells the connected AI assistant which tool to call next, so a plain "pay X"
-request is handled as three chained tool calls automatically. `signTransaction`, `getAddressInfo`, and
-`activateCryptoAddress` all take the address itself (rather than `seedAddress`/`slot`), matching BiatecOIDC's
+request is handled as three chained tool calls automatically. `signTransaction` and `getAddressInfo` take the
+address itself (rather than `seedAddress`/`slot`), matching BiatecOIDC's
 address-centric wallet route shape (`/wallet/{network}/{address}/sign`, etc.) — the `create*` tools and
 `getAlgorandAddress` still take the optional `seedAddress`/`slot` pair to *build*/*derive* against a specific
 seed/slot, since that's a different concern (choosing which identity produces the address/transaction).
+`activateCryptoAddress` takes `seedAddress`/`slot` as required parameters (matching BiatecOIDC's
+`POST /wallet/{network}/{seedAddress}/{slot}/activate` route shape) plus the address being activated.
 
 - **`getAlgorandAddress`** — returns an Algorand address for the signed-in account. With no arguments, returns the
   default identity (from the bearer token's own `algorand_address` claim, falling back to the primary seed from
@@ -83,14 +85,18 @@ seed/slot, since that's a different concern (choosing which identity produces th
 - **`getAddressInfo`** — reports whether a given `(network, address)` is currently active (resolvable to a
   signing seed/slot), and if so, which `seedAddress`/`slot` backs it. No authentication beyond a valid
   bearer token required.
-- **`activateCryptoAddress`** — registers an address → `(seedAddress, slot)` pairing, requires the `sign`
+- **`listActiveAddresses`** — lists every address currently resolvable to a signing seed/slot in one call:
+  every seed's own slot-0 Algorand address (active implicitly) plus every explicitly-activated address (any
+  non-zero AVM slot, every EVM address, and any externally-rekeyed AVM address registered via
+  `activateCryptoAddress`). No authentication beyond a valid bearer token required.
+- **`activateCryptoAddress`** — registers a `(seedAddress, slot)` → address pairing, requires the `sign`
   scope. If the address already matches what that seed/slot derives to, this is just an explicit alternative
   to the automatic registration `getAlgorandAddress`/`getCryptoAddress` already do. The important case is
   **rekeying an external Algorand address to a Biatec-controlled key**: mint a spare seed (ask for a new seed
   via BiatecOIDC's `/wallet/seeds`), submit and confirm an on-chain transaction that sets that external
   address's `rekey` field to the new seed's address (via `signTransaction` with a `rekey`-scoped token, signed
-  by the *existing* key), then call `activateCryptoAddress` with the external address and the new seed's
-  `seedAddress`/`slot` — BiatecOIDC verifies the on-chain rekey before registering it, and only then does
+  by the *existing* key), then call `activateCryptoAddress` with the new seed's `seedAddress`/`slot` and the
+  external address — BiatecOIDC verifies the on-chain rekey before registering it, and only then does
   `signTransaction` start working for that address under the new key.
 - **`listSupportedNetworks`** — lists every blockchain network currently usable with `getCryptoAddress`/
   `getCryptoBalance`: every live Algorand-family chain, plus a few well-known Ethereum-family chains
@@ -191,8 +197,9 @@ seed/slot, since that's a different concern (choosing which identity produces th
   address="<Sender>")` → `executeAlgorandTransaction`.
 - *"is my address ABCD...WXYZ active"* → `getAddressInfo(network="algorand", address="ABCD...WXYZ")`.
 - *"I rekeyed ABCD...WXYZ on-chain to my new seed EFGH...ADDR at slot 0 — register it"* →
-  `activateCryptoAddress(network="algorand", address="ABCD...WXYZ", seedAddress="EFGH...ADDR", slot=0)` —
+  `activateCryptoAddress(network="algorand", seedAddress="EFGH...ADDR", slot=0, address="ABCD...WXYZ")` —
   now `signTransaction(..., network="algorand", address="ABCD...WXYZ")` signs with the new key.
+- *"what addresses can I currently sign with"* → `listActiveAddresses()`.
 - *"send 1 ETH from my ethereum address to 0x13f0...999c"* → `getCryptoAddress(network="Ethereum")` for the
   sender, then build the unsigned transaction JSON yourself (nonce/gas price from a public RPC or
   `getCryptoBalance`) and call `signTransaction(unsignedTransactions=['<base64 JSON>'], network="ethereum",

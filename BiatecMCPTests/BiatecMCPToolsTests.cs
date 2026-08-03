@@ -370,10 +370,10 @@ namespace BiatecMCPTests
             SetClaims();
             SetBearerToken("tok");
 
-            var result = await CreateTool().ActivateCryptoAddress("algorand", "ADDR1", "SEED1", 0);
+            var result = await CreateTool().ActivateCryptoAddress("algorand", "SEED1", 0, "ADDR1");
 
             Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
-            _walletClient.Verify(c => c.ActivateAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            _walletClient.Verify(c => c.ActivateAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -382,10 +382,10 @@ namespace BiatecMCPTests
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
             _walletClient
-                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "ADDR1", "SEED1", 3, It.IsAny<CancellationToken>()))
+                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "SEED1", 3, "ADDR1", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true });
 
-            var result = await CreateTool().ActivateCryptoAddress("algorand", "ADDR1", "SEED1", 3);
+            var result = await CreateTool().ActivateCryptoAddress("algorand", "SEED1", 3, "ADDR1");
 
             Assert.That(result.IsActive, Is.True);
             Assert.That(result.Error, Is.Empty);
@@ -397,10 +397,10 @@ namespace BiatecMCPTests
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
             _walletClient
-                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "ADDR1", "SEED1", 0, It.IsAny<CancellationToken>()))
+                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "SEED1", 0, "ADDR1", It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new WalletApiException(409, "rekey_not_confirmed", "Not yet rekeyed on-chain."));
 
-            var result = await CreateTool().ActivateCryptoAddress("algorand", "ADDR1", "SEED1");
+            var result = await CreateTool().ActivateCryptoAddress("algorand", "SEED1", 0, "ADDR1");
 
             Assert.That(result.ErrorType, Is.EqualTo("rekey_not_confirmed"));
         }
