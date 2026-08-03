@@ -82,6 +82,50 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task GetAccountAddress_PrimarySeedAddressClaimStale_FallsBackToLiveSeedList()
+        {
+            // Regression coverage: primary_seed_address is captured once at token issuance and carried
+            // forward unchanged across refreshes, so a long-lived token can end up caching a seed
+            // selector that no longer resolves (BiatecOIDC returns a "seed_not_found" ProblemDetails).
+            // The tool must self-heal via GET /wallet/seeds instead of surfacing that error outright.
+            SetClaims(new Claim("primary_seed_address", "STALESEED"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "STALESEED", 0, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new WalletApiException(400, "seed_not_found", "No seed with address 'STALESEED' exists for this account."));
+            _walletClient
+                .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ListSeedsResponse { Seeds = { new SeedResponse { Address = "REALPRIMARY", IsPrimary = true } } });
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "REALPRIMARY", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "REALADDRESS", SeedAddress = "REALPRIMARY", Slot = 0 });
+
+            var result = await CreateTool().GetAccountAddress();
+
+            Assert.That(result.Address, Is.EqualTo("REALADDRESS"));
+            Assert.That(result.Error, Is.Empty);
+        }
+
+        [Test]
+        public async Task GetAccountAddress_ExplicitSeedAddressNotFound_DoesNotFallBackAndSurfacesError()
+        {
+            // Unlike a claim-derived selector, a caller-supplied seedAddress was named on purpose - a
+            // real "no such seed" for it must stay a clear error, never silently swapped for a
+            // different seed's address.
+            SetClaims();
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "NOTAREALSEED", 0, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new WalletApiException(400, "seed_not_found", "No seed with address 'NOTAREALSEED' exists for this account."));
+
+            var result = await CreateTool().GetAccountAddress(seedAddress: "NOTAREALSEED");
+
+            Assert.That(result.Address, Is.Empty);
+            Assert.That(result.Error, Does.Contain("NOTAREALSEED"));
+            _walletClient.Verify(c => c.ListSeedsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
         public async Task GetAccountAddress_NoClaim_FallsBackToPrimarySeedFromWalletApi()
         {
             SetClaims(); // no primary_seed_address claim

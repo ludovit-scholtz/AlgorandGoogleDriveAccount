@@ -1558,21 +1558,35 @@ namespace BiatecMCP.MCP
         {
             var token = bearerToken ?? GetBearerToken();
 
+            var explicitSeedAddress = seedAddress;
             seedAddress ??= _httpContextAccessor.HttpContext?.User?.FindFirstValue("primary_seed_address");
 
-            if (seedAddress == null)
+            if (seedAddress != null)
             {
-                var seeds = await _walletClient.ListSeedsAsync(token);
-                var primary = seeds.Seeds.FirstOrDefault(s => s.IsPrimary) ?? seeds.Seeds.FirstOrDefault();
-                if (primary == null)
+                try
                 {
-                    return null;
+                    return await _walletClient.GetAddressAsync(token, seedAddress, slot);
                 }
-
-                seedAddress = primary.Address;
+                catch (WalletApiException ex) when (ex.ErrorCode == "seed_not_found" && explicitSeedAddress == null)
+                {
+                    // The bearer token's own primary_seed_address claim is captured once at issuance and
+                    // carried forward unchanged across refreshes (see JwtIssuerService's refresh_token
+                    // handling) - a long-lived token can therefore end up caching a seed selector that no
+                    // longer resolves (e.g. a refresh token minted before this account's vault existed in
+                    // its current form). Self-heal by falling back to the account's live seed list instead
+                    // of failing outright. A *caller*-supplied seedAddress is never second-guessed this way
+                    // - the caller named that seed on purpose, so a real "no such seed" stays an error.
+                }
             }
 
-            return await _walletClient.GetAddressAsync(token, seedAddress, slot);
+            var seeds = await _walletClient.ListSeedsAsync(token);
+            var primary = seeds.Seeds.FirstOrDefault(s => s.IsPrimary) ?? seeds.Seeds.FirstOrDefault();
+            if (primary == null)
+            {
+                return null;
+            }
+
+            return await _walletClient.GetAddressAsync(token, primary.Address, slot);
         }
 
         /// <summary>
