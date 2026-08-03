@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: biatec-mcp-stage-app
-          image: scholtz2/biatec-mcp:1.2026.08.02-main
+          image: scholtz2/biatec-mcp:1.2026.08.03-main
           imagePullPolicy: Always
           resources:
             requests:
