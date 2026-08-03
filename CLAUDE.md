@@ -346,6 +346,23 @@ setup stage needs.
   rotation" below for the `%AESID%` placeholder) in the user's own Google Drive folder or OneDrive app folder,
   depending which provider they signed in with. Biatec servers only decrypt in-memory during an explicitly
   authorized signing operation — never persist plaintext keys.
+- **ARC-76 package provenance**: the actual ARC-76 (deterministic, password/email-derived account)
+  derivation lives in two small third-party packages, `ARC76Account.Algorand` and `ARC76Account.Ethereum`
+  (`BiatecSelfCustodyCore.csproj`) - successors to the now-retired single-package `AlgorandARC76Account` this
+  repo used before, split per chain family (a shared `ARC76Account.Core` package is a transitive dependency
+  of both, never referenced directly here). Both expose a type named `ARC76` with a `GetEmailAccount(email,
+  mnemonic, slot)` method - same method name in both, disambiguated only by namespace, so
+  `CloudAccountRepository.cs` aliases them (`using AlgorandArc76 = ARC76Account.Algorand.ARC76;` /
+  `using EthereumArc76 = ARC76Account.Ethereum.ARC76;`) rather than importing both namespaces unqualified.
+  `ARC76Account.Algorand.ARC76.GetEmailAccount` returns an Algorand4 SDK `Account` (identical to the
+  predecessor package's `GetEmailAccount`); `ARC76Account.Ethereum.ARC76.GetEmailAccount` returns a
+  `Nethereum.Signer.EthECKey` (identical to the predecessor's `GetEVMEmailAccount`, just renamed since it's
+  no longer sharing a type with the Algorand method). `ARC76Account.Ethereum` depends on `Nethereum.Signer`
+  6.1.0 (up from the ~5.0.0 the predecessor package resolved), which transitively bumps
+  `Nethereum.Model`/`Nethereum.RLP`/`Nethereum.Hex`/`Nethereum.Util` too - verified compatible with every
+  `Nethereum.Model`/`Nethereum.Signer` API `DriveService.SignEvmTransactionAsync` (see "EVM transaction
+  signing" below) depends on before switching, and confirmed by that feature's own real
+  sign-then-recover-sender round-trip tests (`DriveServiceTests`) passing unchanged after the bump.
 - **Multi-seed vault and on-chain rekey**: the account file's decrypted content is a `SeedVault`
   (`BiatecSelfCustodyCore.Model`) — a list of independently-generated `SeedVaultEntry` seeds, each identified
   by its own ARC-76 slot-0 address (`SeedAddress`), with exactly one flagged `IsPrimary` at a time.
@@ -538,13 +555,18 @@ setup stage needs.
   auth token/header (`AlgodApiToken`/`AlgodApiTokenHeader`), unlike `BiatecMCP`'s internal copy which needs
   them to actually call the node.
 - **EVM (Ethereum-family) support**: every Biatec seed already has an Ethereum-family identity, not just an
-  Algorand one - `AlgorandARC76AccountDotNet.ARC76.GetEVMEmailAccount(email, mnemonic, slot)` derives an
-  independent secp256k1 keypair (`Nethereum.Signer.EthECKey`, already transitively available - no new
-  package reference needed) from the exact same mnemonic/email/slot `ARC76.GetEmailAccount` uses for
-  Algorand. No new seed, consent flow, or storage format was needed; `CloudAccountRepository`/
+  Algorand one - `ARC76Account.Ethereum.ARC76.GetEmailAccount(email, mnemonic, slot)` derives an
+  independent secp256k1 keypair (`Nethereum.Signer.EthECKey`, already transitively available via the
+  `ARC76Account.Ethereum` package - no separate Nethereum package reference needed) from the exact same
+  mnemonic/email/slot `ARC76Account.Algorand.ARC76.GetEmailAccount` uses for
+  Algorand - both packages expose the same method name (`GetEmailAccount`), disambiguated by namespace
+  (`AlgorandArc76`/`EthereumArc76` aliases in `CloudAccountRepository.cs`), not by name (the predecessor,
+  now-retired `AlgorandARC76Account` package, had them as `GetEmailAccount`/`GetEVMEmailAccount` on one
+  shared type instead - see "ARC-76 package provenance" above for the full split-package migration).
+  No new seed, consent flow, or storage format was needed; `CloudAccountRepository`/
   `ICloudAccountRepository` (`BiatecSelfCustodyCore`) just gained `DeriveEvmAddressAsync`, mirroring
   `DeriveAddressAsync` exactly (same `ResolveSeedEntryAsync` seed lookup) but calling
-  `.GetEVMEmailAccount(...).GetPublicAddress()` instead. `WalletController` exposes this via the same
+  `EthereumArc76.GetEmailAccount(...).GetPublicAddress()` instead. `WalletController` exposes this via the same
   `GET /wallet/address/{seedAddress}/{slot?}` endpoint the AVM address uses - one call derives and returns
   both - there is deliberately no per-EVM-chain concept at this layer, since one EVM address is valid
   across every EVM chain (unlike Algorand's per-`genesisId` split), so **`BiatecOIDC` has no EVM chain

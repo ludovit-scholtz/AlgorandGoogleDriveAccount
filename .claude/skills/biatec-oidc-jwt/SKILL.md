@@ -231,8 +231,9 @@ Signs an unsigned EVM (Ethereum-family) transaction with the same seed `POST /wa
 resolved a signer for - built the same way `SignTransactionAsync` signs Algorand transactions (resolve the
 seed, derive the key, sign, discard the key), just via `Nethereum.Model`/`Nethereum.Signer` instead of the
 Algorand4 SDK. `ICloudAccountRepository.LoadEvmAccountAsync` (mirrors `LoadAccountAsync`) derives the signing
-key - a `Nethereum.Signer.EthECKey` - via `ARC76.GetEVMEmailAccount`, the same seed mnemonic `DeriveEvmAddressAsync`
-already uses.
+key - a `Nethereum.Signer.EthECKey` - via `ARC76Account.Ethereum.ARC76.GetEmailAccount`, the same seed
+mnemonic `DeriveEvmAddressAsync` already uses (see `CLAUDE.md`'s "ARC-76 package provenance" note for why
+this is a namespace-qualified call, not a differently-named method).
 
 The transaction itself is a **field struct** (`BiatecSelfCustodyCore.Model.EvmUnsignedTransaction` -
 `ChainId`/`Nonce`/`To`/`Value`/`Data`/`GasLimit` plus either `GasPrice` for legacy or `MaxFeePerGas`+

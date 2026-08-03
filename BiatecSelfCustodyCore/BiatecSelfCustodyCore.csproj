@@ -12,7 +12,11 @@
 
   <ItemGroup>
     <PackageReference Include="Algorand4" Version="4.7.4.2026071920" />
-    <PackageReference Include="AlgorandARC76Account" Version="1.1.0" />
+    <!-- Successor to the retired AlgorandARC76Account package - split per chain family (this repo only
+         needs the Algorand and Ethereum derivations; ARC76Account.Core is a shared transitive dependency
+         of both, never referenced directly here). -->
+    <PackageReference Include="ARC76Account.Algorand" Version="1.0.1.2026080317" />
+    <PackageReference Include="ARC76Account.Ethereum" Version="1.0.1.2026080317" />
     <PackageReference Include="Google.Apis.Auth" Version="1.75.0" />
     <PackageReference Include="Google.Apis.Auth.AspNetCore3" Version="1.75.0" />
     <PackageReference Include="Google.Apis.Drive.v3" Version="1.75.0.4210" />

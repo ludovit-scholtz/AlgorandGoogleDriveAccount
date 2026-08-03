@@ -202,8 +202,8 @@ individual participant's own key, not the multisig group's address.
 ## EVM (Ethereum-family) support
 
 Every account already has an Ethereum-family identity, not just an Algorand one - the same underlying seed
-derives both, via the `AlgorandARC76Account` package's `ARC76.GetEVMEmailAccount` (the Ethereum-family
-counterpart of `ARC76.GetEmailAccount`). No new consent flow or storage format was needed for this. Unlike
+derives both, via the `ARC76Account.Ethereum` package's `ARC76.GetEmailAccount` (the Ethereum-family
+counterpart of the `ARC76Account.Algorand` package's own `ARC76.GetEmailAccount`). No new consent flow or storage format was needed for this. Unlike
 Algorand's `genesisId`-per-network split, there is **no per-EVM-chain concept at this API layer** - one EVM
 address (per seed/slot) is valid across every EVM chain (Ethereum, Gnosis, Arbitrum, Base, ...), so
 `GET /wallet/address/{seedAddress}/{slot?}` (above) - which derives both the AVM and EVM address for a

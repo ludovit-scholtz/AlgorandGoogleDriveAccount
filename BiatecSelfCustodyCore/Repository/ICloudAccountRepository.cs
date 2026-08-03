@@ -53,7 +53,8 @@ namespace BiatecSelfCustodyCore.Repository
         /// <summary>
         /// Loads the EVM (Ethereum-family) signing key for <paramref name="email"/>/<paramref name="slot"/> -
         /// the same seed mnemonic <see cref="LoadAccountAsync"/> derives the Algorand key from, just via
-        /// <c>ARC76.GetEVMEmailAccount</c> instead of <c>ARC76.GetEmailAccount</c>. Mirrors
+        /// <c>ARC76Account.Ethereum.ARC76.GetEmailAccount</c> instead of
+        /// <c>ARC76Account.Algorand.ARC76.GetEmailAccount</c>. Mirrors
         /// <see cref="LoadAccountAsync"/>'s exact seed-resolution/error semantics - callers use the
         /// returned <see cref="EthECKey"/> to sign immediately and let it go out of scope; never persisted,
         /// never logged.
@@ -72,7 +73,8 @@ namespace BiatecSelfCustodyCore.Repository
         /// Derives (without signing or mutating anything) the EVM address at <paramref name="slot"/> for the
         /// seed identified by <paramref name="seedAddress"/> (<c>null</c> = the vault's current primary
         /// seed) - the same mnemonic used for <see cref="DeriveAddressAsync"/>, just derived via
-        /// <c>ARC76.GetEVMEmailAccount</c> instead of <c>ARC76.GetEmailAccount</c>, so every existing seed
+        /// <c>ARC76Account.Ethereum.ARC76.GetEmailAccount</c> instead of
+        /// <c>ARC76Account.Algorand.ARC76.GetEmailAccount</c>, so every existing seed
         /// already has an EVM identity without any new consent flow or storage format. Throws
         /// <see cref="InvalidOperationException"/> if <paramref name="seedAddress"/> is given but no seed
         /// in the vault has that address.

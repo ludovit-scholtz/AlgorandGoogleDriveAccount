@@ -8,6 +8,8 @@ using BiatecSelfCustodyCore.Providers;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using AlgorandArc76 = ARC76Account.Algorand.ARC76;
+using EthereumArc76 = ARC76Account.Ethereum.ARC76;
 
 namespace BiatecSelfCustodyCore.Repository
 {
@@ -62,7 +64,7 @@ namespace BiatecSelfCustodyCore.Repository
                 var context = await ResolveContextAsync(storageProvider, accessToken);
                 var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
-                return AlgorandARC76AccountDotNet.ARC76.GetEmailAccount(email, seed.Mnemonic, slot);
+                return AlgorandArc76.GetEmailAccount(email, seed.Mnemonic, slot);
             }
             catch (UnauthorizedAccessException)
             {
@@ -92,7 +94,7 @@ namespace BiatecSelfCustodyCore.Repository
                 var context = await ResolveContextAsync(storageProvider, accessToken);
                 var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
-                return AlgorandARC76AccountDotNet.ARC76.GetEVMEmailAccount(email, seed.Mnemonic, slot);
+                return EthereumArc76.GetEmailAccount(email, seed.Mnemonic, slot);
             }
             catch (UnauthorizedAccessException)
             {
@@ -122,7 +124,7 @@ namespace BiatecSelfCustodyCore.Repository
                 var context = await ResolveContextAsync(storageProvider, accessToken);
                 var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
-                return AlgorandARC76AccountDotNet.ARC76.GetEmailAccount(email, seed.Mnemonic, slot).Address.EncodeAsString();
+                return AlgorandArc76.GetEmailAccount(email, seed.Mnemonic, slot).Address.EncodeAsString();
             }
             catch (UnauthorizedAccessException)
             {
@@ -152,7 +154,7 @@ namespace BiatecSelfCustodyCore.Repository
                 var context = await ResolveContextAsync(storageProvider, accessToken);
                 var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
-                return AlgorandARC76AccountDotNet.ARC76.GetEVMEmailAccount(email, seed.Mnemonic, slot).GetPublicAddress();
+                return EthereumArc76.GetEmailAccount(email, seed.Mnemonic, slot).GetPublicAddress();
             }
             catch (UnauthorizedAccessException)
             {
@@ -488,7 +490,7 @@ namespace BiatecSelfCustodyCore.Repository
 
         private static SeedVaultEntry BuildSeedEntry(string email, string mnemonic, bool isPrimary)
         {
-            var address = AlgorandARC76AccountDotNet.ARC76.GetEmailAccount(email, mnemonic, slot: 0).Address.EncodeAsString();
+            var address = AlgorandArc76.GetEmailAccount(email, mnemonic, slot: 0).Address.EncodeAsString();
             return new SeedVaultEntry
             {
                 Mnemonic = mnemonic,
