@@ -20,6 +20,20 @@ namespace BiatecSelfCustodyCore.BusinessLogic
         /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
         Task<byte[]> SignEvmTransactionAsync(string email, EvmUnsignedTransaction transaction, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0);
 
+        /// <summary>
+        /// Signs an unsigned Bitcoin or Bitcoin Cash transaction (<paramref name="family"/> selects which -
+        /// same key material either way, see <c>ICloudAccountRepository.LoadBitcoinKeyAsync</c>, but a
+        /// different sighash algorithm: BIP143 for Bitcoin, replay-protected SIGHASH_FORKID for Bitcoin
+        /// Cash, both via <c>NBitcoin</c>/<c>NBitcoin.Altcoins</c>). Every input in
+        /// <paramref name="transaction"/> is assumed to belong to this seed/slot's own address (this wallet
+        /// never co-signs someone else's UTXO) - its scriptPubKey is reconstructed from the derived address
+        /// rather than trusted from the wire. Returns the fully-signed transaction's raw bytes, ready to
+        /// broadcast.
+        /// </summary>
+        /// <param name="seedAddress">Selects which seed to sign with (<c>null</c> = the vault's current primary seed).</param>
+        /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
+        Task<byte[]> SignBitcoinTransactionAsync(string email, BitcoinChainFamily family, BitcoinUnsignedTransaction transaction, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0);
+
         /// <param name="seedAddress">Selects which seed to read (<c>null</c> = the vault's current primary seed).</param>
         /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
         Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0);

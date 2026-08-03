@@ -3,6 +3,8 @@ using Algorand.Algod.Model.Transactions;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Logging;
+using NBitcoin;
+using NBitcoin.Altcoins;
 using Nethereum.Signer;
 using EvmAccessListItem = Nethereum.Model.AccessListItem;
 using EvmISignedTransaction = Nethereum.Model.ISignedTransaction;
@@ -67,7 +69,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
                 try
                 {
                     // Try to decode as unsigned transaction
-                    var txObj = Algorand.Utils.Encoder.DecodeFromMsgPack<Transaction>(txMsgPack);
+                    var txObj = Algorand.Utils.Encoder.DecodeFromMsgPack<Algorand.Algod.Model.Transactions.Transaction>(txMsgPack);
                     if (txObj == null)
                     {
                         throw new Exception("Unable to parse data as Transaction nor SignedTransaction");
@@ -150,6 +152,56 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             _logger?.LogInformation($"EvmAccountSign:{key.GetPublicAddress()}");
             signedTransaction.SetSignature(new EvmSignature(signature.R, signature.S, signature.V));
             return signedTransaction.GetRLPEncoded();
+        }
+
+        public async Task<byte[]> SignBitcoinTransactionAsync(string email, BitcoinChainFamily family, BitcoinUnsignedTransaction transaction, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)
+        {
+            if (string.IsNullOrEmpty(email))
+            {
+                throw new ArgumentException("Email is required", nameof(email));
+            }
+
+            if (transaction == null || transaction.Inputs.Count == 0)
+            {
+                throw new ArgumentException("At least one input is required", nameof(transaction));
+            }
+
+            var key = await _cloudAccountRepository.LoadBitcoinKeyAsync(email, slot, provider, accessToken, seedAddress);
+            var network = family == BitcoinChainFamily.Bitcoin ? Network.Main : (Network)BCash.Instance.Mainnet;
+            var myAddress = family == BitcoinChainFamily.Bitcoin
+                ? key.PubKey.GetAddress(ScriptPubKeyType.Segwit, network)
+                : (BitcoinAddress)key.PubKey.Hash.GetAddress(network);
+
+            try
+            {
+                var unsignedTx = network.CreateTransaction();
+                var coins = new List<Coin>();
+                foreach (var input in transaction.Inputs)
+                {
+                    var outPoint = new OutPoint(uint256.Parse(input.TxId), input.Vout);
+                    unsignedTx.Inputs.Add(new TxIn(outPoint));
+                    coins.Add(new Coin(outPoint, new TxOut(Money.Satoshis(input.AmountSatoshis), myAddress.ScriptPubKey)));
+                }
+
+                foreach (var output in transaction.Outputs)
+                {
+                    var destination = BitcoinAddress.Create(output.Address, network);
+                    unsignedTx.Outputs.Add(new TxOut(Money.Satoshis(output.AmountSatoshis), destination));
+                }
+
+                var builder = network.CreateTransactionBuilder();
+                builder.AddCoins(coins);
+                builder.AddKeys(key);
+                var signedTx = builder.SignTransactionInPlace(unsignedTx);
+
+                _logger?.LogInformation($"BitcoinAccountSign:{family}:{myAddress}");
+                return signedTx.ToBytes();
+            }
+            catch (Exception exc) when (exc is not ArgumentException)
+            {
+                _logger?.LogDebug(exc, "Failed to build/sign a Bitcoin-family transaction.");
+                throw new FormatException("Unable to parse or sign Bitcoin-family transaction data.", exc);
+            }
         }
 
         public async Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)

@@ -4,6 +4,7 @@ using Algorand.Algod.Model.Transactions;
 using Algorand.Utils;
 using BiatecOIDC.BusinessLogic;
 using BiatecSelfCustodyCore.BusinessLogic;
+using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -21,6 +22,7 @@ namespace BiatecOIDCTests
         private Mock<IDriveService> _mockDriveService = null!;
         private Mock<ISpendingLimitService> _mockSpendingLimitService = null!;
         private Mock<IAssetValuationService> _mockValuationService = null!;
+        private Mock<IBitcoinValuationService> _mockBitcoinValuationService = null!;
         private Mock<ICloudAccountRepository> _mockAccountRepository = null!;
         private WalletService _service = null!;
 
@@ -30,8 +32,9 @@ namespace BiatecOIDCTests
             _mockDriveService = new Mock<IDriveService>();
             _mockSpendingLimitService = new Mock<ISpendingLimitService>();
             _mockValuationService = new Mock<IAssetValuationService>();
+            _mockBitcoinValuationService = new Mock<IBitcoinValuationService>();
             _mockAccountRepository = new Mock<ICloudAccountRepository>();
-            _service = new WalletService(_mockDriveService.Object, _mockSpendingLimitService.Object, _mockValuationService.Object, _mockAccountRepository.Object, new Mock<ILogger<WalletService>>().Object);
+            _service = new WalletService(_mockDriveService.Object, _mockSpendingLimitService.Object, _mockValuationService.Object, _mockBitcoinValuationService.Object, _mockAccountRepository.Object, new Mock<ILogger<WalletService>>().Object);
 
             _mockAccountRepository
                 .Setup(r => r.ResolveSeedAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()))
@@ -261,6 +264,76 @@ namespace BiatecOIDCTests
         {
             Assert.ThrowsAsync<ArgumentException>(
                 async () => await _service.SignTransactionGroupAsync(string.Empty, TestProvider, new[] { BuildPayment(1) }, null));
+        }
+
+        // ───────────────────────── SignBitcoinTransactionGroupAsync ─────────────────────────
+
+        private static BitcoinUnsignedTransaction BuildBitcoinTransaction(long spendSatoshis, long changeSatoshis = 0) => new()
+        {
+            Inputs = { new BitcoinUtxoInput { TxId = new string('a', 64), Vout = 0, AmountSatoshis = spendSatoshis + changeSatoshis + 200 } },
+            Outputs =
+            {
+                new BitcoinTransactionOutput { Address = "bc1qreceiver", AmountSatoshis = spendSatoshis },
+                new BitcoinTransactionOutput { Address = "bc1qsender", AmountSatoshis = changeSatoshis, IsChange = true }
+            }
+        };
+
+        [Test]
+        public async Task SignBitcoinTransactionGroupAsync_WithinLimit_SignsAndRecordsSpend()
+        {
+            var tx = BuildBitcoinTransaction(spendSatoshis: 500_000, changeSatoshis: 100_000);
+            _mockBitcoinValuationService
+                .Setup(v => v.GetUsdValueAsync(BitcoinChainFamily.Bitcoin, 500_000, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(25_000m);
+            _mockDriveService
+                .Setup(d => d.SignBitcoinTransactionAsync(TestEmail, BitcoinChainFamily.Bitcoin, tx, TestProvider, It.IsAny<string?>(), ResolvedAddress, 0))
+                .ReturnsAsync(new byte[] { 9, 9, 9 });
+
+            var result = await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, tx, "access-token");
+
+            Assert.That(result, Is.EqualTo(new byte[] { 9, 9, 9 }));
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, "access-token", 25_000m, ResolvedAddress, 0, It.IsAny<CancellationToken>()), Times.Once);
+            _mockSpendingLimitService.Verify(s => s.RecordSpendAsync(
+                TestEmail, TestProvider, "access-token",
+                It.Is<IReadOnlyList<SpendingLedgerEntry>>(entries => entries.Count == 1 && entries[0].AmountUsd == 25_000m),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task SignBitcoinTransactionGroupAsync_ExcludesChangeOutputFromValuation()
+        {
+            var tx = BuildBitcoinTransaction(spendSatoshis: 500_000, changeSatoshis: 400_000);
+
+            await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, tx, null);
+
+            // Only the non-change output (500,000 sats) is priced - the 400,000-sat change output stays in
+            // the sender's own wallet and was never actually spent.
+            _mockBitcoinValuationService.Verify(v => v.GetUsdValueAsync(BitcoinChainFamily.Bitcoin, 500_000, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public void SignBitcoinTransactionGroupAsync_ExceedsLimit_ThrowsAndNeverSignsOrRecords()
+        {
+            var tx = BuildBitcoinTransaction(spendSatoshis: 500_000);
+            _mockBitcoinValuationService
+                .Setup(v => v.GetUsdValueAsync(BitcoinChainFamily.Bitcoin, 500_000, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(25_000m);
+            _mockSpendingLimitService
+                .Setup(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 25_000m, ResolvedAddress, 0, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new SpendingLimitExceededException("global-daily", 25_000m, 10_000m, "USD"));
+
+            Assert.ThrowsAsync<SpendingLimitExceededException>(
+                async () => await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, tx, null));
+
+            _mockDriveService.Verify(d => d.SignBitcoinTransactionAsync(It.IsAny<string>(), It.IsAny<BitcoinChainFamily>(), It.IsAny<BitcoinUnsignedTransaction>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+            _mockSpendingLimitService.Verify(s => s.RecordSpendAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<SpendingLedgerEntry>>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public void SignBitcoinTransactionGroupAsync_NoInputs_Throws()
+        {
+            Assert.ThrowsAsync<ArgumentException>(
+                async () => await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, new BitcoinUnsignedTransaction(), null));
         }
     }
 }

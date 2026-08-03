@@ -67,6 +67,8 @@ namespace BiatecMCP.BusinessLogic
             {
                 Address = result.Address,
                 EvmAddress = result.EvmAddress,
+                BitcoinAddress = result.BitcoinAddress,
+                BitcoinCashAddress = result.BitcoinCashAddress,
                 SeedAddress = result.SeedAddress,
                 Slot = result.Slot
             };

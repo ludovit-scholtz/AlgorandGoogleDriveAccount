@@ -72,23 +72,27 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — 17 MCP tools split into three chainable steps (build → sign → execute) rather than
+  - `MCP/BiatecMCP.cs` — 19 MCP tools split into three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast: `getAlgorandAddress`,
     `listAlgorandAddresses`, `getBridgeConfiguration`, `listSupportedNetworks`, `getCryptoAddress`,
     `getCryptoBalance`, `getAddressInfo`, `listActiveAddresses` (read-only - `getAddressInfo`/
     `listActiveAddresses` and the four before them are
-    chain-family-agnostic, see "EVM (Ethereum-family) support" below and "Address-centric wallet API and
+    chain-family-agnostic, see "EVM (Ethereum-family) support"/"Bitcoin/Bitcoin Cash support" below and
+    "Address-centric wallet API and
     rekey support" in `BiatecOIDC`'s notes); `createPaymentTransaction`, `createOptInTransaction`,
     `createAssetCreateTransaction`,
     `createSwapTransaction`, `createBridgeTransaction` (a real [Aramid Finance](https://aramid.finance)
     bridge integration - see "Aramid bridge integration" below), `createMultisigTransaction` (build-only, no
-    `sign` claim needed - see "Multisig transactions" below); `activateCryptoAddress` (registers a
+    `sign` claim needed - see "Multisig transactions" below), `createBitcoinTransaction` (build-only, UTXO
+    selection - see "Bitcoin/Bitcoin Cash support" below); `activateCryptoAddress` (registers a
     seed/slot → address pairing - the entry point for rekeying an external Algorand address to a
     Biatec-controlled key, requires `sign`); `signTransaction` (standalone - forwards
     to BiatecOIDC's `POST /wallet/{network}/{address}/sign`, requires `sign`), `mergeMultisigTransactions`
     (combines independently-signed multisig copies, no BiatecOIDC/Algod call); `executeAlgorandTransaction`
-    (broadcasts already-signed transactions, requires `sign`). Every tool's `[Description]` names the next
+    (broadcasts already-signed Algorand transactions via algod, requires `sign`), `executeBitcoinTransaction`
+    (broadcasts already-signed Bitcoin/Bitcoin Cash transactions via Blockchair, requires `sign`). Every
+    tool's `[Description]` names the next
     tool in the
     chain, since MCP has no other side-channel for teaching the connected agent the intended protocol. All
     forward the caller's own bearer token to BiatecOIDC rather than touching any key material - see "MCP
@@ -125,6 +129,10 @@ dependency on `BiatecSelfCustodyCore`.
     `AramidBridgeModels.cs`, `Helper/AramidBridgeCalculator.cs` — Aramid Finance's live bridge
     configuration/fee math (see "Aramid bridge integration" below); backs both `getBridgeConfiguration` and
     `createBridgeTransaction`
+  - `BusinessLogic/IPublicBitcoinDataSource.cs`/`BlockchairDataSource.cs`, `Helper/BitcoinTransactionBuilder.cs`,
+    `Model/BitcoinModels.cs` — Bitcoin/Bitcoin Cash UTXO data source and coin-selection/fee-estimation logic
+    (see "Bitcoin/Bitcoin Cash support" below); backs `getCryptoAddress`/`getCryptoBalance`'s Btc/Bch
+    branches, `createBitcoinTransaction`, and `executeBitcoinTransaction`
   - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in/asset-create
     transactions (Algorand4 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material
     ever touches this project
@@ -203,6 +211,10 @@ dependency on `BiatecSelfCustodyCore`.
     spending-limit configuration, from the Czech National Bank's daily fixing JSON API, cached in Redis
     (`ExchangeRateConfiguration.CacheDurationMinutes`); backs `GET /wallet/limits/currencies` and the USD→limit-
     currency conversion `SpendingLimitService` does when checking a limit
+  - `BusinessLogic/CoinGeckoValuationService.cs` (+ `IBitcoinValuationService`, `BitcoinValuationException`) —
+    prices a Bitcoin/Bitcoin Cash native-asset spend in USD via CoinGecko's public spot-price endpoint (see
+    "Bitcoin/Bitcoin Cash support" below); no router involved, unlike `BiatecRouterValuationService` above,
+    since the native coin *is* the asset
   - `BusinessLogic/ProviderAccessTokenProtector.cs` (+ `IProviderAccessTokenProtector`) — AES-256-GCM encrypts the
     caller's Google/Microsoft access token (under `ProviderTokenProtectionConfiguration`, a key dedicated to this
     - never `AesOptions`) so it can be cached inside issued access/refresh tokens; see the "Provider access token
@@ -676,6 +688,62 @@ setup stage needs.
   sign/rekey; only Algorand mainnet supports spending limits (Biatec Router isn't deployed to other AVM
   chains yet); every EVM chain supports address/balance (native token only) but not sign/limits/rekey yet
   (sending EVM transactions is planned; rekey has no EVM equivalent at all).
+- **Bitcoin/Bitcoin Cash support**: two more chain families, `ChainFamily.Btc`/`ChainFamily.Bch` (added
+  alongside Avm/Evm in both apps' independent `INetworkResolver` copies, recognizing the network names
+  `"Bitcoin"`/`"BTC"` and `"BitcoinCash"`/`"Bitcoin Cash"`/`"BCH"`). Unlike Ethereum, there's no separate
+  BIP32/BIP44 derivation path - both Bitcoin-family addresses are derived from the **exact same** secp256k1
+  key `ARC76Account.Ethereum.ARC76.GetEmailAccount` already produces for EVM (`ICloudAccountRepository.LoadBitcoinKeyAsync`
+  wraps it as an `NBitcoin.Key`, `BiatecSelfCustodyCore` now depends on `NBitcoin`/`NBitcoin.Altcoins`) - one
+  key per seed/slot, every chain family. `DeriveBitcoinAddressAsync` formats it as Bitcoin mainnet native
+  SegWit P2WPKH (`bc1...`); `DeriveBitcoinCashAddressAsync` formats the same key as legacy P2PKH under
+  `NBitcoin.Altcoins.BCash`'s network, which renders as CashAddr (`bitcoincash:q...`) by default. `GET /wallet/address/{seedAddress}/{slot?}`
+  derives+activates both alongside the AVM/EVM addresses in the same call (`DerivedAddressResponse` gained
+  `BitcoinAddress`/`BitcoinCashAddress`).
+
+  Being UTXO chains (not account-based like AVM/EVM), signing needs the actual inputs being spent, not just
+  destination/amount - `BiatecSelfCustodyCore.Model.BitcoinUnsignedTransaction` (a plain `Inputs`/`Outputs`
+  list, mirroring `EvmUnsignedTransaction`'s "fields, not a raw blob" reasoning) is the wire shape
+  `POST /wallet/{network}/{address}/sign` expects for these families (`SignTransactionGroupRequest.Transactions`
+  holds exactly one base64 JSON blob) - every input is assumed to be this seed/slot's own UTXO (its
+  scriptPubKey is reconstructed from the derived address, never trusted from the wire), and every output
+  (including change) is already explicit by the time it reaches signing - coin selection/fee estimation
+  already happened on the `BiatecMCP` side. `DriveService.SignBitcoinTransactionAsync` builds the real
+  `NBitcoin.Transaction` and signs via `TransactionBuilder.SignTransactionInPlace` - Bitcoin Cash's
+  replay-protected SIGHASH_FORKID sighash is handled entirely by `NBitcoin.Altcoins.BCash`'s network
+  (`network.CreateTransaction()` returns a `ForkIdTransaction` there), not hand-rolled - verified in this
+  session via a self-signed/self-verified round trip (`DriveServiceTests`), but never against a live BCH
+  node/mempool, so treat real BCH transfers as needing manual E2E verification before relying on them for
+  real funds, same precedent as this repo's other leaf HTTP-dependent features.
+
+  `BiatecMCP/BusinessLogic/BlockchairDataSource.cs` (`IPublicBitcoinDataSource`) is the one public data
+  source both chains share (Blockchair's REST API shape is identical per-chain, parameterized only by the
+  `{chain}` path segment - `BlockchairChainSlugs.Bitcoin`/`.BitcoinCash`) - UTXOs, confirmed balance, a
+  suggested fee rate, and broadcast, all fetched fresh (no caching - balances/UTXOs change too fast to cache
+  usefully, and broadcast obviously can't be). Its exact request/response shapes are documented from
+  Blockchair's public API reference, not exercised against a live endpoint in this repo's build/test
+  environment (no outbound network access here) - same "needs manual/E2E verification" caveat as
+  `PublicAlgodDataSource`/`PublicEvmRpcDataSource`. `BiatecMCP/Helper/BitcoinTransactionBuilder.cs` is pure
+  coin-selection logic (greedy largest-first, fee re-estimated as each input is added, change folded into
+  the fee if it would be dust) - fully unit-tested without needing live UTXO data.
+
+  Three chain-family-agnostic MCP tools gained Bitcoin/Bitcoin Cash branches for free (`getCryptoAddress`,
+  `getCryptoBalance`, `signTransaction` - the last needs no branch at all, since it already just forwards
+  whatever blob it's given to BiatecOIDC's sign endpoint); two new ones complete the transfer flow:
+  `createBitcoinTransaction` (fetches UTXOs/fee rate, builds the unsigned wire DTO via
+  `BitcoinTransactionBuilder`) and `executeBitcoinTransaction` (broadcasts the signed raw bytes via
+  Blockchair - separate from `executeAlgorandTransaction` since the broadcast mechanism is entirely
+  different, REST push vs. algod).
+
+  Spending limits **do** apply here (unlike EVM, which has none yet) - per the same daily/weekly/monthly
+  `ISpendingLimitService` buckets Algorand mainnet uses, keyed the same way (resolved `seedAddress`/`slot`).
+  Since the native coin *is* the asset (no router/no asset id to quote), pricing goes through a new,
+  narrower interface, `IBitcoinValuationService`/`CoinGeckoValuationService` (`BiatecOIDC`), which fetches
+  both BTC-USD and BCH-USD in one call from CoinGecko's public "simple price" endpoint and caches the pair
+  in Redis for `BitcoinValuation:CacheDurationMinutes` (default 5 - deliberately much shorter than
+  `ExchangeRates:CacheDurationMinutes`'s 360, since a crypto spot price moves continuously rather than once
+  a day). Only non-change outputs are priced (`BitcoinTransactionOutput.IsChange`) - money returning to the
+  sender's own change address was never actually spent, so counting it would overstate every transfer's
+  real cost against the limit.
 - **Aramid bridge integration**: `createBridgeTransaction` bridges assets off Algorand via
   [Aramid Finance](https://aramid.finance), per its published AI-agent integration guide
   (`https://raw.githubusercontent.com/AramidFinance/docs/refs/heads/main/docs/developers/ai-agent-integration.md`).

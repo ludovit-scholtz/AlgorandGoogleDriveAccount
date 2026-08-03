@@ -11,6 +11,7 @@ namespace BiatecOIDC.BusinessLogic
         private readonly IDriveService _driveService;
         private readonly ISpendingLimitService _spendingLimitService;
         private readonly IAssetValuationService _valuationService;
+        private readonly IBitcoinValuationService _bitcoinValuationService;
         private readonly ICloudAccountRepository _accountRepository;
         private readonly ILogger<WalletService> _logger;
 
@@ -18,12 +19,14 @@ namespace BiatecOIDC.BusinessLogic
             IDriveService driveService,
             ISpendingLimitService spendingLimitService,
             IAssetValuationService valuationService,
+            IBitcoinValuationService bitcoinValuationService,
             ICloudAccountRepository accountRepository,
             ILogger<WalletService> logger)
         {
             _driveService = driveService;
             _spendingLimitService = spendingLimitService;
             _valuationService = valuationService;
+            _bitcoinValuationService = bitcoinValuationService;
             _accountRepository = accountRepository;
             _logger = logger;
         }
@@ -117,6 +120,52 @@ namespace BiatecOIDC.BusinessLogic
             }
 
             _logger.LogInformation("Signed a {Count}-transaction EVM group for {Email}.", signed.Count, email);
+            return signed;
+        }
+
+        public async Task<byte[]> SignBitcoinTransactionGroupAsync(string email, string provider, BitcoinChainFamily family, BitcoinUnsignedTransaction transaction, string? accessToken, string? seedAddress = null, int slot = 0)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                throw new ArgumentException("Email is required.", nameof(email));
+            }
+
+            if (transaction == null || transaction.Inputs.Count == 0)
+            {
+                throw new ArgumentException("At least one input is required.", nameof(transaction));
+            }
+
+            // Resolved once, up front, so the spending-limit check and the actual signing call below agree
+            // on the same identity even if the vault's primary seed changes mid-request.
+            var resolvedAddress = await _accountRepository.ResolveSeedAddressAsync(email, provider, seedAddress, accessToken);
+
+            var spendSatoshis = transaction.Outputs.Where(o => !o.IsChange).Sum(o => o.AmountSatoshis);
+            var totalUsd = spendSatoshis > 0 ? await _bitcoinValuationService.GetUsdValueAsync(family, spendSatoshis) : 0m;
+
+            if (totalUsd > 0m)
+            {
+                await _spendingLimitService.EnsureWithinLimitsAsync(email, provider, accessToken, totalUsd, resolvedAddress, slot);
+            }
+
+            var signed = await _driveService.SignBitcoinTransactionAsync(email, family, transaction, provider, accessToken, resolvedAddress, slot);
+
+            if (totalUsd > 0m)
+            {
+                await _spendingLimitService.RecordSpendAsync(email, provider, accessToken, new[]
+                {
+                    new SpendingLedgerEntry
+                    {
+                        TimestampUtc = DateTimeOffset.UtcNow,
+                        AmountUsd = totalUsd,
+                        AssetId = 0,
+                        Kind = family.ToString(),
+                        SeedAddress = resolvedAddress,
+                        Slot = slot
+                    }
+                });
+            }
+
+            _logger.LogInformation("Signed a {Family} transaction for {Email}, totaling {TotalUsd:0.####} USD.", family, email, totalUsd);
             return signed;
         }
     }

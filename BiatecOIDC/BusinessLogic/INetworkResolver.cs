@@ -7,7 +7,13 @@ namespace BiatecOIDC.BusinessLogic
         Avm,
 
         /// <summary>Ethereum Virtual Machine - Ethereum, Gnosis, Arbitrum, Base, and any other EVM-compatible chain.</summary>
-        Evm
+        Evm,
+
+        /// <summary>Bitcoin mainnet.</summary>
+        Btc,
+
+        /// <summary>Bitcoin Cash mainnet.</summary>
+        Bch
     }
 
     /// <summary>

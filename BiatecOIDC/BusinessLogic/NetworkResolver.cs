@@ -13,6 +13,12 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         private static readonly string[] WellKnownEvmNames = ["Ethereum", "Ethereum Mainnet", "Gnosis", "Arbitrum", "Arbitrum One", "Base"];
 
+        /// <summary>Recognized names for Bitcoin mainnet.</summary>
+        private static readonly string[] BitcoinNames = ["Bitcoin", "BTC"];
+
+        /// <summary>Recognized names for Bitcoin Cash mainnet.</summary>
+        private static readonly string[] BitcoinCashNames = ["BitcoinCash", "Bitcoin Cash", "BCH"];
+
         private readonly IAlgorandChainRegistry _algorandChainRegistry;
 
         public NetworkResolver(IAlgorandChainRegistry algorandChainRegistry)
@@ -40,6 +46,16 @@ namespace BiatecOIDC.BusinessLogic
                 || WellKnownEvmNames.Any(n => string.Equals(NormalizeName(n), NormalizeName(network), StringComparison.OrdinalIgnoreCase)))
             {
                 return new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = network };
+            }
+
+            if (BitcoinNames.Any(n => string.Equals(n, network, StringComparison.OrdinalIgnoreCase)))
+            {
+                return new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" };
+            }
+
+            if (BitcoinCashNames.Any(n => string.Equals(n, network, StringComparison.OrdinalIgnoreCase)))
+            {
+                return new ResolvedNetwork { Family = ChainFamily.Bch, DisplayName = "Bitcoin Cash" };
             }
 
             return null;

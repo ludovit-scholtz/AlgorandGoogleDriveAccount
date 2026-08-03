@@ -193,6 +193,12 @@ namespace BiatecOIDC
             builder.Services.AddHttpClient<BiatecOIDC.BusinessLogic.CnbExchangeRateService>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IExchangeRateService>(sp => sp.GetRequiredService<BiatecOIDC.BusinessLogic.CnbExchangeRateService>());
 
+            // Bitcoin/Bitcoin Cash spending-limit valuation - no router to quote against (the native coin
+            // *is* the asset), so this prices directly off CoinGecko's public BTC-USD/BCH-USD spot price.
+            builder.Services.Configure<BitcoinValuationConfiguration>(builder.Configuration.GetSection("BitcoinValuation"));
+            builder.Services.AddHttpClient<BiatecOIDC.BusinessLogic.CoinGeckoValuationService>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IBitcoinValuationService>(sp => sp.GetRequiredService<BiatecOIDC.BusinessLogic.CoinGeckoValuationService>());
+
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.ISpendingLimitService, BiatecOIDC.BusinessLogic.SpendingLimitService>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IWalletService, BiatecOIDC.BusinessLogic.WalletService>();
 

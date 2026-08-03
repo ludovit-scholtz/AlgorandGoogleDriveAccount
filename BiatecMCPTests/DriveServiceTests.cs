@@ -3,6 +3,8 @@ using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Logging;
 using Moq;
+using NBitcoin;
+using NBitcoin.Altcoins;
 using Nethereum.Model;
 using Nethereum.Signer;
 
@@ -113,6 +115,92 @@ namespace BiatecMCPTests
             await _service.SignEvmTransactionAsync(TestEmail, BuildLegacyTransaction(), TestProvider, "access-token", "SEED-ADDR", 4);
 
             _mockAccountRepository.Verify(r => r.LoadEvmAccountAsync(TestEmail, 4, TestProvider, "access-token", "SEED-ADDR"), Times.Once);
+        }
+
+        // ───────────────────────── SignBitcoinTransactionAsync (Bitcoin + Bitcoin Cash) ─────────────────────────
+
+        private Key _bitcoinKey = null!;
+
+        [TearDown]
+        public void TearDown() => _bitcoinKey?.Dispose();
+
+        private void SetUpBitcoinKey()
+        {
+            _bitcoinKey = new Key();
+            _mockAccountRepository
+                .Setup(r => r.LoadBitcoinKeyAsync(TestEmail, It.IsAny<int>(), TestProvider, It.IsAny<string?>(), It.IsAny<string?>()))
+                .ReturnsAsync(_bitcoinKey);
+        }
+
+        private static BitcoinUnsignedTransaction BuildSelfSpendTransaction(NBitcoin.Network network, BitcoinAddress myAddress, out uint256 fundingTxId)
+        {
+            var fundingTx = network.CreateTransaction();
+            fundingTx.Outputs.Add(new TxOut(Money.Coins(1.0m), myAddress));
+            fundingTxId = fundingTx.GetHash();
+
+            return new BitcoinUnsignedTransaction
+            {
+                Inputs = { new BitcoinUtxoInput { TxId = fundingTxId.ToString(), Vout = 0, AmountSatoshis = Money.Coins(1.0m).Satoshi } },
+                Outputs =
+                {
+                    new BitcoinTransactionOutput { Address = myAddress.ToString(), AmountSatoshis = Money.Coins(0.5m).Satoshi },
+                    new BitcoinTransactionOutput { Address = myAddress.ToString(), AmountSatoshis = Money.Coins(0.4999m).Satoshi, IsChange = true }
+                }
+            };
+        }
+
+        [Test]
+        public async Task SignBitcoinTransactionAsync_Bitcoin_ProducesAValidSelfVerifyingTransaction()
+        {
+            SetUpBitcoinKey();
+            var myAddress = _bitcoinKey.PubKey.GetAddress(ScriptPubKeyType.Segwit, NBitcoin.Network.Main);
+            var unsigned = BuildSelfSpendTransaction(NBitcoin.Network.Main, myAddress, out _);
+
+            var signedBytes = await _service.SignBitcoinTransactionAsync(TestEmail, BitcoinChainFamily.Bitcoin, unsigned, TestProvider);
+
+            var signedTx = NBitcoin.Network.Main.CreateTransaction();
+            signedTx.FromBytes(signedBytes);
+            var builder = NBitcoin.Network.Main.CreateTransactionBuilder();
+            builder.AddCoins(new Coin(new OutPoint(uint256.Parse(unsigned.Inputs[0].TxId), 0), new TxOut(Money.Satoshis(unsigned.Inputs[0].AmountSatoshis), myAddress.ScriptPubKey)));
+            Assert.That(builder.Verify(signedTx), Is.True);
+        }
+
+        [Test]
+        public async Task SignBitcoinTransactionAsync_BitcoinCash_ProducesAValidSelfVerifyingTransaction()
+        {
+            SetUpBitcoinKey();
+            var network = BCash.Instance.Mainnet;
+            var myAddress = (BitcoinAddress)_bitcoinKey.PubKey.Hash.GetAddress(network);
+            var unsigned = BuildSelfSpendTransaction(network, myAddress, out _);
+
+            var signedBytes = await _service.SignBitcoinTransactionAsync(TestEmail, BitcoinChainFamily.BitcoinCash, unsigned, TestProvider);
+
+            var signedTx = network.CreateTransaction();
+            signedTx.FromBytes(signedBytes);
+            var builder = network.CreateTransactionBuilder();
+            builder.AddCoins(new Coin(new OutPoint(uint256.Parse(unsigned.Inputs[0].TxId), 0), new TxOut(Money.Satoshis(unsigned.Inputs[0].AmountSatoshis), myAddress.ScriptPubKey)));
+            Assert.That(builder.Verify(signedTx), Is.True);
+        }
+
+        [Test]
+        public void SignBitcoinTransactionAsync_NoInputs_ThrowsArgumentException()
+        {
+            SetUpBitcoinKey();
+
+            Assert.That(async () => await _service.SignBitcoinTransactionAsync(TestEmail, BitcoinChainFamily.Bitcoin, new BitcoinUnsignedTransaction(), TestProvider),
+                Throws.ArgumentException);
+        }
+
+        [Test]
+        public async Task SignBitcoinTransactionAsync_ForwardsSeedAddressAndSlotToRepository()
+        {
+            SetUpBitcoinKey();
+            var myAddress = _bitcoinKey.PubKey.GetAddress(ScriptPubKeyType.Segwit, NBitcoin.Network.Main);
+            var unsigned = BuildSelfSpendTransaction(NBitcoin.Network.Main, myAddress, out _);
+
+            await _service.SignBitcoinTransactionAsync(TestEmail, BitcoinChainFamily.Bitcoin, unsigned, TestProvider, "access-token", "SEED-ADDR", 4);
+
+            _mockAccountRepository.Verify(r => r.LoadBitcoinKeyAsync(TestEmail, 4, TestProvider, "access-token", "SEED-ADDR"), Times.Once);
         }
     }
 }

@@ -146,6 +146,11 @@ namespace BiatecOIDC.Controllers
                 return await SignEvmTransactionGroupAsync(principal!, network, address, decodedTransactions);
             }
 
+            if (resolvedNetwork.Family is ChainFamily.Btc or ChainFamily.Bch)
+            {
+                return await SignBitcoinTransactionGroupAsync(principal!, network, address, resolvedNetwork.Family, decodedTransactions);
+            }
+
             var infos = new List<AlgorandTransferInfo>();
             foreach (var tx in decodedTransactions)
             {
@@ -301,6 +306,87 @@ namespace BiatecOIDC.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unexpected error signing an EVM transaction group for {Email}.", email);
+                return StatusCode(StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "server_error", Detail = "Unable to sign the transaction group." });
+            }
+        }
+
+        /// <summary>
+        /// Bitcoin/Bitcoin Cash branch of <see cref="SignTransactionGroup"/> - exactly one unsigned
+        /// transaction per request (base64 JSON matching <see cref="BitcoinUnsignedTransaction"/>; UTXO
+        /// inputs are already selected and the change output already computed by the caller, e.g.
+        /// BiatecMCP's <c>BitcoinTransactionBuilder</c> - this endpoint only signs). Prices every non-change
+        /// output and checks it against the caller's daily/weekly/monthly spending limits before signing
+        /// (see <see cref="IWalletService.SignBitcoinTransactionGroupAsync"/>) - same enforcement Algorand
+        /// mainnet gets, just priced directly instead of via the Biatec Router, since the native coin *is*
+        /// the asset. No sender/rekey checks (an unsigned Bitcoin-family input carries no sender field at
+        /// all - every input in the request is assumed to be this signer's own UTXO, and Bitcoin/Bitcoin
+        /// Cash have no rekey concept).
+        /// </summary>
+        private async Task<IActionResult> SignBitcoinTransactionGroupAsync(ClaimsPrincipal principal, string network, string address, ChainFamily family, List<byte[]> decodedTransactions)
+        {
+            if (decodedTransactions.Count != 1)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Exactly one transaction is required for a Bitcoin-family sign request." });
+            }
+
+            var email = principal.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            if (signer == null)
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Title = "address_not_active",
+                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate it via POST /wallet/{network}/{address}/activate first."
+                });
+            }
+
+            BitcoinUnsignedTransaction unsignedTransaction;
+            try
+            {
+                unsignedTransaction = JsonSerializer.Deserialize<BitcoinUnsignedTransaction>(decodedTransactions[0]) ?? throw new FormatException("Empty Bitcoin-family transaction request.");
+            }
+            catch (Exception ex) when (ex is FormatException or JsonException)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = $"Unable to parse Bitcoin-family transaction request: {ex.Message}" });
+            }
+
+            var bitcoinFamily = family == ChainFamily.Btc ? BitcoinChainFamily.Bitcoin : BitcoinChainFamily.BitcoinCash;
+
+            try
+            {
+                var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _walletService.SignBitcoinTransactionGroupAsync(email, provider, bitcoinFamily, unsignedTransaction, token, signer.Value.SeedAddress, signer.Value.Slot));
+                return Ok(new SignTransactionGroupResponse
+                {
+                    SignedTransactions = new List<string> { Convert.ToBase64String(signed) }
+                });
+            }
+            catch (SpendingLimitExceededException ex)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails { Title = "spending_limit_exceeded", Detail = ex.Message });
+            }
+            catch (FormatException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "seed_not_found", Detail = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+            catch (BitcoinValuationException ex)
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "asset_valuation_failed", Detail = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error signing a {Family} transaction for {Email}.", family, email);
                 return StatusCode(StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "server_error", Detail = "Unable to sign the transaction group." });
             }
         }
@@ -543,7 +629,28 @@ namespace BiatecOIDC.Controllers
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _addressActivationService.ActivateAsync(email, provider, token, evmAddress, nameof(ChainFamily.Evm), seedAddress, resolvedSlot));
 
-                return Ok(new DerivedAddressResponse { Address = address, EvmAddress = evmAddress, SeedAddress = seedAddress, Slot = resolvedSlot });
+                // Bitcoin/Bitcoin Cash addresses are derived from the exact same key as the EVM address
+                // (both secp256k1, see ICloudAccountRepository.LoadBitcoinKeyAsync's remarks) - same
+                // "always needs an activation-registry entry" reasoning as EVM above.
+                var bitcoinAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.DeriveBitcoinAddressAsync(email, provider, seedAddress, resolvedSlot, token));
+                await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _addressActivationService.ActivateAsync(email, provider, token, bitcoinAddress, nameof(ChainFamily.Btc), seedAddress, resolvedSlot));
+
+                var bitcoinCashAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.DeriveBitcoinCashAddressAsync(email, provider, seedAddress, resolvedSlot, token));
+                await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _addressActivationService.ActivateAsync(email, provider, token, bitcoinCashAddress, nameof(ChainFamily.Bch), seedAddress, resolvedSlot));
+
+                return Ok(new DerivedAddressResponse
+                {
+                    Address = address,
+                    EvmAddress = evmAddress,
+                    BitcoinAddress = bitcoinAddress,
+                    BitcoinCashAddress = bitcoinCashAddress,
+                    SeedAddress = seedAddress,
+                    Slot = resolvedSlot
+                });
             }
             catch (InvalidOperationException ex)
             {

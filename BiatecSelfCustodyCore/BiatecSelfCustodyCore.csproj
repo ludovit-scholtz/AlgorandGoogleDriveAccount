@@ -30,6 +30,8 @@
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.21.0" />
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.21.0" />
     <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.21.0" />
+    <PackageReference Include="NBitcoin" Version="10.0.7" />
+    <PackageReference Include="NBitcoin.Altcoins" Version="6.0.3" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.21.0" />
   </ItemGroup>
 

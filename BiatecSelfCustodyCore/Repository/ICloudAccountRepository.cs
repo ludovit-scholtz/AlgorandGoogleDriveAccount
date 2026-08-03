@@ -1,4 +1,5 @@
 using Algorand.Algod.Model;
+using NBitcoin;
 using Nethereum.Signer;
 
 namespace BiatecSelfCustodyCore.Repository
@@ -132,5 +133,38 @@ namespace BiatecSelfCustodyCore.Repository
         /// </summary>
         /// <returns>The (possibly newly-created) seed's identifying (slot-0) address.</returns>
         Task<string> SeedTestVaultAsync(string email, string provider, string mnemonic, string? accessToken = null);
+
+        /// <summary>
+        /// Loads the raw secp256k1 signing key for <paramref name="email"/>/<paramref name="slot"/> - the
+        /// exact same key material <see cref="LoadEvmAccountAsync"/> derives (Bitcoin and Ethereum both use
+        /// secp256k1; there's no separate BIP32/BIP44 derivation path here, deliberately - one seed, one key
+        /// per slot, for every chain family this wallet supports), just returned as an <see cref="NBitcoin.Key"/>
+        /// instead of a <c>Nethereum.Signer.EthECKey</c> so callers can build Bitcoin-family addresses/
+        /// transactions with it. Mirrors <see cref="LoadEvmAccountAsync"/>'s exact seed-resolution/error
+        /// semantics; callers use the key immediately and let it go out of scope - never persisted, never
+        /// logged.
+        /// </summary>
+        Task<Key> LoadBitcoinKeyAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null);
+
+        /// <summary>
+        /// Derives (without signing or mutating anything) the Bitcoin mainnet P2WPKH (native SegWit,
+        /// <c>bc1...</c>) address at <paramref name="slot"/> for the seed identified by
+        /// <paramref name="seedAddress"/> (<c>null</c> = the vault's current primary seed) - same key as
+        /// <see cref="LoadBitcoinKeyAsync"/>, just formatted as an address. Throws
+        /// <see cref="InvalidOperationException"/> if <paramref name="seedAddress"/> is given but no seed in
+        /// the vault has that address.
+        /// </summary>
+        Task<string> DeriveBitcoinAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null);
+
+        /// <summary>
+        /// Derives (without signing or mutating anything) the Bitcoin Cash mainnet CashAddr
+        /// (<c>bitcoincash:q...</c>) address at <paramref name="slot"/> for the seed identified by
+        /// <paramref name="seedAddress"/> (<c>null</c> = the vault's current primary seed) - the exact same
+        /// key as <see cref="DeriveBitcoinAddressAsync"/>, just legacy (non-SegWit) P2PKH encoded per Bitcoin
+        /// Cash's own CashAddr scheme (via <c>NBitcoin.Altcoins.BCash</c>) rather than Bitcoin's Bech32.
+        /// Throws <see cref="InvalidOperationException"/> if <paramref name="seedAddress"/> is given but no
+        /// seed in the vault has that address.
+        /// </summary>
+        Task<string> DeriveBitcoinCashAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null);
     }
 }

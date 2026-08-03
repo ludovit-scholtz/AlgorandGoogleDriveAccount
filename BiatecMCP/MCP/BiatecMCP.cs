@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Numerics;
 using System.Security.Claims;
+using System.Text.Json;
 using Algorand;
 using Algorand.Algod;
 using BiatecMCP.BusinessLogic;
@@ -35,6 +36,9 @@ namespace BiatecMCP.MCP
         private const string NoEvmAddressMessage =
             "This account has no EVM address yet. Complete storage-provider consent by signing in through BiatecOIDC first.";
 
+        private const string NoBitcoinAddressMessage =
+            "This account has no Bitcoin-family address yet. Complete storage-provider consent by signing in through BiatecOIDC first.";
+
         private readonly IBiatecWalletClient _walletClient;
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly IOptionsMonitor<Model.AlgodConfiguration> _algodConfig;
@@ -43,6 +47,7 @@ namespace BiatecMCP.MCP
         private readonly IAlgorandChainRegistry _chainRegistry;
         private readonly INetworkResolver _networkResolver;
         private readonly IPublicEvmRpcDataSource _evmRpcDataSource;
+        private readonly IPublicBitcoinDataSource _bitcoinDataSource;
         private readonly ILogger<BiatecMCP> _logger;
 
         public BiatecMCP(
@@ -54,6 +59,7 @@ namespace BiatecMCP.MCP
             IAlgorandChainRegistry chainRegistry,
             INetworkResolver networkResolver,
             IPublicEvmRpcDataSource evmRpcDataSource,
+            IPublicBitcoinDataSource bitcoinDataSource,
             ILogger<BiatecMCP> logger)
         {
             _walletClient = walletClient;
@@ -64,6 +70,7 @@ namespace BiatecMCP.MCP
             _chainRegistry = chainRegistry;
             _networkResolver = networkResolver;
             _evmRpcDataSource = evmRpcDataSource;
+            _bitcoinDataSource = bitcoinDataSource;
             _logger = logger;
         }
 
@@ -164,7 +171,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "getCryptoAddress"),
-         Description("Returns the signed-in Biatec account's address on the given blockchain network - Algorand-family (AVM) and Ethereum-family (EVM) chains are both supported, derived from the same seed. See listSupportedNetworks for valid 'network' values (e.g. 'Algorand', 'Voi', 'Aramid', 'Ethereum', 'Gnosis', 'Arbitrum', 'Base'). An Algorand-family address is the same across every AVM chain; an Ethereum-family address is the same across every EVM chain - 'network' only picks which family's address to derive.")]
+         Description("Returns the signed-in Biatec account's address on the given blockchain network - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash are all supported, derived from the same seed. See listSupportedNetworks for valid 'network' values (e.g. 'Algorand', 'Voi', 'Aramid', 'Ethereum', 'Gnosis', 'Arbitrum', 'Base', 'Bitcoin', 'BitcoinCash'). An Algorand-family address is the same across every AVM chain; an Ethereum-family address is the same across every EVM chain - 'network' only picks which family's address to derive.")]
         public async Task<GetCryptoAddressResponse> GetCryptoAddress(
             [Description("Which network to derive the address for. Call listSupportedNetworks to see valid values.")] string network,
             [Description("ARC-76 derivation slot. 0 = the default/first address, 1 = the 'second address', etc.")] int slot = 0,
@@ -187,6 +194,17 @@ namespace BiatecMCP.MCP
                     }
 
                     return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Address = address };
+                }
+
+                if (resolved.Family is ChainFamily.Btc or ChainFamily.Bch)
+                {
+                    var bitcoinAddress = await ResolveBitcoinAddressAsync(resolved.Family, slot: slot, seedAddress: seedAddress);
+                    if (string.IsNullOrWhiteSpace(bitcoinAddress))
+                    {
+                        return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = resolved.Family.ToString(), Error = NoBitcoinAddressMessage };
+                    }
+
+                    return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = resolved.Family.ToString(), Address = bitcoinAddress };
                 }
 
                 var evmAddress = await ResolveEvmAddressAsync(slot: slot, seedAddress: seedAddress);
@@ -238,7 +256,7 @@ namespace BiatecMCP.MCP
         private const int MaxAssetsInBalanceResponse = 50;
 
         [McpServerTool(Name = "getCryptoBalance"),
-         Description("Returns the native-currency balance (and, on Algorand-family chains, ASA holdings) for an address on the given blockchain network - see listSupportedNetworks for valid 'network' values. Omit 'address' to check the signed-in account's own address on that network. EVM balances are the native gas token only (e.g. ETH) - ERC-20 token balances are not supported.")]
+         Description("Returns the native-currency balance (and, on Algorand-family chains, ASA holdings) for an address on the given blockchain network - see listSupportedNetworks for valid 'network' values. Omit 'address' to check the signed-in account's own address on that network. EVM balances are the native gas token only (e.g. ETH) - ERC-20 token balances are not supported. Bitcoin/Bitcoin Cash balances are the confirmed on-chain balance from a public block explorer.")]
         public async Task<GetCryptoBalanceResponse> GetCryptoBalance(
             [Description("Which network to query. Call listSupportedNetworks to see valid values.")] string network,
             [Description("Address to check the balance of. Omit to check the signed-in account's own address on this network.")] string? address = null,
@@ -278,6 +296,39 @@ namespace BiatecMCP.MCP
                         NativeBalanceBaseUnits = account.Amount.ToString(CultureInfo.InvariantCulture),
                         Assets = assets,
                         AssetsTruncated = allAssets.Count > MaxAssetsInBalanceResponse
+                    };
+                }
+
+                if (resolved.Family is ChainFamily.Btc or ChainFamily.Bch)
+                {
+                    var bitcoinAddress = address ?? await ResolveBitcoinAddressAsync(resolved.Family, slot: slot, seedAddress: seedAddress);
+                    if (string.IsNullOrWhiteSpace(bitcoinAddress))
+                    {
+                        return new GetCryptoBalanceResponse { Network = resolved.DisplayName, Family = resolved.Family.ToString(), Error = NoBitcoinAddressMessage };
+                    }
+
+                    var chainSlug = resolved.Family == ChainFamily.Btc ? BlockchairChainSlugs.Bitcoin : BlockchairChainSlugs.BitcoinCash;
+                    var satoshis = await _bitcoinDataSource.TryGetBalanceAsync(chainSlug, bitcoinAddress);
+                    if (satoshis == null)
+                    {
+                        return new GetCryptoBalanceResponse
+                        {
+                            Network = resolved.DisplayName,
+                            Family = resolved.Family.ToString(),
+                            Address = bitcoinAddress,
+                            Error = "Could not reach the block explorer to check the balance right now. Try again shortly.",
+                            ErrorType = "DataSourceUnavailable"
+                        };
+                    }
+
+                    return new GetCryptoBalanceResponse
+                    {
+                        Network = resolved.DisplayName,
+                        Family = resolved.Family.ToString(),
+                        Address = bitcoinAddress,
+                        NativeCurrencySymbol = resolved.Family == ChainFamily.Btc ? "BTC" : "BCH",
+                        NativeBalance = satoshis.Value / 100_000_000m,
+                        NativeBalanceBaseUnits = satoshis.Value.ToString(CultureInfo.InvariantCulture)
                     };
                 }
 
@@ -389,6 +440,95 @@ namespace BiatecMCP.MCP
             catch (Exception ex)
             {
                 return new CreateTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreatePaymentTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        public class CreateBitcoinTransactionResponse
+        {
+            public string UnsignedTransaction { get; set; } = string.Empty;
+            public string Sender { get; set; } = string.Empty;
+            public string Receiver { get; set; } = string.Empty;
+            public long AmountSatoshis { get; set; }
+            public long FeeSatoshis { get; set; }
+            public long ChangeSatoshis { get; set; }
+            public int InputCount { get; set; }
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "createBitcoinTransaction"),
+         Description("Builds an unsigned Bitcoin or Bitcoin Cash payment from the signed-in Biatec account - does NOT sign or broadcast it. Fetches spendable UTXOs and the current suggested fee rate from a public block explorer, greedily selects inputs largest-first, and computes change automatically (folded into the fee if it would be dust). Pass the result's UnsignedTransaction to signTransaction next (network='Bitcoin' or 'BitcoinCash', address=Sender), then the signed result to executeBitcoinTransaction to broadcast it.")]
+        public async Task<CreateBitcoinTransactionResponse> CreateBitcoinTransaction(
+            [Description("Recipient address.")] string receiverAddress,
+            [Description("Amount to send, in satoshis (1 BTC/BCH = 100,000,000 satoshis).")] long amountSatoshis,
+            [Description("Which network to build for - 'Bitcoin' or 'BitcoinCash'.")] string network,
+            [Description("A specific seed's identifying address to build the transaction from instead of the primary seed.")] string? seedAddress = null,
+            [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
+        {
+            try
+            {
+                var resolved = await _networkResolver.ResolveAsync(network);
+                if (resolved == null || resolved.Family is not (ChainFamily.Btc or ChainFamily.Bch))
+                {
+                    return new CreateBitcoinTransactionResponse { Error = $"Unknown or unsupported network '{network}'. Use 'Bitcoin' or 'BitcoinCash'.", ErrorType = "InvalidRequest" };
+                }
+
+                if (amountSatoshis <= 0)
+                {
+                    return new CreateBitcoinTransactionResponse { Error = "Amount must be positive.", ErrorType = "InvalidRequest" };
+                }
+
+                var senderAddress = await ResolveBitcoinAddressAsync(resolved.Family, slot: slot, seedAddress: seedAddress);
+                if (string.IsNullOrWhiteSpace(senderAddress))
+                {
+                    return new CreateBitcoinTransactionResponse { Error = NoBitcoinAddressMessage, ErrorType = "NoBitcoinAddress" };
+                }
+
+                var chainSlug = resolved.Family == ChainFamily.Btc ? BlockchairChainSlugs.Bitcoin : BlockchairChainSlugs.BitcoinCash;
+                var utxos = await _bitcoinDataSource.GetUtxosAsync(chainSlug, senderAddress);
+                if (utxos.Count == 0)
+                {
+                    return new CreateBitcoinTransactionResponse { Error = $"'{senderAddress}' has no spendable UTXOs.", ErrorType = "NoUtxos" };
+                }
+
+                // 1 sat/byte is a conservative fallback if the explorer's own fee estimate is unavailable -
+                // better to build a transaction that confirms slowly than to fail the whole request over a
+                // fee-estimate outage.
+                var feeRate = await _bitcoinDataSource.TryGetSuggestedFeeRateAsync(chainSlug) ?? 1m;
+
+                BitcoinTransactionBuilder.BuildResult build;
+                try
+                {
+                    build = BitcoinTransactionBuilder.Build(resolved.Family, utxos, senderAddress, receiverAddress, amountSatoshis, feeRate);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return new CreateBitcoinTransactionResponse { Error = ex.Message, ErrorType = "InsufficientFunds" };
+                }
+
+                var unsignedJson = JsonSerializer.SerializeToUtf8Bytes(build.Transaction);
+                return new CreateBitcoinTransactionResponse
+                {
+                    UnsignedTransaction = Convert.ToBase64String(unsignedJson),
+                    Sender = senderAddress,
+                    Receiver = receiverAddress,
+                    AmountSatoshis = amountSatoshis,
+                    FeeSatoshis = build.FeeSatoshis,
+                    ChangeSatoshis = build.ChangeSatoshis,
+                    InputCount = build.InputCount
+                };
+            }
+            catch (WalletApiException ex)
+            {
+                return new CreateBitcoinTransactionResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new CreateBitcoinTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (Exception ex)
+            {
+                return new CreateBitcoinTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateBitcoinTransaction)), ErrorType = ex.GetType().ToString() };
             }
         }
 
@@ -989,7 +1129,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "signTransaction"),
-         Description("Signs one or more unsigned transactions via BiatecOIDC, as 'address' on 'network' - both Algorand-family (AVM) and Ethereum-family (EVM) chains are supported. For AVM, each transaction is from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope (base64-encoded msgpack). For EVM (no create* tool builds these yet), each transaction is base64-encoded UTF-8 JSON with fields chainId/nonce/to/value/data/gasLimit plus either gasPrice (legacy) or maxFeePerGas+maxPriorityFeePerGas (EIP-1559) - all numeric fields as decimal or 0x-prefixed hex strings. Requires the 'sign' scope. 'address' must be the same address the create* tool (or getCryptoAddress/listAlgorandAddresses) returned as the sender - use getAddressInfo/activateCryptoAddress first if it's not the signed-in account's own default address. Pass the result to executeAlgorandTransaction to broadcast (AVM), or to mergeMultisigTransactions first if this was a multisig envelope.")]
+         Description("Signs one or more unsigned transactions via BiatecOIDC, as 'address' on 'network' - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash are all supported. For AVM, each transaction is from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope (base64-encoded msgpack). For EVM (no create* tool builds these yet), each transaction is base64-encoded UTF-8 JSON with fields chainId/nonce/to/value/data/gasLimit plus either gasPrice (legacy) or maxFeePerGas+maxPriorityFeePerGas (EIP-1559) - all numeric fields as decimal or 0x-prefixed hex strings. For Bitcoin/Bitcoin Cash, pass exactly one transaction - the UnsignedTransaction from createBitcoinTransaction. Requires the 'sign' scope. 'address' must be the same address the create* tool (or getCryptoAddress/listAlgorandAddresses) returned as the sender - use getAddressInfo/activateCryptoAddress first if it's not the signed-in account's own default address. Pass the result to executeAlgorandTransaction (AVM) or executeBitcoinTransaction (Bitcoin/Bitcoin Cash) to broadcast, or to mergeMultisigTransactions first if this was a multisig envelope.")]
         public async Task<SignTransactionResponse> SignTransaction(
             [Description("Unsigned transaction(s) - base64-encoded msgpack for an AVM network, or base64-encoded UTF-8 JSON for an EVM one (see this tool's own description for the JSON shape).")] List<string> unsignedTransactions,
             [Description("Which network 'address' belongs to. Call listSupportedNetworks to see valid values.")] string network,
@@ -1233,6 +1373,57 @@ namespace BiatecMCP.MCP
             }
         }
 
+        [McpServerTool(Name = "executeBitcoinTransaction"),
+         Description("Broadcasts an already-signed Bitcoin or Bitcoin Cash transaction (raw bytes, base64-encoded, as returned by signTransaction) to the network via a public block explorer. Requires the 'sign' scope.")]
+        public async Task<ExecuteTransactionResponse> ExecuteBitcoinTransaction(
+            [Description("The signed transaction, base64-encoded raw bytes (as returned by signTransaction).")] string signedTransaction,
+            [Description("Which network to broadcast on - 'Bitcoin' or 'BitcoinCash'.")] string network)
+        {
+            var authError = RequireSignClaim();
+            if (authError != null)
+            {
+                return new ExecuteTransactionResponse { Error = authError, ErrorType = "InsufficientScope" };
+            }
+
+            if (string.IsNullOrWhiteSpace(signedTransaction))
+            {
+                return new ExecuteTransactionResponse { Error = "A signed transaction is required.", ErrorType = "InvalidRequest" };
+            }
+
+            try
+            {
+                var resolved = await _networkResolver.ResolveAsync(network);
+                if (resolved == null || resolved.Family is not (ChainFamily.Btc or ChainFamily.Bch))
+                {
+                    return new ExecuteTransactionResponse { Error = $"Unknown or unsupported network '{network}'. Use 'Bitcoin' or 'BitcoinCash'.", ErrorType = "InvalidRequest" };
+                }
+
+                byte[] rawBytes;
+                try
+                {
+                    rawBytes = Convert.FromBase64String(signedTransaction);
+                }
+                catch (FormatException)
+                {
+                    return new ExecuteTransactionResponse { Error = "The signed transaction must be base64-encoded.", ErrorType = "InvalidRequest" };
+                }
+
+                var chainSlug = resolved.Family == ChainFamily.Btc ? BlockchairChainSlugs.Bitcoin : BlockchairChainSlugs.BitcoinCash;
+                var rawHex = Convert.ToHexStringLower(rawBytes);
+                var txId = await _bitcoinDataSource.TryBroadcastAsync(chainSlug, rawHex);
+                if (txId == null)
+                {
+                    return new ExecuteTransactionResponse { Error = "The block explorer rejected the broadcast, or was unreachable. Try again shortly.", ErrorType = "BroadcastFailed" };
+                }
+
+                return new ExecuteTransactionResponse { TxId = txId };
+            }
+            catch (Exception ex)
+            {
+                return new ExecuteTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(ExecuteBitcoinTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
         private const string BiatecRouterProviderName = "BiatecRouter";
 
         /// <summary>
@@ -1332,6 +1523,18 @@ namespace BiatecMCP.MCP
         {
             var derived = await ResolveDerivedAddressAsync(bearerToken, slot, seedAddress);
             return derived?.EvmAddress;
+        }
+
+        /// <summary>
+        /// Resolves a Bitcoin or Bitcoin Cash address for signing/reporting - same thin-wrapper shape as
+        /// <see cref="ResolveAlgorandAddressAsync"/>/<see cref="ResolveEvmAddressAsync"/>, since both
+        /// Bitcoin-family addresses are derived together with everything else in the one
+        /// <see cref="ResolveDerivedAddressAsync"/> call.
+        /// </summary>
+        private async Task<string?> ResolveBitcoinAddressAsync(ChainFamily family, string? bearerToken = null, int slot = 0, string? seedAddress = null)
+        {
+            var derived = await ResolveDerivedAddressAsync(bearerToken, slot, seedAddress);
+            return family == ChainFamily.Btc ? derived?.BitcoinAddress : derived?.BitcoinCashAddress;
         }
 
         /// <summary>

@@ -8,6 +8,8 @@ using BiatecSelfCustodyCore.Providers;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using NBitcoin;
+using NBitcoin.Altcoins;
 using AlgorandArc76 = ARC76Account.Algorand.ARC76;
 using EthereumArc76 = ARC76Account.Ethereum.ARC76;
 
@@ -113,6 +115,48 @@ namespace BiatecSelfCustodyCore.Repository
                 _logger.LogError(ex, "Error loading an EVM account from {Provider} for email {Email}", storageProvider.Name, email);
                 throw new InvalidOperationException($"Error loading an EVM account from {storageProvider.Name}.");
             }
+        }
+
+        public async Task<Key> LoadBitcoinKeyAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null)
+        {
+            var storageProvider = _catalog.Resolve(provider);
+
+            try
+            {
+                var context = await ResolveContextAsync(storageProvider, accessToken);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
+
+                return new Key(EthereumArc76.GetEmailAccount(email, seed.Mnemonic, slot).GetPrivateKeyAsBytes());
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading a Bitcoin-family signing key from {Provider} for email {Email}", storageProvider.Name, email);
+                throw new InvalidOperationException($"Error loading a Bitcoin-family signing key from {storageProvider.Name}.");
+            }
+        }
+
+        public async Task<string> DeriveBitcoinAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null)
+        {
+            var key = await LoadBitcoinKeyAsync(email, slot, provider, accessToken, seedAddress);
+            return key.PubKey.GetAddress(ScriptPubKeyType.Segwit, Network.Main).ToString();
+        }
+
+        public async Task<string> DeriveBitcoinCashAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null)
+        {
+            var key = await LoadBitcoinKeyAsync(email, slot, provider, accessToken, seedAddress);
+            return key.PubKey.Hash.GetAddress(BCash.Instance.Mainnet).ToString();
         }
 
         public async Task<string> DeriveAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null)

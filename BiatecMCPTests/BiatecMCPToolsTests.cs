@@ -29,6 +29,7 @@ namespace BiatecMCPTests
         private Mock<IAlgorandChainRegistry> _chainRegistry = null!;
         private Mock<INetworkResolver> _networkResolver = null!;
         private Mock<IPublicEvmRpcDataSource> _evmRpcDataSource = null!;
+        private Mock<IPublicBitcoinDataSource> _bitcoinDataSource = null!;
 
         [SetUp]
         public void SetUp()
@@ -45,6 +46,7 @@ namespace BiatecMCPTests
             _chainRegistry.Setup(r => r.TryGetChainByAramidIdAsync(It.IsAny<long>(), It.IsAny<CancellationToken>())).ReturnsAsync((AlgorandChain?)null);
             _networkResolver = new Mock<INetworkResolver>();
             _evmRpcDataSource = new Mock<IPublicEvmRpcDataSource>();
+            _bitcoinDataSource = new Mock<IPublicBitcoinDataSource>();
         }
 
         private BiatecMCP.MCP.BiatecMCP CreateTool(DexSwapAggregatorService? aggregator = null) =>
@@ -54,6 +56,7 @@ namespace BiatecMCPTests
                 _chainRegistry.Object,
                 _networkResolver.Object,
                 _evmRpcDataSource.Object,
+                _bitcoinDataSource.Object,
                 NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
 
         private void SetBearerToken(string token) =>
@@ -254,6 +257,65 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task GetCryptoAddress_BitcoinNetwork_CallsWalletClient()
+        {
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Bitcoin", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" });
+            _walletClient
+                .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ListSeedsResponse { Seeds = { new SeedResponse { Address = "PRIMARY", IsPrimary = true } } });
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { BitcoinAddress = "bc1qsomeaddress" });
+
+            var result = await CreateTool().GetCryptoAddress("Bitcoin");
+
+            Assert.That(result.Address, Is.EqualTo("bc1qsomeaddress"));
+            Assert.That(result.Family, Is.EqualTo("Btc"));
+        }
+
+        [Test]
+        public async Task GetCryptoAddress_BitcoinCashNetwork_CallsWalletClient()
+        {
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("BitcoinCash", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Bch, DisplayName = "Bitcoin Cash" });
+            _walletClient
+                .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ListSeedsResponse { Seeds = { new SeedResponse { Address = "PRIMARY", IsPrimary = true } } });
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { BitcoinCashAddress = "bitcoincash:qsomeaddress" });
+
+            var result = await CreateTool().GetCryptoAddress("BitcoinCash");
+
+            Assert.That(result.Address, Is.EqualTo("bitcoincash:qsomeaddress"));
+            Assert.That(result.Family, Is.EqualTo("Bch"));
+        }
+
+        [Test]
+        public async Task GetCryptoBalance_BitcoinNetwork_ReturnsBalanceFromDataSource()
+        {
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Bitcoin", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" });
+            _bitcoinDataSource
+                .Setup(d => d.TryGetBalanceAsync(BlockchairChainSlugs.Bitcoin, "bc1qaddr", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(150_000_000L);
+
+            var result = await CreateTool().GetCryptoBalance("Bitcoin", address: "bc1qaddr");
+
+            Assert.That(result.Error, Is.Empty);
+            Assert.That(result.NativeCurrencySymbol, Is.EqualTo("BTC"));
+            Assert.That(result.NativeBalance, Is.EqualTo(1.5m));
+            Assert.That(result.NativeBalanceBaseUnits, Is.EqualTo("150000000"));
+        }
+
+        [Test]
         public async Task GetCryptoBalance_UnknownNetwork_ReturnsClearError()
         {
             _networkResolver.Setup(r => r.ResolveAsync("NotAThing", It.IsAny<CancellationToken>())).ReturnsAsync((ResolvedNetwork?)null);
@@ -434,6 +496,113 @@ namespace BiatecMCPTests
             Assert.That(result.ErrorType, Does.Contain("ArgumentException"));
             // Never touches the wallet's sign endpoint - this tool only builds, never signs.
             _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        // ───────────────────────── createBitcoinTransaction / executeBitcoinTransaction ─────────────────────────
+
+        [Test]
+        public async Task CreateBitcoinTransaction_HappyPath_BuildsUnsignedTransactionFromUtxos()
+        {
+            SetClaims(new Claim("primary_seed_address", "SEED"));
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Bitcoin", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" });
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "SEED", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { BitcoinAddress = "bc1qsender" });
+            _bitcoinDataSource
+                .Setup(d => d.GetUtxosAsync(BlockchairChainSlugs.Bitcoin, "bc1qsender", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new[] { new BitcoinUtxo("tx1", 0, 1_000_000) });
+            _bitcoinDataSource
+                .Setup(d => d.TryGetSuggestedFeeRateAsync(BlockchairChainSlugs.Bitcoin, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1m);
+
+            var result = await CreateTool().CreateBitcoinTransaction("bc1qreceiver", 500_000, "Bitcoin");
+
+            Assert.That(result.Error, Is.Empty);
+            Assert.That(result.Sender, Is.EqualTo("bc1qsender"));
+            Assert.That(result.Receiver, Is.EqualTo("bc1qreceiver"));
+            Assert.That(result.AmountSatoshis, Is.EqualTo(500_000));
+            Assert.That(result.InputCount, Is.EqualTo(1));
+            Assert.That(result.UnsignedTransaction, Is.Not.Empty);
+        }
+
+        [Test]
+        public async Task CreateBitcoinTransaction_NoUtxos_ReturnsClearError()
+        {
+            SetClaims(new Claim("primary_seed_address", "SEED"));
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Bitcoin", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" });
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "SEED", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { BitcoinAddress = "bc1qsender" });
+            _bitcoinDataSource
+                .Setup(d => d.GetUtxosAsync(BlockchairChainSlugs.Bitcoin, "bc1qsender", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(Array.Empty<BitcoinUtxo>());
+
+            var result = await CreateTool().CreateBitcoinTransaction("bc1qreceiver", 500_000, "Bitcoin");
+
+            Assert.That(result.ErrorType, Is.EqualTo("NoUtxos"));
+        }
+
+        [Test]
+        public async Task CreateBitcoinTransaction_UnknownNetwork_ReturnsInvalidRequest()
+        {
+            _networkResolver.Setup(r => r.ResolveAsync("NotAThing", It.IsAny<CancellationToken>())).ReturnsAsync((ResolvedNetwork?)null);
+
+            var result = await CreateTool().CreateBitcoinTransaction("bc1qreceiver", 500_000, "NotAThing");
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        [Test]
+        public async Task ExecuteBitcoinTransaction_MissingSignClaim_ReturnsInsufficientScope()
+        {
+            SetClaims();
+            SetBearerToken("tok");
+
+            var result = await CreateTool().ExecuteBitcoinTransaction(Convert.ToBase64String(new byte[] { 1, 2, 3 }), "Bitcoin");
+
+            Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
+            _bitcoinDataSource.Verify(d => d.TryBroadcastAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task ExecuteBitcoinTransaction_ValidRequest_BroadcastsAndReturnsTxId()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Bitcoin", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" });
+            _bitcoinDataSource
+                .Setup(d => d.TryBroadcastAsync(BlockchairChainSlugs.Bitcoin, "010203", It.IsAny<CancellationToken>()))
+                .ReturnsAsync("abc123txid");
+
+            var result = await CreateTool().ExecuteBitcoinTransaction(Convert.ToBase64String(new byte[] { 1, 2, 3 }), "Bitcoin");
+
+            Assert.That(result.Error, Is.Empty);
+            Assert.That(result.TxId, Is.EqualTo("abc123txid"));
+        }
+
+        [Test]
+        public async Task ExecuteBitcoinTransaction_BroadcastFails_ReturnsClearError()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Bitcoin", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" });
+            _bitcoinDataSource
+                .Setup(d => d.TryBroadcastAsync(BlockchairChainSlugs.Bitcoin, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((string?)null);
+
+            var result = await CreateTool().ExecuteBitcoinTransaction(Convert.ToBase64String(new byte[] { 1, 2, 3 }), "Bitcoin");
+
+            Assert.That(result.ErrorType, Is.EqualTo("BroadcastFailed"));
         }
 
         [Test]

@@ -18,6 +18,9 @@ namespace BiatecMCP.BusinessLogic
             ("Base", 8453)
         ];
 
+        private static readonly string[] BitcoinNames = ["Bitcoin", "BTC"];
+        private static readonly string[] BitcoinCashNames = ["BitcoinCash", "Bitcoin Cash", "BCH"];
+
         private readonly IAlgorandChainRegistry _algorandChainRegistry;
         private readonly IEvmChainRegistry _evmChainRegistry;
         private readonly IOptionsMonitor<Model.AlgodConfiguration> _algodConfig;
@@ -68,6 +71,16 @@ namespace BiatecMCP.BusinessLogic
                 return new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = evmChainByName.Name, EvmChain = evmChainByName };
             }
 
+            if (BitcoinNames.Any(n => string.Equals(n, network, StringComparison.OrdinalIgnoreCase)))
+            {
+                return new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" };
+            }
+
+            if (BitcoinCashNames.Any(n => string.Equals(n, network, StringComparison.OrdinalIgnoreCase)))
+            {
+                return new ResolvedNetwork { Family = ChainFamily.Bch, DisplayName = "Bitcoin Cash" };
+            }
+
             return null;
         }
 
@@ -98,6 +111,9 @@ namespace BiatecMCP.BusinessLogic
                     });
                 }
             }
+
+            summaries.Add(new NetworkSummary { Name = "Bitcoin", Family = nameof(ChainFamily.Btc), Id = "btc", NativeCurrencySymbol = "BTC" });
+            summaries.Add(new NetworkSummary { Name = "Bitcoin Cash", Family = nameof(ChainFamily.Bch), Id = "bch", NativeCurrencySymbol = "BCH" });
 
             return summaries;
         }

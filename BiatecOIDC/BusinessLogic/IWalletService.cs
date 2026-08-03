@@ -55,5 +55,28 @@ namespace BiatecOIDC.BusinessLogic
         /// <exception cref="FormatException">A transaction could not be built/signed.</exception>
         /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
         Task<IReadOnlyList<byte[]>> SignEvmTransactionGroupAsync(string email, string provider, IReadOnlyList<EvmUnsignedTransaction> unsignedTransactions, string? accessToken, string? seedAddress = null, int slot = 0);
+
+        /// <summary>
+        /// Signs a single unsigned Bitcoin or Bitcoin Cash transaction via the shared self-custody signing
+        /// path (<see cref="BiatecSelfCustodyCore.BusinessLogic.IDriveService.SignBitcoinTransactionAsync"/>),
+        /// after pricing every non-change output (<see cref="BitcoinTransactionOutput.IsChange"/>) via
+        /// <see cref="IBitcoinValuationService"/> and checking the total against the caller's
+        /// daily/weekly/monthly limits - the same enforcement <see cref="SignTransactionGroupAsync"/> applies
+        /// for Algorand, just priced directly (the native coin *is* the asset, no router needed) instead of
+        /// via the Biatec Router.
+        /// </summary>
+        /// <param name="email">The wallet owner (from the caller's validated OIDC access token).</param>
+        /// <param name="provider">The cloud storage provider the account is stored under.</param>
+        /// <param name="family">Bitcoin or Bitcoin Cash.</param>
+        /// <param name="transaction">The unsigned transaction - inputs (this seed/slot's own UTXOs) and outputs (recipient(s) plus change).</param>
+        /// <param name="accessToken">The caller-supplied provider access token used to read/decrypt the self-custody account file and the spending-limit data.</param>
+        /// <param name="seedAddress">Selects which seed signs (<c>null</c> = the vault's current primary seed).</param>
+        /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
+        /// <returns>The fully-signed transaction's raw bytes.</returns>
+        /// <exception cref="BitcoinValuationException">The current BTC/BCH-USD spot price could not be determined.</exception>
+        /// <exception cref="SpendingLimitExceededException">The transaction's total spend exceeds a configured global or address-specific daily/weekly/monthly limit.</exception>
+        /// <exception cref="FormatException">The transaction could not be built/signed.</exception>
+        /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
+        Task<byte[]> SignBitcoinTransactionGroupAsync(string email, string provider, BitcoinChainFamily family, BitcoinUnsignedTransaction transaction, string? accessToken, string? seedAddress = null, int slot = 0);
     }
 }

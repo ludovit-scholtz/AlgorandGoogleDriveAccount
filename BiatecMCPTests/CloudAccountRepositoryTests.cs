@@ -353,6 +353,71 @@ namespace BiatecMCPTests
             Assert.That(derivedFromSecond, Is.Not.EqualTo(derivedFromPrimary));
         }
 
+        // ───────────────────────── DeriveBitcoinAddressAsync / DeriveBitcoinCashAddressAsync ─────────────────────────
+
+        [Test]
+        public async Task DeriveBitcoinAddressAsync_SameKeyAsEvm_IsDeterministicAndBech32()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var first = await repository.DeriveBitcoinAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var second = await repository.DeriveBitcoinAddressAsync(TestEmail, "Fake", null, 0, "token");
+
+            Assert.That(first, Does.StartWith("bc1"));
+            Assert.That(second, Is.EqualTo(first));
+        }
+
+        [Test]
+        public async Task DeriveBitcoinCashAddressAsync_IsDeterministicAndCashAddrFormatted()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var first = await repository.DeriveBitcoinCashAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var second = await repository.DeriveBitcoinCashAddressAsync(TestEmail, "Fake", null, 0, "token");
+
+            Assert.That(first, Does.StartWith("bitcoincash:"));
+            Assert.That(second, Is.EqualTo(first));
+        }
+
+        [Test]
+        public async Task DeriveBitcoinAddressAsync_DiffersFromBitcoinCashAddress_ForSameSeedAndSlot()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var btc = await repository.DeriveBitcoinAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var bch = await repository.DeriveBitcoinCashAddressAsync(TestEmail, "Fake", null, 0, "token");
+
+            Assert.That(btc, Is.Not.EqualTo(bch));
+        }
+
+        [Test]
+        public async Task DeriveBitcoinAddressAsync_NonZeroSlot_DiffersFromSlotZero()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var slot0 = await repository.DeriveBitcoinAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var slot1 = await repository.DeriveBitcoinAddressAsync(TestEmail, "Fake", null, 1, "token");
+
+            Assert.That(slot1, Is.Not.EqualTo(slot0));
+        }
+
+        [Test]
+        public void DeriveBitcoinAddressAsync_UnknownSeed_ThrowsInvalidOperationException()
+        {
+            var repository = CreateRepository();
+
+            Assert.That(async () =>
+                {
+                    await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+                    await repository.DeriveBitcoinAddressAsync(TestEmail, "Fake", "NOTAREALADDRESS", 0, "token");
+                },
+                Throws.InvalidOperationException);
+        }
+
         [Test]
         public void DeriveEvmAddressAsync_UnknownPrimaryAddress_ThrowsInvalidOperationException()
         {

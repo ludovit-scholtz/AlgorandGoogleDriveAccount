@@ -163,6 +163,14 @@ namespace BiatecMCP
             builder.Services.AddScoped<IEvmChainRegistry, EvmChainRegistry>();
             builder.Services.AddScoped<INetworkResolver, NetworkResolver>();
 
+            // Bitcoin/Bitcoin Cash UTXO/balance/broadcast data source - one unified Blockchair API shape for
+            // both chains (see BlockchairChainSlugs), unlike EVM's per-chain RPC discovery above.
+            builder.Services.AddHttpClient<BlockchairDataSource>(client =>
+            {
+                client.BaseAddress = new Uri("https://api.blockchair.com/");
+            });
+            builder.Services.AddScoped<IPublicBitcoinDataSource>(sp => sp.GetRequiredService<BlockchairDataSource>());
+
             // Configure MCP Server
             builder.Services.AddMcpServer()
                 .WithHttpTransport(options =>

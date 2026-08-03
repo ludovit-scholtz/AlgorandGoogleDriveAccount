@@ -106,9 +106,12 @@ namespace BiatecMCP.Generated
         /// <br/>`JwtIssuer:ProtectedResources`, and be repeated identically on `/token`.</param>
         /// <param name="idp">Fast track: `"google"` or `"microsoft"` skips the provider-picker page and challenges
         /// <br/>that provider directly. Omit to show the picker.</param>
+        /// <param name="scopeId">Test/dev-only (see `MOCK_TESTING.md`): combined with `idp=Mock`, skips the mock
+        /// <br/>account picker too and signs in directly as the configured account with this
+        /// <br/>`CloudServices:Mock:Accounts[].ScopeId`. Ignored for any other idp.</param>
         /// <returns>OK</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
-        System.Threading.Tasks.Task AuthorizeAsync(string client_id = null, string redirect_uri = null, string returnUrl = null, string response_type = null, string response_mode = null, string scope = null, string state = null, string nonce = null, string code_challenge = null, string code_challenge_method = null, string resource = null, string idp = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
+        System.Threading.Tasks.Task AuthorizeAsync(string client_id = null, string redirect_uri = null, string returnUrl = null, string response_type = null, string response_mode = null, string scope = null, string state = null, string nonce = null, string code_challenge = null, string code_challenge_method = null, string resource = null, string idp = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
 
         /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
         /// <summary>
@@ -132,9 +135,36 @@ namespace BiatecMCP.Generated
         /// <param name="idp">`"google"` or `"microsoft"`.</param>
         /// <param name="retried">Set when re-challenging after M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeCallback(System.String,System.Boolean) found storage-write access was
         /// <br/>missing - forces a fresh consent screen requesting that scope again.</param>
+        /// <param name="scopeId">Test/dev-only, only meaningful when idp is `"Mock"` - see
+        /// <br/>M:BiatecOIDC.Controllers.JwtIssuerController.Authorize(System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String)'s remarks.</param>
         /// <returns>OK</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
-        System.Threading.Tasks.Task ChallengeAsync(string requestId = null, string idp = null, bool? retried = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
+        System.Threading.Tasks.Task ChallengeAsync(string requestId = null, string idp = null, bool? retried = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
+
+        /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
+        /// <summary>
+        /// Test/dev-only (see `MOCK_TESTING.md`): picker page listing every configured
+        /// <br/>`CloudServices:Mock:Accounts` entry by its `ScopeId`, reached from
+        /// <br/>M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeChallenge(System.String,System.String,System.Boolean,System.String) when `idp=Mock` was chosen without a `scopeId` fast
+        /// <br/>track. Not part of the public OIDC contract, and deliberately not linked from any public-facing
+        /// <br/>documentation. 404s if the mock provider isn't registered (i.e. not enabled/configured).
+        /// </summary>
+        /// <returns>OK</returns>
+        /// <exception cref="OidcApiException">A server side error occurred.</exception>
+        System.Threading.Tasks.Task MockSelectAccountAsync(string requestId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
+
+        /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
+        /// <summary>
+        /// Test/dev-only (see `MOCK_TESTING.md`): signs in directly as the configured mock account
+        /// <br/>named scopeId - no external redirect, no consent screen for the mock
+        /// <br/>provider itself. Ensures that account's seed vault exists in the mock in-memory storage (seeded
+        /// <br/>from its configured ARC-76 mnemonic - idempotent, so calling this repeatedly is harmless),
+        /// <br/>establishes the same cookie session a real provider's `OnTokenValidated` would, then
+        /// <br/>resumes exactly like a real sign-in via M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeCallback(System.String,System.Boolean).
+        /// </summary>
+        /// <returns>OK</returns>
+        /// <exception cref="OidcApiException">A server side error occurred.</exception>
+        System.Threading.Tasks.Task MockSignInAsync(string requestId = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
 
         /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
         /// <summary>
@@ -143,7 +173,7 @@ namespace BiatecMCP.Generated
         /// <br/>requestId and finalizes it as if `/authorize` had been called while
         /// <br/>already signed in. Before finalizing, verifies the fresh token actually has storage-write
         /// <br/>access (the user can decline just that permission on the consent screen) and, if missing,
-        /// <br/>sends the browser through one incremental-consent round-trip via M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeChallenge(System.String,System.String,System.Boolean)
+        /// <br/>sends the browser through one incremental-consent round-trip via M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeChallenge(System.String,System.String,System.Boolean,System.String)
         /// <br/>so the OIDC code/token is never issued against a session that can't read/write the self-custody
         /// <br/>account file.
         /// </summary>
@@ -884,9 +914,12 @@ namespace BiatecMCP.Generated
         /// <br/>`JwtIssuer:ProtectedResources`, and be repeated identically on `/token`.</param>
         /// <param name="idp">Fast track: `"google"` or `"microsoft"` skips the provider-picker page and challenges
         /// <br/>that provider directly. Omit to show the picker.</param>
+        /// <param name="scopeId">Test/dev-only (see `MOCK_TESTING.md`): combined with `idp=Mock`, skips the mock
+        /// <br/>account picker too and signs in directly as the configured account with this
+        /// <br/>`CloudServices:Mock:Accounts[].ScopeId`. Ignored for any other idp.</param>
         /// <returns>OK</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
-        public virtual async System.Threading.Tasks.Task AuthorizeAsync(string client_id = null, string redirect_uri = null, string returnUrl = null, string response_type = null, string response_mode = null, string scope = null, string state = null, string nonce = null, string code_challenge = null, string code_challenge_method = null, string resource = null, string idp = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        public virtual async System.Threading.Tasks.Task AuthorizeAsync(string client_id = null, string redirect_uri = null, string returnUrl = null, string response_type = null, string response_mode = null, string scope = null, string state = null, string nonce = null, string code_challenge = null, string code_challenge_method = null, string resource = null, string idp = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
         {
             var client_ = _httpClient;
             var disposeClient_ = false;
@@ -948,6 +981,10 @@ namespace BiatecMCP.Generated
                     if (idp != null)
                     {
                         urlBuilder_.Append(System.Uri.EscapeDataString("idp")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(idp, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    if (scopeId != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("scopeId")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(scopeId, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
                     }
                     urlBuilder_.Length--;
 
@@ -1086,9 +1123,11 @@ namespace BiatecMCP.Generated
         /// <param name="idp">`"google"` or `"microsoft"`.</param>
         /// <param name="retried">Set when re-challenging after M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeCallback(System.String,System.Boolean) found storage-write access was
         /// <br/>missing - forces a fresh consent screen requesting that scope again.</param>
+        /// <param name="scopeId">Test/dev-only, only meaningful when idp is `"Mock"` - see
+        /// <br/>M:BiatecOIDC.Controllers.JwtIssuerController.Authorize(System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String)'s remarks.</param>
         /// <returns>OK</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
-        public virtual async System.Threading.Tasks.Task ChallengeAsync(string requestId = null, string idp = null, bool? retried = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        public virtual async System.Threading.Tasks.Task ChallengeAsync(string requestId = null, string idp = null, bool? retried = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
         {
             var client_ = _httpClient;
             var disposeClient_ = false;
@@ -1114,6 +1153,171 @@ namespace BiatecMCP.Generated
                     if (retried != null)
                     {
                         urlBuilder_.Append(System.Uri.EscapeDataString("retried")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(retried, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    if (scopeId != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("scopeId")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(scopeId, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    urlBuilder_.Length--;
+
+                    PrepareRequest(client_, request_, urlBuilder_);
+
+                    var url_ = urlBuilder_.ToString();
+                    request_.RequestUri = new System.Uri(url_, System.UriKind.RelativeOrAbsolute);
+
+                    PrepareRequest(client_, request_, url_);
+
+                    var response_ = await client_.SendAsync(request_, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                    var disposeResponse_ = true;
+                    try
+                    {
+                        var headers_ = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.IEnumerable<string>>();
+                        foreach (var item_ in response_.Headers)
+                            headers_[item_.Key] = item_.Value;
+                        if (response_.Content != null && response_.Content.Headers != null)
+                        {
+                            foreach (var item_ in response_.Content.Headers)
+                                headers_[item_.Key] = item_.Value;
+                        }
+
+                        ProcessResponse(client_, response_);
+
+                        var status_ = (int)response_.StatusCode;
+                        if (status_ == 200)
+                        {
+                            return;
+                        }
+                        else
+                        {
+                            var responseData_ = response_.Content == null ? null : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
+                            throw new OidcApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                        }
+                    }
+                    finally
+                    {
+                        if (disposeResponse_)
+                            response_.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                if (disposeClient_)
+                    client_.Dispose();
+            }
+        }
+
+        /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
+        /// <summary>
+        /// Test/dev-only (see `MOCK_TESTING.md`): picker page listing every configured
+        /// <br/>`CloudServices:Mock:Accounts` entry by its `ScopeId`, reached from
+        /// <br/>M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeChallenge(System.String,System.String,System.Boolean,System.String) when `idp=Mock` was chosen without a `scopeId` fast
+        /// <br/>track. Not part of the public OIDC contract, and deliberately not linked from any public-facing
+        /// <br/>documentation. 404s if the mock provider isn't registered (i.e. not enabled/configured).
+        /// </summary>
+        /// <returns>OK</returns>
+        /// <exception cref="OidcApiException">A server side error occurred.</exception>
+        public virtual async System.Threading.Tasks.Task MockSelectAccountAsync(string requestId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        {
+            var client_ = _httpClient;
+            var disposeClient_ = false;
+            try
+            {
+                using (var request_ = new System.Net.Http.HttpRequestMessage())
+                {
+                    request_.Method = new System.Net.Http.HttpMethod("GET");
+
+                    var urlBuilder_ = new System.Text.StringBuilder();
+                
+                    // Operation Path: "authorize/mock-select-account"
+                    urlBuilder_.Append("authorize/mock-select-account");
+                    urlBuilder_.Append('?');
+                    if (requestId != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("requestId")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(requestId, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    urlBuilder_.Length--;
+
+                    PrepareRequest(client_, request_, urlBuilder_);
+
+                    var url_ = urlBuilder_.ToString();
+                    request_.RequestUri = new System.Uri(url_, System.UriKind.RelativeOrAbsolute);
+
+                    PrepareRequest(client_, request_, url_);
+
+                    var response_ = await client_.SendAsync(request_, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                    var disposeResponse_ = true;
+                    try
+                    {
+                        var headers_ = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.IEnumerable<string>>();
+                        foreach (var item_ in response_.Headers)
+                            headers_[item_.Key] = item_.Value;
+                        if (response_.Content != null && response_.Content.Headers != null)
+                        {
+                            foreach (var item_ in response_.Content.Headers)
+                                headers_[item_.Key] = item_.Value;
+                        }
+
+                        ProcessResponse(client_, response_);
+
+                        var status_ = (int)response_.StatusCode;
+                        if (status_ == 200)
+                        {
+                            return;
+                        }
+                        else
+                        {
+                            var responseData_ = response_.Content == null ? null : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
+                            throw new OidcApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                        }
+                    }
+                    finally
+                    {
+                        if (disposeResponse_)
+                            response_.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                if (disposeClient_)
+                    client_.Dispose();
+            }
+        }
+
+        /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
+        /// <summary>
+        /// Test/dev-only (see `MOCK_TESTING.md`): signs in directly as the configured mock account
+        /// <br/>named scopeId - no external redirect, no consent screen for the mock
+        /// <br/>provider itself. Ensures that account's seed vault exists in the mock in-memory storage (seeded
+        /// <br/>from its configured ARC-76 mnemonic - idempotent, so calling this repeatedly is harmless),
+        /// <br/>establishes the same cookie session a real provider's `OnTokenValidated` would, then
+        /// <br/>resumes exactly like a real sign-in via M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeCallback(System.String,System.Boolean).
+        /// </summary>
+        /// <returns>OK</returns>
+        /// <exception cref="OidcApiException">A server side error occurred.</exception>
+        public virtual async System.Threading.Tasks.Task MockSignInAsync(string requestId = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        {
+            var client_ = _httpClient;
+            var disposeClient_ = false;
+            try
+            {
+                using (var request_ = new System.Net.Http.HttpRequestMessage())
+                {
+                    request_.Method = new System.Net.Http.HttpMethod("GET");
+
+                    var urlBuilder_ = new System.Text.StringBuilder();
+                
+                    // Operation Path: "authorize/mock-sign-in"
+                    urlBuilder_.Append("authorize/mock-sign-in");
+                    urlBuilder_.Append('?');
+                    if (requestId != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("requestId")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(requestId, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    if (scopeId != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("scopeId")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(scopeId, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
                     }
                     urlBuilder_.Length--;
 
@@ -1171,7 +1375,7 @@ namespace BiatecMCP.Generated
         /// <br/>requestId and finalizes it as if `/authorize` had been called while
         /// <br/>already signed in. Before finalizing, verifies the fresh token actually has storage-write
         /// <br/>access (the user can decline just that permission on the consent screen) and, if missing,
-        /// <br/>sends the browser through one incremental-consent round-trip via M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeChallenge(System.String,System.String,System.Boolean)
+        /// <br/>sends the browser through one incremental-consent round-trip via M:BiatecOIDC.Controllers.JwtIssuerController.AuthorizeChallenge(System.String,System.String,System.Boolean,System.String)
         /// <br/>so the OIDC code/token is never issued against a session that can't read/write the self-custody
         /// <br/>account file.
         /// </summary>
@@ -3825,6 +4029,18 @@ namespace BiatecMCP.Generated
         /// </summary>
         [System.Text.Json.Serialization.JsonPropertyName("evmAddress")]
         public string EvmAddress { get; set; }
+
+        /// <summary>
+        /// The derived Bitcoin mainnet P2WPKH (native SegWit, `bc1...`) address for the same seed/slot.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("bitcoinAddress")]
+        public string BitcoinAddress { get; set; }
+
+        /// <summary>
+        /// The derived Bitcoin Cash mainnet CashAddr (`bitcoincash:q...`) address for the same seed/slot.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("bitcoinCashAddress")]
+        public string BitcoinCashAddress { get; set; }
 
         /// <summary>
         /// The seed's identifying (Algorand slot-0) address, echoed back.

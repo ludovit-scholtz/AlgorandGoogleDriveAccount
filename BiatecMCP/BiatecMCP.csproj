@@ -22,6 +22,8 @@
     <PackageReference Include="BiatecRouterConnector" Version="1.0.0.2026011820" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.10" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
+    <PackageReference Include="NBitcoin" Version="10.0.7" />
+    <PackageReference Include="NBitcoin.Altcoins" Version="6.0.3" />
   </ItemGroup>
 
 </Project>

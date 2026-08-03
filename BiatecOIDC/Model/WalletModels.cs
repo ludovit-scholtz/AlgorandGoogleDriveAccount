@@ -180,6 +180,12 @@ namespace BiatecOIDC.Model
         /// <summary>The derived Ethereum-family (EVM) address at <see cref="Slot"/> for the same seed, <c>"0x..."</c>.</summary>
         public string EvmAddress { get; set; } = string.Empty;
 
+        /// <summary>The derived Bitcoin mainnet P2WPKH (native SegWit, <c>bc1...</c>) address for the same seed/slot.</summary>
+        public string BitcoinAddress { get; set; } = string.Empty;
+
+        /// <summary>The derived Bitcoin Cash mainnet CashAddr (<c>bitcoincash:q...</c>) address for the same seed/slot.</summary>
+        public string BitcoinCashAddress { get; set; } = string.Empty;
+
         /// <summary>The seed's identifying (Algorand slot-0) address, echoed back.</summary>
         public string SeedAddress { get; set; } = string.Empty;
 
