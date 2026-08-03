@@ -2,9 +2,11 @@ using System.Security.Claims;
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Controllers;
 using BiatecOIDC.Model;
+using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
 using BiatecSelfCustodyCore.Repository;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Routing;
@@ -322,6 +324,153 @@ namespace BiatecOIDCTests
             Assert.That(html, Does.Contain(ClientId));
         }
 
+        // ───────────────────────── Mock testing provider (see MOCK_TESTING.md) ─────────────────────────
+        //
+        // Regression coverage for: "No authentication handler is registered for the scheme 'Mock'" -
+        // AuthorizeConsent/AuthorizeCallback used to call HttpContext.GetTokenAsync(provider.Name, ...),
+        // which throws InvalidOperationException for any provider whose Name isn't a registered ASP.NET
+        // Core authentication scheme - true for every real provider (each registers its own OIDC scheme),
+        // but never true for Mock, which signs straight into the cookie scheme. Fixed by switching those
+        // call sites to ICloudStorageProvider.GetAmbientAccessTokenAsync, which every provider - including
+        // Mock - implements without needing a registered scheme.
+
+        [Test]
+        public async Task AuthorizeConsent_SignedInViaMockProvider_DoesNotThrowAndShowsStorageAccessGranted()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, Scope = "openid profile email" });
+            var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache());
+
+            IActionResult? result = null;
+            Assert.DoesNotThrowAsync(async () => result = await controller.AuthorizeConsent("request-id"));
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result!).Content!;
+            // Mock's HasWriteAccessAsync always grants for any of its own tokens - storage access must show
+            // as granted, not missing.
+            Assert.That(html, Does.Not.Contain("storage access is missing"));
+        }
+
+        [Test]
+        public async Task AuthorizeCallback_SignedInViaMockProvider_DoesNotThrowAndProceedsToConsent()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.GetPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync(new OidcAuthorizeRequest { ClientId = ClientId, RedirectUri = RedirectUri, Scope = "openid profile email" });
+            var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache());
+
+            IActionResult? result = null;
+            Assert.DoesNotThrowAsync(async () => result = await controller.AuthorizeCallback("request-id"));
+
+            Assert.That(result, Is.TypeOf<RedirectToActionResult>());
+            Assert.That(((RedirectToActionResult)result!).ActionName, Is.EqualTo(nameof(JwtIssuerController.AuthorizeConsent)));
+        }
+
+        [Test]
+        public void MockSelectAccount_ProviderNotRegistered_ReturnsNotFound()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var controller = CreateController(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = controller.MockSelectAccount("request-id");
+
+            Assert.That(result, Is.TypeOf<NotFoundResult>());
+        }
+
+        [Test]
+        public void MockSelectAccount_ProviderRegistered_ListsConfiguredAccountsByScopeId()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var accounts = new[]
+            {
+                new MockCloudAccountConfiguration { ScopeId = "app1", Email = "mock-app1@example.com", Mnemonic = TestMockMnemonic },
+                new MockCloudAccountConfiguration { ScopeId = "app2", Email = "mock-app2@example.com", Mnemonic = TestMockMnemonic }
+            };
+            var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false, mockAccounts: accounts);
+
+            var result = controller.MockSelectAccount("request-id");
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result).Content!;
+            Assert.That(html, Does.Contain("app1"));
+            Assert.That(html, Does.Contain("mock-app1@example.com"));
+            Assert.That(html, Does.Contain("app2"));
+            Assert.That(html, Does.Contain("mock-app2@example.com"));
+        }
+
+        [Test]
+        public async Task MockSignIn_UnknownScopeId_ReturnsBadRequest()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = await controller.MockSignIn("request-id", "not-configured");
+
+            Assert.That(result, Is.TypeOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task MockSignIn_KnownScopeId_SeedsVaultAndRedirectsToCallback()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var account = new MockCloudAccountConfiguration { ScopeId = "app1", Email = "mock-app1@example.com", Mnemonic = TestMockMnemonic };
+            var (controller, accountRepository) = CreateControllerSignedInAsMock(
+                jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false, mockAccounts: new[] { account });
+
+            var result = await controller.MockSignIn("request-id", "app1");
+
+            Assert.That(result, Is.TypeOf<RedirectToActionResult>());
+            Assert.That(((RedirectToActionResult)result).ActionName, Is.EqualTo(nameof(JwtIssuerController.AuthorizeCallback)));
+            accountRepository.Verify(
+                r => r.SeedTestVaultAsync(account.Email, MockCloudStorageProvider.ProviderName, account.Mnemonic, MockCloudStorageProvider.BuildMockAccessToken(account.Email)),
+                Times.Once);
+        }
+
+        [Test]
+        public async Task AuthorizeChallenge_MockIdpWithScopeId_SignsInDirectlyAndRedirectsToCallback()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var account = new MockCloudAccountConfiguration { ScopeId = "app1", Email = "mock-app1@example.com", Mnemonic = TestMockMnemonic };
+            var (controller, _) = CreateControllerSignedInAsMock(
+                jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false, mockAccounts: new[] { account });
+
+            var result = await controller.AuthorizeChallenge("request-id", MockCloudStorageProvider.ProviderName, scopeId: "app1");
+
+            Assert.That(result, Is.TypeOf<RedirectToActionResult>());
+            Assert.That(((RedirectToActionResult)result).ActionName, Is.EqualTo(nameof(JwtIssuerController.AuthorizeCallback)));
+        }
+
+        [Test]
+        public async Task AuthorizeChallenge_MockIdpWithoutScopeId_RedirectsToAccountPicker()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = await controller.AuthorizeChallenge("request-id", MockCloudStorageProvider.ProviderName);
+
+            Assert.That(result, Is.TypeOf<RedirectToActionResult>());
+            Assert.That(((RedirectToActionResult)result).ActionName, Is.EqualTo(nameof(JwtIssuerController.MockSelectAccount)));
+        }
+
+        [Test]
+        public async Task SelectProvider_MockProviderRegistered_ShowsMockButton()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync((OidcAuthorizeRequest?)null);
+            var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = await controller.SelectProvider("request-id");
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result).Content!;
+            Assert.That(html, Does.Contain("Mock (Testing)"));
+        }
+
         [Test]
         public async Task SelectProvider_ClientHasDisplayName_ShowsDisplayNameAndRequestedScopes()
         {
@@ -541,11 +690,11 @@ namespace BiatecOIDCTests
 
         private static JwtIssuerController CreateController(IJwtIssuerService jwtIssuerService, IDistributedCache cache, bool authenticated, IConfiguration? configuration = null, string? providerAccessToken = null)
         {
-            // Shared with HttpContext.GetTokenAsync's stubbed value below (see the AuthenticationService
-            // setup further down) - FinalizeAuthorizeAsync resolves the ambient token via
-            // ICloudStorageProvider.GetAmbientAccessTokenAsync() (for the freshest possible token, see its
-            // own comment), while AuthorizeConsent/AuthorizeCallback use the plain
-            // HttpContext.GetTokenAsync - both need to observe the same providerAccessToken in tests.
+            // FakeCloudStorageProvider.GetAmbientAccessTokenAsync() just returns providerAccessToken
+            // directly - FinalizeAuthorizeAsync, AuthorizeConsent, and AuthorizeCallback all resolve the
+            // ambient token this same way (see ICloudStorageProvider.GetAmbientAccessTokenAsync's remarks
+            // on why - required, not just preferred, for a provider like Mock that has no registered
+            // ASP.NET Core authentication scheme to fall back on).
             var providerCatalog = new CloudStorageProviderCatalog(new ICloudStorageProvider[] { new FakeCloudStorageProvider(providerAccessToken) });
             var accountRepository = Mock.Of<ICloudAccountRepository>();
             var mockConfig = Mock.Of<Microsoft.Extensions.Options.IOptionsMonitor<MockCloudServiceConfiguration>>(m => m.CurrentValue == new MockCloudServiceConfiguration());
@@ -593,6 +742,91 @@ namespace BiatecOIDCTests
             controller.Url = urlHelper.Object;
 
             return controller;
+        }
+
+        private const string TestMockMnemonic =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon " +
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        /// <summary>
+        /// Builds a controller whose provider catalog includes a real <see cref="MockCloudStorageProvider"/>
+        /// (backed by a real <see cref="MockCloudStorage"/>, not a test double - the whole point is
+        /// exercising the actual class the mock testing feature runs) alongside the usual fake Google
+        /// stand-in, and - when <paramref name="authenticated"/> - a signed-in principal carrying
+        /// <c>biatec_idp: "Mock"</c>, mirroring what <c>JwtIssuerController.MockSignIn</c> actually stamps.
+        /// </summary>
+        private static (JwtIssuerController Controller, Mock<ICloudAccountRepository> AccountRepository) CreateControllerSignedInAsMock(
+            IJwtIssuerService jwtIssuerService,
+            IDistributedCache cache,
+            bool authenticated = true,
+            IEnumerable<MockCloudAccountConfiguration>? mockAccounts = null,
+            string email = "mock-user@example.com")
+        {
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Scheme = "https";
+            httpContext.Request.Host = new HostString("google.biatec.io");
+            httpContext.Request.Headers.UserAgent = "nunit-test-agent";
+
+            var httpContextAccessor = Mock.Of<IHttpContextAccessor>(a => a.HttpContext == httpContext);
+            var mockProvider = new MockCloudStorageProvider(new MockCloudStorage(), httpContextAccessor);
+            var providerCatalog = new CloudStorageProviderCatalog(new ICloudStorageProvider[] { new FakeCloudStorageProvider(), mockProvider });
+
+            var accountRepository = new Mock<ICloudAccountRepository>();
+            accountRepository
+                .Setup(r => r.SeedTestVaultAsync(It.IsAny<string>(), MockCloudStorageProvider.ProviderName, It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync("SEEDADDRESS");
+
+            var accounts = (mockAccounts ?? new[] { new MockCloudAccountConfiguration { ScopeId = "app1", Email = email, Mnemonic = TestMockMnemonic } }).ToList();
+            var mockConfig = Mock.Of<Microsoft.Extensions.Options.IOptionsMonitor<MockCloudServiceConfiguration>>(
+                m => m.CurrentValue == new MockCloudServiceConfiguration { Enabled = true, Accounts = accounts });
+
+            var controller = new JwtIssuerController(jwtIssuerService, cache, providerCatalog, accountRepository.Object, mockConfig);
+
+            var principal = authenticated
+                ? new ClaimsPrincipal(new ClaimsIdentity(new[]
+                    {
+                        new Claim(ClaimTypes.Email, email),
+                        new Claim(AuthSchemeNames.IdpClaimType, MockCloudStorageProvider.ProviderName)
+                    }, "test"))
+                : new ClaimsPrincipal(new ClaimsIdentity());
+
+            // Mock never registers its own ASP.NET Core authentication scheme (that's the whole point - see
+            // MockSignIn's remarks) - production code's ambient-token resolution goes entirely through
+            // ICloudStorageProvider.GetAmbientAccessTokenAsync (reading the claim directly), never through
+            // HttpContext.GetTokenAsync/AuthenticateAsync. So that a regression here (a code path
+            // accidentally reintroducing a direct HttpContext.GetTokenAsync("Mock", ...) call) actually
+            // fails a test instead of silently passing, this mock reproduces the real
+            // AuthenticationService's behavior of throwing InvalidOperationException for any scheme with no
+            // registered handler - only "Cookies" (the default scheme SignInAsync targets) and "Google"
+            // (the one other provider in this test's catalog) are "registered" here; "Mock" deliberately
+            // is not.
+            var authService = new Mock<IAuthenticationService>();
+            authService
+                .Setup(s => s.AuthenticateAsync(It.IsAny<HttpContext>(), It.Is<string?>(scheme => scheme == null || scheme == CookieAuthenticationDefaults.AuthenticationScheme || scheme == "Google")))
+                .ReturnsAsync(AuthenticateResult.NoResult());
+            authService
+                .Setup(s => s.AuthenticateAsync(It.IsAny<HttpContext>(), It.Is<string?>(scheme => scheme != null && scheme != CookieAuthenticationDefaults.AuthenticationScheme && scheme != "Google")))
+                .ThrowsAsync(new InvalidOperationException("No authentication handler is registered for the scheme 'Mock'. The registered schemes are: Cookies, Google. Did you forget to call AddAuthentication().Add[SomeAuthHandler](\"Mock\",...)?"));
+            authService
+                .Setup(s => s.SignInAsync(It.IsAny<HttpContext>(), It.IsAny<string>(), It.IsAny<ClaimsPrincipal>(), It.IsAny<AuthenticationProperties>()))
+                .Returns(Task.CompletedTask)
+                .Callback<HttpContext, string?, ClaimsPrincipal, AuthenticationProperties?>((ctx, _, p, _) => ctx.User = p);
+
+            httpContext.RequestServices = new ServiceCollection()
+                .AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection().Build())
+                .AddSingleton(authService.Object)
+                .BuildServiceProvider();
+            httpContext.User = principal;
+
+            controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
+
+            var urlHelper = new Mock<IUrlHelper>();
+            urlHelper
+                .Setup(helper => helper.Action(It.IsAny<UrlActionContext>()))
+                .Returns("https://google.biatec.io/authorize/callback?requestId=request-id");
+            controller.Url = urlHelper.Object;
+
+            return (controller, accountRepository);
         }
 
         /// <summary>Minimal test double standing in for the real Google/Microsoft providers, which need heavier dependencies to construct.</summary>

@@ -856,7 +856,7 @@ namespace BiatecOIDC.Controllers
             if (!retried)
             {
                 var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
-                var accessToken = await HttpContext.GetTokenAsync(provider.Name, "access_token");
+                var accessToken = await provider.GetAmbientAccessTokenAsync();
                 if (!string.IsNullOrEmpty(accessToken) && !await provider.HasWriteAccessAsync(accessToken))
                 {
                     var retryRequestId = await _jwtIssuerService.StorePendingAuthorizeRequestAsync(validation.NormalizedRequest);
@@ -926,8 +926,18 @@ namespace BiatecOIDC.Controllers
             // automatic one-shot incremental-consent retry - re-checked here so the result is visible on
             // the consent screen too, and so the user can retry manually beyond that single automatic
             // attempt instead of the flow just silently proceeding without storage access.
+            //
+            // GetAmbientAccessTokenAsync (not the plain HttpContext.GetTokenAsync this used to call) is
+            // required, not just preferred: HttpContext.GetTokenAsync(scheme, ...) throws
+            // InvalidOperationException for any provider whose Name isn't a registered ASP.NET Core
+            // authentication scheme - true for every real provider (Google/Microsoft each register their
+            // own OIDC scheme), but not for the Mock testing provider (MOCK_TESTING.md), which signs
+            // straight into the cookie scheme and never registers a scheme of its own. This endpoint is
+            // reached by *every* already-authenticated caller (not just fresh sign-ins - see Authorize's
+            // "already signed in" branch), so a stale Mock-signed-in cookie session hitting /authorize again
+            // for a different client crashed here every time before this fix.
             var provider = _providerCatalog.Resolve(User.FindFirst(AuthSchemeNames.IdpClaimType)?.Value);
-            var accessToken = await HttpContext.GetTokenAsync(provider.Name, "access_token");
+            var accessToken = await provider.GetAmbientAccessTokenAsync();
             var hasStorageAccess = !string.IsNullOrEmpty(accessToken) && await provider.HasWriteAccessAsync(accessToken);
 
             var continueUrl = Url.Action(nameof(AuthorizeConsentContinue), "JwtIssuer", new { requestId }, Request.Scheme)!;
