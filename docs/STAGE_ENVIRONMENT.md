@@ -27,7 +27,7 @@ for you. Once DNS resolves and the ingress is applied, `cert-manager` issues TLS
 them automatically via the same `letsencrypt` `ClusterIssuer` already used in production. BiatecMCP's
 `mcp.biatec.io`/`stage.mcp.biatec.io` hosts are also its canonical OAuth resource identity
 (`Mcp:CanonicalResourceUri`) — BiatecOIDC's `JwtIssuer:ProtectedResources` must list the matching URI
-(`https://mcp.biatec.io/mcp` / `https://stage.mcp.biatec.io/mcp`) for BiatecMCP to accept tokens BiatecOIDC
+(`https://mcp.biatec.io/tools` / `https://stage.mcp.biatec.io/tools`) for BiatecMCP to accept tokens BiatecOIDC
 issues; see the repo root `CLAUDE.md`'s "Kubernetes / ingress routing" section.
 
 ## Kubernetes resources

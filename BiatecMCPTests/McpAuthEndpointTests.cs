@@ -42,7 +42,7 @@ namespace BiatecMCPTests
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
             var body = await response.Content.ReadAsStringAsync();
             using var json = JsonDocument.Parse(body);
-            Assert.That(json.RootElement.GetProperty("resource").GetString(), Does.Contain("/mcp"));
+            Assert.That(json.RootElement.GetProperty("resource").GetString(), Does.Contain("/tools"));
             var authServers = json.RootElement.GetProperty("authorization_servers").EnumerateArray().Select(e => e.GetString()).ToList();
             Assert.That(authServers, Has.Some.Contains("oidc.biatec.io"));
         }
@@ -54,7 +54,7 @@ namespace BiatecMCPTests
             client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
             client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/event-stream"));
 
-            var response = await client.PostAsync("/mcp", JsonContent(InitializeRequestJson));
+            var response = await client.PostAsync("/tools", JsonContent(InitializeRequestJson));
 
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
             Assert.That(response.Headers.WwwAuthenticate, Is.Not.Empty);
@@ -72,7 +72,7 @@ namespace BiatecMCPTests
             client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/event-stream"));
             client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "not-a-real-jwt");
 
-            var response = await client.PostAsync("/mcp", JsonContent(InitializeRequestJson));
+            var response = await client.PostAsync("/tools", JsonContent(InitializeRequestJson));
 
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
         }

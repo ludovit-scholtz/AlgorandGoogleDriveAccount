@@ -11,14 +11,14 @@ delegates all authentication and signing to [BiatecOIDC](https://oidc.biatec.io)
 [MCP Authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization) (OAuth
 2.1, RFC 9728 Protected Resource Metadata, RFC 8707 resource indicators):
 
-1. An unauthenticated request to `POST /mcp` gets a `401` with
+1. An unauthenticated request to `POST /tools` gets a `401` with
    `WWW-Authenticate: Bearer resource_metadata="https://mcp.biatec.io/.well-known/oauth-protected-resource"`.
 2. The MCP client fetches that document, discovering `https://oidc.biatec.io` as the authorization server.
 3. Since most MCP clients have no pre-arranged relationship with this server, the client self-registers via
    BiatecOIDC's `POST /register` (RFC 7591 Dynamic Client Registration — always a public client, never issued a
    secret).
 4. The client completes the standard `/authorize` (PKCE required) + `/token` flow against BiatecOIDC, requesting
-   the `resource=https://mcp.biatec.io/mcp` parameter (RFC 8707) alongside the `openid sign` scopes advertised in
+   the `resource=https://mcp.biatec.io/tools` parameter (RFC 8707) alongside the `openid sign` scopes advertised in
    the Protected Resource Metadata document. The user signs in (Google or Microsoft, whichever their Biatec
    account uses) and consents on BiatecOIDC's own consent screen.
 5. The resulting access token is presented to BiatecMCP as `Authorization: Bearer <token>`. BiatecMCP validates it
@@ -263,10 +263,10 @@ address-centric/spending-limit contract.
 Point your MCP client at:
 
 ```
-https://mcp.biatec.io/mcp
+https://mcp.biatec.io/tools
 ```
 
-(stage: `https://stage.mcp.biatec.io/mcp`). Any client that implements the MCP Authorization spec's OAuth
+(stage: `https://stage.mcp.biatec.io/tools`). Any client that implements the MCP Authorization spec's OAuth
 discovery flow (Claude Desktop, ChatGPT, VS Code, LM Studio, etc.) will handle steps 1–5 above automatically
 the first time it connects — there is no manual "pairing" step to complete separately, and no session ID to
 configure, no `mcp-remote` proxy, no local Node.js install. If your client supports a raw MCP server URL
@@ -281,7 +281,7 @@ Add to `.vscode/mcp.json` (confirmed working):
 {
   "servers": {
     "Biatec": {
-      "url": "https://mcp.biatec.io/mcp",
+      "url": "https://mcp.biatec.io/tools",
       "type": "http"
     }
   }
@@ -298,7 +298,7 @@ custom connector` in the UI instead of editing the file directly):
 {
   "mcpServers": {
     "Biatec": {
-      "url": "https://mcp.biatec.io/mcp"
+      "url": "https://mcp.biatec.io/tools"
     }
   }
 }
@@ -307,7 +307,7 @@ custom connector` in the UI instead of editing the file directly):
 ### ChatGPT Desktop
 
 Requires a Business/Enterprise/Edu account with Developer Mode. `Settings → Connectors → toggle Developer
-Mode → Create`, then enter `https://mcp.biatec.io/mcp` as the MCP Server URL, authentication `OAuth`, and
+Mode → Create`, then enter `https://mcp.biatec.io/tools` as the MCP Server URL, authentication `OAuth`, and
 check "I trust this application".
 
 ### LM Studio
@@ -318,7 +318,7 @@ check "I trust this application".
 {
   "mcpServers": {
     "Biatec": {
-      "url": "https://mcp.biatec.io/mcp"
+      "url": "https://mcp.biatec.io/tools"
     }
   }
 }
@@ -331,7 +331,7 @@ dotnet run --project BiatecMCP/BiatecMCP.csproj
 ```
 
 `BiatecMCP/appsettings.json` points `Oidc:Issuer` at the live `https://oidc.biatec.io` and
-`Mcp:CanonicalResourceUri` at `http://localhost:5110/mcp` by default, so a local run authenticates against the
+`Mcp:CanonicalResourceUri` at `http://localhost:5110/tools` by default, so a local run authenticates against the
 real BiatecOIDC. No Redis, no Google/Microsoft OAuth credentials, and no `BiatecSelfCustodyCore` reference are
 needed to run this project — everything self-custody-related lives in `BiatecOIDC`.
 

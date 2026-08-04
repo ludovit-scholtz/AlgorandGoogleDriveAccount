@@ -118,7 +118,7 @@ namespace BiatecOIDCTests
     [TestFixture]
     public class ResourceIndicatorTests : JwtIssuerServiceTestBase
     {
-        private const string McpResource = "https://mcp.biatec.io/mcp";
+        private const string McpResource = "https://mcp.biatec.io/tools";
 
         [SetUp]
         public override void SetUp()

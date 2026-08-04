@@ -29,7 +29,7 @@ and remains reachable via a carved-out set of paths on `https://google.biatec.io
 existing integrations (see "Kubernetes / ingress routing" below) — both hosts are internally self-consistent
 since `JwtIssuerService.GetIssuer` derives the `iss` claim/discovery `issuer` from the actual request host rather
 than a hardcoded value. `BiatecMCP` has its own dedicated domain too, `https://mcp.biatec.io` (MCP endpoint
-`https://mcp.biatec.io/mcp`) — the canonical resource URI its own tokens/PRM document use — and remains reachable
+`https://mcp.biatec.io/tools`) — the canonical resource URI its own tokens/PRM document use — and remains reachable
 via `https://google.biatec.io` as a legacy alias as well. `BiatecOIDC` depends on one piece of shared self-custody
 infrastructure, `BiatecSelfCustodyCore` (see below), for its own signing/identity work; `BiatecMCP` does **not** -
 it talks to BiatecOIDC over plain HTTP, forwarding the caller's own bearer token, and has zero compile-time
@@ -71,7 +71,7 @@ dependency on `BiatecSelfCustodyCore`.
     JWKS, `Authority` = `Oidc:Issuer`, `ValidAudience` = `Mcp:CanonicalResourceUri`) + `AddMcp` (serves
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
-    `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
+    `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/tools").RequireAuthorization()`.
   - `MCP/BiatecMCP.cs` — 20 MCP tools split into three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast:
@@ -305,7 +305,7 @@ both should be clean.
 
 Both services run as separate Deployments/Services in the `biatec` namespace. `BiatecMCP` owns the
 `google.biatec.io` host as a legacy catch-all **and** has its own dedicated `mcp.biatec.io` host (its canonical
-OAuth resource URI, `Mcp:CanonicalResourceUri` = `https://mcp.biatec.io/mcp`); `BiatecOIDC` is reachable on its
+OAuth resource URI, `Mcp:CanonicalResourceUri` = `https://mcp.biatec.io/tools`); `BiatecOIDC` is reachable on its
 own dedicated `oidc.biatec.io` host **and** via a carved-out set of paths on `google.biatec.io` (a legacy alias,
 kept working for integrations set up before `oidc.biatec.io` existed) — four Ingress objects total across the two
 deployment manifests:
@@ -356,8 +356,8 @@ deployment manifests:
   re-checking this reasoning.
 
   `JwtIssuer:ProtectedResources` (RFC 8707 — see `JwtIssuerConfiguration.ProtectedResources`'s remarks) must
-  include BiatecMCP's canonical resource URI (`https://mcp.biatec.io/mcp` in production,
-  `https://stage.mcp.biatec.io/mcp` in stage) for BiatecMCP's bearer-token audience validation to accept tokens
+  include BiatecMCP's canonical resource URI (`https://mcp.biatec.io/tools` in production,
+  `https://stage.mcp.biatec.io/tools` in stage) for BiatecMCP's bearer-token audience validation to accept tokens
   BiatecOIDC issues. Production's value lives in the `google-account-main-app-secret` Secret alongside the rest
   of `JwtIssuer:*` (see the comment in `k8s/main/conf-oidc/appsettings.json`); stage sets it directly in
   `k8s/stage/conf-oidc-stage/appsettings.json`.
@@ -528,7 +528,7 @@ setup stage needs.
   has no pre-registered relationship with arbitrary MCP clients — self-registers via `POST /register` (RFC 7591
   Dynamic Client Registration, `IJwtIssuerService.RegisterDynamicClientAsync`/`IDynamicClientStore`, public
   client only, scopes capped to `JwtIssuer:DynamicClientRegistrationDefaultScopes`); (3) the client completes
-  `/authorize` (PKCE, `resource=https://mcp.biatec.io/mcp`) + `/token`, receiving an access token whose `aud`
+  `/authorize` (PKCE, `resource=https://mcp.biatec.io/tools`) + `/token`, receiving an access token whose `aud`
   contains **both** its own `client_id` and the resource URI (`JwtIssuerService.CreateAccessToken`'s RFC 8707
   handling) — this is what lets `BiatecMCP` validate tokens from *any* dynamically-registered client against one
   stable audience value via local JWT validation (`AddJwtBearer`, `Authority` = `Oidc:Issuer`), with no

@@ -351,7 +351,7 @@ Registered clients are stored in Redis with no expiry - there is currently no wa
 
 If you're integrating a resource server that many different clients (not all pre-known to you) need to obtain
 tokens valid for, include a `resource` parameter - your resource server's own canonical URI (e.g.
-`https://mcp.biatec.io/mcp`) - on **both** `/authorize` and `/token`. It must be identical on both calls, and
+`https://mcp.biatec.io/tools`) - on **both** `/authorize` and `/token`. It must be identical on both calls, and
 must be one of the URIs an operator has added to `JwtIssuer:ProtectedResources` in configuration; an
 unrecognized or omitted-on-one-side-only `resource` fails with `invalid_target`.
 

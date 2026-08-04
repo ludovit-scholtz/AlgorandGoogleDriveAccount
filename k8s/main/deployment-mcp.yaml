@@ -128,7 +128,7 @@ spec:
 # Dedicated host for BiatecMCP, same pattern as biatec-oidc-domain-ingress in
 # k8s/main/deployment-oidc.yaml: BiatecMCP's canonical resource identity (RFC 9728/RFC 8707 - see
 # BiatecMCP/Program.cs's OAuth resource-server wiring and Mcp:CanonicalResourceUri config) is now
-# https://mcp.biatec.io/mcp, not google.biatec.io/mcp/ - kept as a separate Ingress object (not an
+# https://mcp.biatec.io/tools, not google.biatec.io/tools - kept as a separate Ingress object (not an
 # extra host block on biatec-mcp-ingress above) for the same reason biatec-oidc-domain-ingress is
 # separate: this object's own path/host pairing is unrelated to the shared google.biatec.io catch-all,
 # so there is no rewrite-target conflict to avoid here, but keeping the two Ingress objects/hosts

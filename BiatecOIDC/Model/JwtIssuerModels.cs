@@ -40,7 +40,7 @@ namespace BiatecOIDC.Model
         /// <summary>
         /// Canonical resource-server URIs (RFC 8707) this authorization server will vouch for via the
         /// <c>resource</c> parameter on <c>/authorize</c>/<c>/token</c> (e.g.
-        /// <c>["https://mcp.biatec.io/mcp"]</c>). Exists for resource servers - like BiatecMCP - that
+        /// <c>["https://mcp.biatec.io/tools"]</c>). Exists for resource servers - like BiatecMCP - that
         /// accept tokens from many different dynamically-registered clients (see
         /// <see cref="DynamicClientRegistrationDefaultScopes"/>) and therefore cannot pin JWT audience
         /// validation to one fixed <c>client_id</c>: a validated <c>resource</c> is added to the issued
@@ -132,7 +132,7 @@ namespace BiatecOIDC.Model
 
         /// <summary>
         /// RFC 8707 resource indicator - the canonical URI of the resource server the requested token must
-        /// be valid for (e.g. <c>https://mcp.biatec.io/mcp</c>). Optional; when present it must match an
+        /// be valid for (e.g. <c>https://mcp.biatec.io/tools</c>). Optional; when present it must match an
         /// entry in <see cref="JwtIssuerConfiguration.ProtectedResources"/> or the request is rejected
         /// (<c>invalid_target</c>). See that property's remarks for why this exists.
         /// </summary>

@@ -102,7 +102,7 @@ namespace BiatecMCP.Generated
         /// <param name="code_challenge">PKCE code challenge (RFC 7636); required for public clients.</param>
         /// <param name="code_challenge_method">`S256` (recommended) or `plain`.</param>
         /// <param name="resource">RFC 8707 resource indicator - the canonical URI of the resource server the requested token must
-        /// <br/>be valid for (e.g. `https://mcp.biatec.io/mcp`). Must match an entry in
+        /// <br/>be valid for (e.g. `https://mcp.biatec.io/tools`). Must match an entry in
         /// <br/>`JwtIssuer:ProtectedResources`, and be repeated identically on `/token`.</param>
         /// <param name="idp">Fast track: `"google"` or `"microsoft"` skips the provider-picker page and challenges
         /// <br/>that provider directly. Omit to show the picker.</param>
@@ -910,7 +910,7 @@ namespace BiatecMCP.Generated
         /// <param name="code_challenge">PKCE code challenge (RFC 7636); required for public clients.</param>
         /// <param name="code_challenge_method">`S256` (recommended) or `plain`.</param>
         /// <param name="resource">RFC 8707 resource indicator - the canonical URI of the resource server the requested token must
-        /// <br/>be valid for (e.g. `https://mcp.biatec.io/mcp`). Must match an entry in
+        /// <br/>be valid for (e.g. `https://mcp.biatec.io/tools`). Must match an entry in
         /// <br/>`JwtIssuer:ProtectedResources`, and be repeated identically on `/token`.</param>
         /// <param name="idp">Fast track: `"google"` or `"microsoft"` skips the provider-picker page and challenges
         /// <br/>that provider directly. Omit to show the picker.</param>

@@ -165,7 +165,7 @@ namespace BiatecOIDC.Controllers
         /// <param name="codeChallengeMethod"><c>S256</c> (recommended) or <c>plain</c>.</param>
         /// <param name="resource">
         /// RFC 8707 resource indicator - the canonical URI of the resource server the requested token must
-        /// be valid for (e.g. <c>https://mcp.biatec.io/mcp</c>). Must match an entry in
+        /// be valid for (e.g. <c>https://mcp.biatec.io/tools</c>). Must match an entry in
         /// <c>JwtIssuer:ProtectedResources</c>, and be repeated identically on <c>/token</c>.
         /// </param>
         /// <param name="idp">

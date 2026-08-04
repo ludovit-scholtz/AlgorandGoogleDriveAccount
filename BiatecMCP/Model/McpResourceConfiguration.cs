@@ -8,11 +8,11 @@ namespace BiatecMCP.Model
     {
         /// <summary>
         /// The canonical resource URI this server identifies itself as (e.g.
-        /// <c>https://mcp.biatec.io/mcp</c>) - advertised in the RFC 9728 Protected Resource Metadata
+        /// <c>https://mcp.biatec.io/tools</c>) - advertised in the RFC 9728 Protected Resource Metadata
         /// document, required as the <c>resource</c> parameter on every BiatecOIDC <c>/authorize</c>/
         /// <c>/token</c> call an MCP client makes, and validated as the required audience on every
         /// incoming bearer token.
         /// </summary>
-        public string CanonicalResourceUri { get; set; } = "https://mcp.biatec.io/mcp";
+        public string CanonicalResourceUri { get; set; } = "https://mcp.biatec.io/tools";
     }
 }

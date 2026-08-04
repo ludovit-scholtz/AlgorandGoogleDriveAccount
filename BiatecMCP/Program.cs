@@ -237,7 +237,7 @@ namespace BiatecMCP
             app.UseAuthentication();
             app.UseAuthorization();
 
-            app.MapMcp("/mcp").RequireAuthorization();
+            app.MapMcp("/tools").RequireAuthorization();
 
             // Map default route to index.html
             app.MapGet("/", async context =>
