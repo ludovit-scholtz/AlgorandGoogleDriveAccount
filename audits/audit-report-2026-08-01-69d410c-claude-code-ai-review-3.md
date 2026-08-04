@@ -5,8 +5,8 @@
 - **Auditor:** Claude Code (Claude Sonnet 5, Anthropic), operated as an AI coding assistant inside this repository
   at the request of the repository owner, Scholtz & Company, j.s.a.
 - **Conflict of interest disclosure:** As with the first two audits
-  ([audit-report-2026-23-07-20902ee-claude-code-ai-review.md](audit-report-2026-23-07-20902ee-claude-code-ai-review.md),
-  [audit-report-2026-24-07-173793a-claude-code-ai-review-2.md](audit-report-2026-24-07-173793a-claude-code-ai-review-2.md)),
+  ([audit-report-2026-07-23-20902ee-claude-code-ai-review.md](audit-report-2026-07-23-20902ee-claude-code-ai-review.md),
+  [audit-report-2026-07-24-173793a-claude-code-ai-review-2.md](audit-report-2026-07-24-173793a-claude-code-ai-review-2.md)),
   this is **not** an independent third-party audit firm engagement as contemplated by
   [AUDITS-INSTRUCTIONS.md](AUDITS-INSTRUCTIONS.md)'s "Independence and conduct" section. The auditor (this AI
   assistant) was invoked by, and has the same repository access as, the party responsible for the code under

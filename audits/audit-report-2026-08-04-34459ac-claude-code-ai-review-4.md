@@ -1,6 +1,6 @@
 # Biatec MCP Server / OIDC Provider — Security Audit Report (Fourth Audit)
 
-**Report file:** `audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md`
+**Report file:** `audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md`
 **Auditor signature:** `claude-code-ai-review-4`
 
 ---
@@ -38,7 +38,7 @@ statuses are relied on externally — is repeated here and is now four audits ol
 - **Final commit in scope:** `34459ac` ("feat: Implement multisig tools with validation and transaction
   handling in BiatecMCP"), branch `master`, working tree clean at review time.
 - **Range in scope:** `69d410c..34459ac` — 35 commits. `69d410c` is the commit reviewed by the third audit
-  ([audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md)).
+  ([audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md](audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md)).
   163 files changed, ~23,700 insertions.
 - Pre-existing code outside that range was reviewed only where a new finding touches it (notably
   `AlgorandTransactionInspector.cs` and `WalletService.cs`, whose *pricing* logic predates the range but whose

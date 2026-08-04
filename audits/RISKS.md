@@ -6,7 +6,7 @@ Google Drive + OIDC identity provider). It is maintained by whoever performs a d
 revised, and closed, and for the meaning of the likelihood percentage.
 
 Populated by the first audit:
-[audit-report-2026-23-07-20902ee-claude-code-ai-review.md](audit-report-2026-23-07-20902ee-claude-code-ai-review.md).
+[audit-report-2026-07-23-20902ee-claude-code-ai-review.md](audit-report-2026-07-23-20902ee-claude-code-ai-review.md).
 **Note on that audit's status:** it was performed by an AI coding assistant with the same repository access as the
 development team, not an independent third-party firm — see that report's front matter for the full disclosure.
 Likelihood estimates below should be treated as a first-pass, first-party estimate pending independent
@@ -21,7 +21,7 @@ rule: "before any material change to `AesEncryptionHelper.cs`... ships to produc
 "Closed" status is relied upon as external assurance.
 
 **2026-07-24 second audit note:** A second engagement
-([audit-report-2026-24-07-173793a-claude-code-ai-review-2.md](audit-report-2026-24-07-173793a-claude-code-ai-review-2.md),
+([audit-report-2026-07-24-173793a-claude-code-ai-review-2.md](audit-report-2026-07-24-173793a-claude-code-ai-review-2.md),
 signature `claude-code-ai-review-2`, same reviewing party/method as the first audit — see that report's own
 conflict-of-interest disclosure) independently re-verified the 2026-07-24 remediation pass's claims against the
 actual code (not just the remediation pass's own description), and ran the build/test suite as evidence. Fourteen
@@ -31,7 +31,7 @@ reopening R-011). `k8s/main/conf/*` was inspected for the first time (new entry 
 unchanged since GitHub branch-protection settings remain unverifiable from repository content alone).
 
 **2026-08-01 third audit note:** A third engagement
-([audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md),
+([audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md](audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md),
 signature `claude-code-ai-review-3`) reviewed the substantial new surface area added since the second audit — a
 full three-way project restructure (`BiatecSelfCustodyCore`/`BiatecMCP`/`BiatecOIDC`), Microsoft Entra ID/OneDrive
 as a second storage provider, a multi-seed vault with on-chain rekey support, an AES key-ring rotation mechanism,
@@ -59,7 +59,7 @@ remediation pass; no new regression tests were added for the new checks themselv
 what a future audit should specifically verify).
 
 **2026-08-04 fourth audit note:** A fourth engagement
-([audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md),
+([audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md](audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md),
 signature `claude-code-ai-review-4`, same reviewing party/method and the same non-independence caveat as the
 first three — see that report's §1.2) reviewed the ~23,700 lines added since the third audit (`69d410c..34459ac`):
 EVM transaction signing, Bitcoin/Bitcoin Cash support, the address-centric wallet API and address-activation
@@ -188,7 +188,7 @@ both clean.
 - **Status:** Open.
 - **History:**
   - 2026-08-04 — claude-code-ai-review-4: opened at 35%, corresponds to finding M-01 in
-    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    [audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md](audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md).
   - 2026-08-04 — engineering-remediation: likelihood revised from 35% to 30%. Added a `LimitsEnforced` boolean
     to `SpendingLimitResponse`, computed by a new `WalletController.IsSpendingLimitEnforced` helper and returned
     from `GET`/`PUT /wallet/{network}/{address}/limits` (`null` for the account-wide global bucket, since
@@ -225,7 +225,7 @@ both clean.
 - **Status:** Open.
 - **History:**
   - 2026-08-04 — claude-code-ai-review-4: opened at 40%, corresponds to finding M-03 in
-    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    [audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md](audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md).
   - 2026-08-04 — engineering-remediation: likelihood left unchanged at 40% — the actual bypass is exactly as
     available as before. Implemented remediation item (a): `SignTransactionGroupResponse` gained a `Warnings`
     list, populated by a new `WalletController.BuildUnpricedTransactionWarnings` whenever the signed group
@@ -274,7 +274,7 @@ both clean.
     rather than folded into this entry's likelihood, since it is a distinct, more concrete concern than the general
     "contents unverified" note this entry originally carried.
   - 2026-01-08 — claude-code-ai-review-3: likelihood revised from 10% to 5%, corresponds to finding P-04 in
-    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+    [audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md](audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md).
     The single-workflow, push-to-master-deploys-to-production pipeline this entry described no longer exists —
     replaced by a stage-only auto-deploy plus a manually-gated production promotion, an unprompted architectural
     improvement made independently of any audit recommendation. Not closed outright since GitHub
@@ -645,7 +645,7 @@ no corresponding registry entry.)_
 - **Status:** Closed (mitigated).
 - **History:**
   - 2026-24-07 — claude-code-ai-review-2: opened at 5%, corresponds to finding G-01 in
-    [audit-report-2026-24-07-173793a-claude-code-ai-review-2.md](audit-report-2026-24-07-173793a-claude-code-ai-review-2.md).
+    [audit-report-2026-07-24-173793a-claude-code-ai-review-2.md](audit-report-2026-07-24-173793a-claude-code-ai-review-2.md).
     Discovered while independently re-verifying R-011's closure — the fix was found genuine for R-011's own
     originally-cited scope but was not extended to this file.
   - 2026-01-08 — claude-code-ai-review-3: re-confirmed unchanged after the project restructure. The same three
@@ -723,7 +723,7 @@ no corresponding registry entry.)_
 - **Status:** Mitigated.
 - **History:**
   - 2026-24-07 — claude-code-ai-review-2: opened at 20%, corresponds to finding G-02 in
-    [audit-report-2026-24-07-173793a-claude-code-ai-review-2.md](audit-report-2026-24-07-173793a-claude-code-ai-review-2.md).
+    [audit-report-2026-07-24-173793a-claude-code-ai-review-2.md](audit-report-2026-07-24-173793a-claude-code-ai-review-2.md).
     This is the first audit to inspect `k8s/main/conf/*` contents (the first audit, F-13, explicitly deferred this
     check; the 2026-07-24 remediation pass also did not perform it, per R-013's own history). Opened as a new,
     more specific entry rather than folded into R-013, since R-013's original concern was general ("contents
@@ -826,7 +826,7 @@ no corresponding registry entry.)_
 - **Status:** Mitigated.
 - **History:**
   - 2026-01-08 — claude-code-ai-review-3: opened at 15%, corresponds to finding H-01 in
-    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+    [audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md](audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md).
     The vault-backup feature is new since the second audit; this is the first audit to review it.
   - 2026-08-02 — engineering-remediation: revised to Mitigated. On reflection, a plain anti-CSRF cookie (this
     entry's originally-recommended fix) would **not** actually have closed this gap: the victim's browser
@@ -894,7 +894,7 @@ no corresponding registry entry.)_
 - **Status:** Mitigated.
 - **History:**
   - 2026-01-08 — claude-code-ai-review-3: opened at 8%, corresponds to finding M-01 in
-    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+    [audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md](audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md).
     The multi-seed vault (and its read-modify-write pattern) is new since the second audit; this is the first
     audit to review it.
   - 2026-08-02 — engineering-remediation: revised to Mitigated. `CreateSeedAsync`, `SwitchPrimarySeedAsync`, and
@@ -956,7 +956,7 @@ no corresponding registry entry.)_
 - **Status:** Closed (mitigated).
 - **History:**
   - 2026-01-08 — claude-code-ai-review-3: opened at 10%, corresponds to finding M-02 in
-    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+    [audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md](audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md).
   - 2026-08-02 — engineering-remediation: closed. `BiatecSelfCustodyCore.csproj` now explicitly pins
     `Microsoft.IdentityModel.JsonWebTokens`, `Microsoft.IdentityModel.Protocols.OpenIdConnect`,
     `Microsoft.IdentityModel.Tokens`, and `System.IdentityModel.Tokens.Jwt` to `8.21.0` — the same version
@@ -1005,7 +1005,7 @@ no corresponding registry entry.)_
 - **Status:** Mitigated.
 - **History:**
   - 2026-01-08 — claude-code-ai-review-3: opened at 20%, corresponds to finding P-01 in
-    [audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md](audit-report-2026-01-08-69d410c-claude-code-ai-review-3.md).
+    [audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md](audit-report-2026-08-01-69d410c-claude-code-ai-review-3.md).
     The `ProviderTokenProtection` key ring is new since the second audit; this is the first audit to review it.
     Opened as a paired entry alongside R-019 rather than folded into it, so each key ring's remediation can be
     tracked and closed independently even though they share the same deployment mechanism and remediation shape.
@@ -1069,7 +1069,7 @@ no corresponding registry entry.)_
 - **Status:** Closed.
 - **History:**
   - 2026-08-04 — claude-code-ai-review-4: opened at 45%, corresponds to finding H-01 in
-    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    [audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md](audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md).
     Also records that audit's process finding (M-05, not tracked as its own entry): none of the 700 tests in the
     suite exercises any spending-limit bypass class — the inspector's 19 test cases all ask "does it correctly
     price what it knows about", never "what can move value without it noticing", which is why four chain families
@@ -1114,7 +1114,7 @@ no corresponding registry entry.)_
 - **Status:** Closed.
 - **History:**
   - 2026-08-04 — claude-code-ai-review-4: opened at 30%, corresponds to finding H-02 in
-    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    [audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md](audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md).
   - 2026-08-04 — engineering-remediation: closed. `WalletService.SignBitcoinTransactionGroupAsync` no longer
     reads the caller's `IsChange` flag for valuation — it independently derives the signer's own Bitcoin/Bitcoin
     Cash address and treats an output as change only if it actually pays that address, exactly the remediation
@@ -1154,7 +1154,7 @@ no corresponding registry entry.)_
 - **Status:** Closed.
 - **History:**
   - 2026-08-04 — claude-code-ai-review-4: opened at 20%, corresponds to finding M-02 in
-    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    [audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md](audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md).
   - 2026-08-04 — engineering-remediation: closed. `WalletController.SignTransactionGroup` now calls a new
     `HasAnyConfiguredLimitAsync` helper before skipping enforcement on a non-mainnet AVM network — if the
     resolved identity has any non-zero global or per-address limit configured, the request is refused with
@@ -1197,7 +1197,7 @@ no corresponding registry entry.)_
 - **Status:** Closed.
 - **History:**
   - 2026-08-04 — claude-code-ai-review-4: opened at 15%, corresponds to finding M-04 in
-    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    [audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md](audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md).
     Opened as a new entry rather than by re-opening R-021, even though (b) is the same defect class in a
     different file — following the precedent the second audit set for R-011/R-018.
   - 2026-08-04 — engineering-remediation: closed both halves. **(a)** `WalletController.GetAddress` now bounds
@@ -1254,7 +1254,7 @@ no corresponding registry entry.)_
 - **Status:** Closed.
 - **History:**
   - 2026-08-04 — claude-code-ai-review-4: opened at 8%, corresponds to finding L-01 in
-    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    [audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md](audit-report-2026-08-04-34459ac-claude-code-ai-review-4.md).
     The mock provider is new since the third audit; this is the first audit to review it.
   - 2026-08-04 — engineering-remediation: closed. `BiatecOIDC/Program.cs` now throws
     `InvalidOperationException` at startup if `CloudServices:Mock:Enabled` is `true` while `IHostEnvironment` is

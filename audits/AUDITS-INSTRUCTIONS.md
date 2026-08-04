@@ -64,11 +64,12 @@ quality, UI/UX review of `wwwroot/*.html` beyond the security-relevant flows (pa
 Each audit produces exactly one report file in this folder, named:
 
 ```
-audit-report-{yyyy-dd-mm}-{git-short-tag}-{auditor-signature}.md
+audit-report-{yyyy-mm-dd}-{git-short-tag}-{auditor-signature}.md
 ```
 
-- `{yyyy-dd-mm}` — the date the audit report is finalized, e.g. `2026-23-07` for 23 July 2026. Note the field order
-  is year-day-month, matching the literal pattern above — do not silently "correct" it to yyyy-mm-dd.
+- `{yyyy-mm-dd}` — the date the audit report is finalized, e.g. `2026-07-23` for 23 July 2026. ISO 8601 order
+  (year-month-day), so a plain alphabetical listing of this folder is also chronological. Reports written before
+  2026-08-04 used a year-day-month order and were renamed to this convention; do not reintroduce it.
 - `{git-short-tag}` — the short commit hash (`git rev-parse --short HEAD`) of the exact commit audited. If the audit
   covers a range of commits (e.g. a full annual re-audit), use the hash of the final commit in scope and state the
   full range in the report body.
@@ -76,7 +77,7 @@ audit-report-{yyyy-dd-mm}-{git-short-tag}-{auditor-signature}.md
   hyphenated). This must match the signature used in the risk registry (see below) so entries can be traced back to
   who raised them.
 
-Example: `audit-report-2026-23-07-a1b2c3d-northshore-security.md`
+Example: `audit-report-2026-07-23-a1b2c3d-northshore-security.md`
 
 ### Structure
 
