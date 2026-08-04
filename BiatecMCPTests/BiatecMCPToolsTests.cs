@@ -3,7 +3,6 @@ using BiatecMCP.BusinessLogic;
 using BiatecMCP.Model;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Moq;
 
 namespace BiatecMCPTests
@@ -23,7 +22,6 @@ namespace BiatecMCPTests
         private Mock<IBiatecWalletClient> _walletClient = null!;
         private IHttpContextAccessor _httpContextAccessor = null!;
         private DefaultHttpContext _httpContext = null!;
-        private IOptionsMonitor<AlgodConfiguration> _algodConfig = null!;
         private Mock<IDexQuoteProvider> _biatecRouterQuoteProvider = null!;
         private Mock<IAramidBridgeConfigProvider> _aramidBridgeConfigProvider = null!;
         private Mock<IAlgorandChainRegistry> _chainRegistry = null!;
@@ -37,7 +35,6 @@ namespace BiatecMCPTests
             _walletClient = new Mock<IBiatecWalletClient>();
             _httpContext = new DefaultHttpContext();
             _httpContextAccessor = Mock.Of<IHttpContextAccessor>(a => a.HttpContext == _httpContext);
-            _algodConfig = Mock.Of<IOptionsMonitor<AlgodConfiguration>>(m => m.CurrentValue == new AlgodConfiguration());
             _biatecRouterQuoteProvider = new Mock<IDexQuoteProvider>();
             _biatecRouterQuoteProvider.Setup(p => p.ProviderName).Returns("BiatecRouter");
             _aramidBridgeConfigProvider = new Mock<IAramidBridgeConfigProvider>();
@@ -45,12 +42,13 @@ namespace BiatecMCPTests
             _chainRegistry.Setup(r => r.TryGetChainAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync((AlgorandChain?)null);
             _chainRegistry.Setup(r => r.TryGetChainByAramidIdAsync(It.IsAny<long>(), It.IsAny<CancellationToken>())).ReturnsAsync((AlgorandChain?)null);
             _networkResolver = new Mock<INetworkResolver>();
+            _networkResolver.Setup(r => r.ListNetworksAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new List<NetworkSummary>());
             _evmRpcDataSource = new Mock<IPublicEvmRpcDataSource>();
             _bitcoinDataSource = new Mock<IPublicBitcoinDataSource>();
         }
 
         private BiatecMCP.MCP.BiatecMCP CreateTool(DexSwapAggregatorService? aggregator = null) =>
-            new(_walletClient.Object, _httpContextAccessor, _algodConfig,
+            new(_walletClient.Object, _httpContextAccessor,
                 aggregator ?? new DexSwapAggregatorService(new[] { _biatecRouterQuoteProvider.Object }),
                 _aramidBridgeConfigProvider.Object,
                 _chainRegistry.Object,
@@ -506,13 +504,13 @@ namespace BiatecMCPTests
                 .Setup(c => c.GetAddressAsync("tok", "OTHER-SEED", 10, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new DerivedAddressResponse { Address = "OTHER-SEED", SeedAddress = "OTHER-SEED", Slot = 10 });
 
-            // No Algod network is configured for "mainnet-v1.0" in this test's AlgodConfiguration, so the
+            // The default 'network' ("algorand-mainnet") isn't set up on the mocked INetworkResolver, so the
             // call fails deterministically once it reaches that stage - proving the sender was resolved
-            // through the wallet API first (an unconfigured genesisId throws ArgumentException).
+            // through the wallet API first (an unresolvable network is an InvalidRequest, not a crash).
             var result = await CreateTool().CreatePaymentTransaction(receiverAccount: "SOME", amount: 1, seedAddress: "OTHER-SEED", slot: 10);
 
             _walletClient.Verify(c => c.GetAddressAsync("tok", "OTHER-SEED", 10, It.IsAny<CancellationToken>()), Times.Once);
-            Assert.That(result.ErrorType, Does.Contain("ArgumentException"));
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
             // Never touches the wallet's sign endpoint - this tool only builds, never signs.
             _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
         }
@@ -743,6 +741,9 @@ namespace BiatecMCPTests
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("algorand", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Algorand", AvmChain = new AlgorandChain { GenesisId = "mainnet-v1.0" } });
             _walletClient
                 .Setup(c => c.SignAsync("tok", "algorand", "SEED-ADDR", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new SignTransactionGroupResponse { SignedTransactions = { "c2lnbmVk" } });
@@ -762,6 +763,25 @@ namespace BiatecMCPTests
             var result = await CreateTool().SignTransaction(new List<string> { "not-base64!!" }, "algorand", "ADDR");
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        [Test]
+        public async Task SignTransaction_UnknownNetwork_ReturnsInvalidRequestListingValidCodesWithoutCallingWalletClient()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("notanetwork", It.IsAny<CancellationToken>()))
+                .ReturnsAsync((ResolvedNetwork?)null);
+            _networkResolver
+                .Setup(r => r.ListNetworksAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new List<NetworkSummary> { new() { Code = "algorand-mainnet" } });
+
+            var result = await CreateTool().SignTransaction(new List<string> { "AA==" }, "notanetwork", "ADDR");
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+            Assert.That(result.Error, Does.Contain("algorand-mainnet"));
+            _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         // ───────────────────────── executeTransaction (Algorand) ─────────────────────────
@@ -797,77 +817,73 @@ namespace BiatecMCPTests
         // for every network - a network with no known entry now gets no link at all rather than a wrong one.
 
         [Test]
-        public async Task GetAlgodSettings_ConfiguredNetworkWithExplicitExplorerUrl_UsesConfiguredValue()
+        public async Task GetAlgodSettings_ConfiguredExplorerOverride_UsesConfiguredValue()
         {
-            var config = new AlgodConfiguration
-            {
-                Networks = { ["mainnet-v1.0"] = new AlgodNetworkSettings { ApiAddress = "https://algod.example.com", ExplorerBaseUrl = "https://custom.example.com/tx/" } }
-            };
-            _algodConfig = Mock.Of<IOptionsMonitor<AlgodConfiguration>>(m => m.CurrentValue == config);
+            _networkResolver
+                .Setup(r => r.ResolveAsync("algorand-mainnet", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork
+                {
+                    Code = "algorand-mainnet",
+                    Family = ChainFamily.Avm,
+                    AvmChain = new AlgorandChain { GenesisId = "mainnet-v1.0", AlgodApiAddress = "https://algod.example.com" },
+                    ConfiguredExplorerBaseUrlOverride = "https://custom.example.com/tx/"
+                });
 
-            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("mainnet-v1.0");
+            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("algorand-mainnet");
 
             Assert.That(explorerBaseUrl, Is.EqualTo("https://custom.example.com/tx/"));
         }
 
         [Test]
-        public async Task GetAlgodSettings_ConfiguredNetworkWithNoExplorerUrl_FallsBackToKnownTable()
-        {
-            var config = new AlgodConfiguration
-            {
-                Networks = { ["testnet-v1.0"] = new AlgodNetworkSettings { ApiAddress = "https://algod.example.com" } }
-            };
-            _algodConfig = Mock.Of<IOptionsMonitor<AlgodConfiguration>>(m => m.CurrentValue == config);
-
-            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("testnet-v1.0");
-
-            Assert.That(explorerBaseUrl, Is.EqualTo("https://lora.algokit.io/testnet/transaction/"));
-        }
-
-        [Test]
-        public async Task GetAlgodSettings_DynamicallyResolvedMainnet_UsesBiatecScanExplorer()
+        public async Task GetAlgodSettings_Mainnet_UsesBiatecScanExplorer()
         {
             _networkResolver
-                .Setup(r => r.ResolveAsync("algorand", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Algorand Mainnet", AvmChain = new AlgorandChain { GenesisId = "mainnet-v1.0", AlgodApiAddress = "https://algod.example.com" } });
+                .Setup(r => r.ResolveAsync("algorand-mainnet", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Code = "algorand-mainnet", Family = ChainFamily.Avm, DisplayName = "Algorand", AvmChain = new AlgorandChain { GenesisId = "mainnet-v1.0", AlgodApiAddress = "https://algod.example.com" } });
 
-            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("algorand");
+            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("algorand-mainnet");
 
             Assert.That(explorerBaseUrl, Is.EqualTo("https://algorand.scan.biatec.io/transaction/"));
         }
 
         [Test]
-        public async Task GetAlgodSettings_DynamicallyResolvedTestnet_UsesLoraTestnetExplorer()
+        public async Task GetAlgodSettings_Testnet_UsesLoraTestnetExplorer()
         {
             _networkResolver
-                .Setup(r => r.ResolveAsync("testnet", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Algorand Testnet", AvmChain = new AlgorandChain { GenesisId = "testnet-v1.0", AlgodApiAddress = "https://algod.example.com" } });
+                .Setup(r => r.ResolveAsync("algorand-testnet", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Code = "algorand-testnet", Family = ChainFamily.Avm, DisplayName = "Algorand Testnet", AvmChain = new AlgorandChain { GenesisId = "testnet-v1.0", AlgodApiAddress = "https://algod.example.com" } });
 
-            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("testnet");
+            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("algorand-testnet");
 
             Assert.That(explorerBaseUrl, Is.EqualTo("https://lora.algokit.io/testnet/transaction/"));
         }
 
         [Test]
-        public async Task GetAlgodSettings_DynamicallyResolvedUnknownChain_ReturnsNoExplorerLinkRatherThanGuessing()
+        public async Task GetAlgodSettings_ChainWithNoKnownExplorer_ReturnsNoExplorerLinkRatherThanGuessing()
         {
             _networkResolver
-                .Setup(r => r.ResolveAsync("voi", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Voi Mainnet", AvmChain = new AlgorandChain { GenesisId = "voimain-v1.0", AlgodApiAddress = "https://algod.example.com" } });
+                .Setup(r => r.ResolveAsync("voi-mainnet", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Code = "voi-mainnet", Family = ChainFamily.Avm, DisplayName = "Voi Mainnet", AvmChain = new AlgorandChain { GenesisId = "voimain-v1.0", AlgodApiAddress = "https://algod.example.com" } });
 
-            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("voi");
+            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("voi-mainnet");
 
             Assert.That(explorerBaseUrl, Is.Empty);
         }
 
         [Test]
-        public void GetAlgodSettings_UnresolvableNetwork_ThrowsArgumentException()
+        public void GetAlgodSettings_UnresolvableNetwork_ThrowsArgumentExceptionListingValidCodes()
         {
             _networkResolver
                 .Setup(r => r.ResolveAsync("notanetwork", It.IsAny<CancellationToken>()))
                 .ReturnsAsync((ResolvedNetwork?)null);
+            _networkResolver
+                .Setup(r => r.ListNetworksAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new List<NetworkSummary> { new() { Code = "algorand-mainnet" }, new() { Code = "bitcoin" } });
 
-            Assert.That(async () => await CreateTool().GetAlgodSettings("notanetwork"), Throws.TypeOf<ArgumentException>());
+            var ex = Assert.ThrowsAsync<ArgumentException>(async () => await CreateTool().GetAlgodSettings("notanetwork"));
+
+            Assert.That(ex!.Message, Does.Contain("algorand-mainnet"));
+            Assert.That(ex.Message, Does.Contain("bitcoin"));
         }
 
         // ───────────────────────── createSwapTransaction ─────────────────────────
@@ -1006,9 +1022,9 @@ namespace BiatecMCPTests
         [Test]
         public async Task CreateBridgeTransaction_ValidRoute_ReachesAlgodStage()
         {
-            // No Algod network is configured for "mainnet-v1.0" in this test's AlgodConfiguration, so the
-            // call fails deterministically once it reaches that stage (ArgumentException) - proving config
-            // fetch + route/chain resolution all succeeded first.
+            // The default 'network' ("algorand-mainnet") isn't set up on the mocked INetworkResolver, so the
+            // call fails deterministically once it reaches that stage - proving config fetch + route/chain
+            // resolution all succeeded first.
             SetClaims(new Claim("primary_seed_address", "SOMEADDRESS"));
             SetBearerToken("tok");
             _walletClient
@@ -1018,7 +1034,7 @@ namespace BiatecMCPTests
 
             var result = await CreateTool().CreateBridgeTransaction(0, 1_000_000, 416101, "VOIRECIPIENT", "302189");
 
-            Assert.That(result.ErrorType, Does.Contain("ArgumentException"));
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
         }
 
         // ───────────────────────── getBridgeConfiguration ─────────────────────────

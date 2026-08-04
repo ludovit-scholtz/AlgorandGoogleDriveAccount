@@ -8,7 +8,6 @@ using Algorand.Algod;
 using BiatecMCP.BusinessLogic;
 using BiatecMCP.Helper;
 using BiatecMCP.Model;
-using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 
 namespace BiatecMCP.MCP
@@ -41,7 +40,6 @@ namespace BiatecMCP.MCP
 
         private readonly IBiatecWalletClient _walletClient;
         private readonly IHttpContextAccessor _httpContextAccessor;
-        private readonly IOptionsMonitor<Model.AlgodConfiguration> _algodConfig;
         private readonly DexSwapAggregatorService _dexSwapAggregator;
         private readonly IAramidBridgeConfigProvider _aramidBridgeConfigProvider;
         private readonly IAlgorandChainRegistry _chainRegistry;
@@ -53,7 +51,6 @@ namespace BiatecMCP.MCP
         public BiatecMCP(
             IBiatecWalletClient walletClient,
             IHttpContextAccessor httpContextAccessor,
-            IOptionsMonitor<Model.AlgodConfiguration> algodConfig,
             DexSwapAggregatorService dexSwapAggregator,
             IAramidBridgeConfigProvider aramidBridgeConfigProvider,
             IAlgorandChainRegistry chainRegistry,
@@ -64,7 +61,6 @@ namespace BiatecMCP.MCP
         {
             _walletClient = walletClient;
             _httpContextAccessor = httpContextAccessor;
-            _algodConfig = algodConfig;
             _dexSwapAggregator = dexSwapAggregator;
             _aramidBridgeConfigProvider = aramidBridgeConfigProvider;
             _chainRegistry = chainRegistry;
@@ -110,7 +106,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "listSupportedNetworks"),
-         Description("Lists every blockchain network currently usable with getCryptoAddress/getCryptoBalance - every live Algorand-family (AVM) chain (Algorand, Voi, Aramid, ...) plus a few well-known Ethereum-family (EVM) chains (Ethereum, Gnosis, Arbitrum, Base). Call this first to see valid 'network' values. Other public EVM chains not listed here also work by name or numeric chain id. No authentication required.")]
+         Description("Lists every exact 'network' code accepted by every tool that takes one (getCryptoAddress/getCryptoBalance/create*/signTransaction/executeTransaction) - every live Algorand-family (AVM) chain (e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'aramid-mainnet') plus every supported Ethereum-family (EVM) chain ('ethereum', 'gnosis', 'arbitrum', 'base') and Bitcoin-family chain ('bitcoin', 'bitcoin-cash'). ALWAYS call this first if you're unsure of the exact code - 'network' must match one of these Code values EXACTLY (case-insensitive, but no partial/fuzzy matching, no display names, no genesis ids, no numeric chain ids); passing anything else fails with an error listing every valid code. Never guess a network code, and never retry a failed call with a different network value - resolve the right one from this list first. No authentication required.")]
         public async Task<ListSupportedNetworksResponse> ListSupportedNetworks()
         {
             try
@@ -133,7 +129,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "getCryptoAddress"),
-         Description("Returns the signed-in Biatec account's address on the given blockchain network - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash are all supported, derived from the same seed. See listSupportedNetworks for valid 'network' values (e.g. 'Algorand', 'Voi', 'Aramid', 'Ethereum', 'Gnosis', 'Arbitrum', 'Base', 'Bitcoin', 'BitcoinCash'). An Algorand-family address is the same across every AVM chain; an Ethereum-family address is the same across every EVM chain - 'network' only picks which family's address to derive.")]
+         Description("Returns the signed-in Biatec account's address on the given blockchain network - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash are all supported, derived from the same seed. 'network' must be an exact code from listSupportedNetworks (e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'ethereum', 'arbitrum', 'base', 'bitcoin', 'bitcoin-cash') - call it first if unsure. An Algorand-family address is the same across every AVM chain; an Ethereum-family address is the same across every EVM chain - 'network' only picks which family's address to derive.")]
         public async Task<GetCryptoAddressResponse> GetCryptoAddress(
             [Description("Which network to derive the address for. Call listSupportedNetworks to see valid values.")] string network,
             [Description("ARC-76 derivation slot. 0 = the default/first address, 1 = the 'second address', etc.")] int slot = 0,
@@ -144,7 +140,7 @@ namespace BiatecMCP.MCP
                 var resolved = await _networkResolver.ResolveAsync(network);
                 if (resolved == null)
                 {
-                    return new GetCryptoAddressResponse { Network = network, Error = $"Unknown network '{network}'. Call listSupportedNetworks to see valid values." };
+                    return new GetCryptoAddressResponse { Network = network, Error = await BuildUnknownNetworkErrorAsync(network) };
                 }
 
                 if (resolved.Family == ChainFamily.Avm)
@@ -230,7 +226,7 @@ namespace BiatecMCP.MCP
                 var resolved = await _networkResolver.ResolveAsync(network);
                 if (resolved == null)
                 {
-                    return new GetCryptoBalanceResponse { Network = network, Error = $"Unknown network '{network}'. Call listSupportedNetworks to see valid values." };
+                    return new GetCryptoBalanceResponse { Network = network, Error = await BuildUnknownNetworkErrorAsync(network) };
                 }
 
                 if (resolved.Family == ChainFamily.Avm)
@@ -356,13 +352,13 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "createPaymentTransaction"),
-         Description("Builds an unsigned native-ALGO payment or ASA transfer from the signed-in Biatec account - does NOT sign or broadcast it. Pass the result's UnsignedTransaction to signTransaction next, then the signed result to executeAlgorandTransaction to broadcast it. An empty receiver builds a self-transfer.")]
+         Description("Builds an unsigned native-ALGO payment or ASA transfer from the signed-in Biatec account - does NOT sign or broadcast it. Pass the result's UnsignedTransaction to signTransaction next, then the signed result to executeTransaction to broadcast it. An empty receiver builds a self-transfer.")]
         public async Task<CreateTransactionResponse> CreatePaymentTransaction(
             [Description("Receiver address. If empty, builds a self-transfer.")] string receiverAccount = "",
             [Description("ASA id to transfer. If 0, builds a native ALGO payment instead.")] ulong assetId = 0,
             [Description("Amount to transfer, in the asset's base units (microAlgos for native ALGO).")] ulong amount = 0,
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
-            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
+            [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
@@ -399,6 +395,10 @@ namespace BiatecMCP.MCP
             {
                 return new CreateTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
             }
+            catch (ArgumentException ex)
+            {
+                return new CreateTransactionResponse { Error = ex.Message, ErrorType = "InvalidRequest" };
+            }
             catch (Exception ex)
             {
                 return new CreateTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreatePaymentTransaction)), ErrorType = ex.GetType().ToString() };
@@ -419,20 +419,25 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "createBitcoinTransaction"),
-         Description("Builds an unsigned Bitcoin or Bitcoin Cash payment from the signed-in Biatec account - does NOT sign or broadcast it. Fetches spendable UTXOs and the current suggested fee rate from a public block explorer, greedily selects inputs largest-first, and computes change automatically (folded into the fee if it would be dust). Pass the result's UnsignedTransaction to signTransaction next (network='Bitcoin' or 'BitcoinCash', address=Sender), then the signed result to executeBitcoinTransaction to broadcast it.")]
+         Description("Builds an unsigned Bitcoin or Bitcoin Cash payment from the signed-in Biatec account - does NOT sign or broadcast it. Fetches spendable UTXOs and the current suggested fee rate from a public block explorer, greedily selects inputs largest-first, and computes change automatically (folded into the fee if it would be dust). Pass the result's UnsignedTransaction to signTransaction next (network='bitcoin' or 'bitcoin-cash', address=Sender), then the signed result to executeTransaction (same network) to broadcast it.")]
         public async Task<CreateBitcoinTransactionResponse> CreateBitcoinTransaction(
             [Description("Recipient address.")] string receiverAddress,
             [Description("Amount to send, in satoshis (1 BTC/BCH = 100,000,000 satoshis).")] long amountSatoshis,
-            [Description("Which network to build for - 'Bitcoin' or 'BitcoinCash'.")] string network,
+            [Description("Which network to build for - 'bitcoin' or 'bitcoin-cash'.")] string network,
             [Description("A specific seed's identifying address to build the transaction from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
             try
             {
                 var resolved = await _networkResolver.ResolveAsync(network);
-                if (resolved == null || resolved.Family is not (ChainFamily.Btc or ChainFamily.Bch))
+                if (resolved == null)
                 {
-                    return new CreateBitcoinTransactionResponse { Error = $"Unknown or unsupported network '{network}'. Use 'Bitcoin' or 'BitcoinCash'.", ErrorType = "InvalidRequest" };
+                    return new CreateBitcoinTransactionResponse { Error = await BuildUnknownNetworkErrorAsync(network), ErrorType = "InvalidRequest" };
+                }
+
+                if (resolved.Family is not (ChainFamily.Btc or ChainFamily.Bch))
+                {
+                    return new CreateBitcoinTransactionResponse { Error = $"'{network}' is not a Bitcoin-family network. Use 'bitcoin' or 'bitcoin-cash'.", ErrorType = "InvalidRequest" };
                 }
 
                 if (amountSatoshis <= 0)
@@ -495,11 +500,11 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "createOptInTransaction"),
-         Description("Builds an unsigned ASA opt-in (a zero-amount self-transfer, the standard Algorand pattern) for the signed-in Biatec account - does NOT sign or broadcast it. Pass the result's UnsignedTransaction to signTransaction next, then executeAlgorandTransaction to broadcast it.")]
+         Description("Builds an unsigned ASA opt-in (a zero-amount self-transfer, the standard Algorand pattern) for the signed-in Biatec account - does NOT sign or broadcast it. Pass the result's UnsignedTransaction to signTransaction next, then executeTransaction to broadcast it.")]
         public async Task<CreateTransactionResponse> CreateOptInTransaction(
             [Description("ASA id to opt in to. Must be a positive number for an asset that exists.")] ulong assetId = 0,
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
-            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
+            [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
@@ -537,6 +542,10 @@ namespace BiatecMCP.MCP
             {
                 return new CreateTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
             }
+            catch (ArgumentException ex)
+            {
+                return new CreateTransactionResponse { Error = ex.Message, ErrorType = "InvalidRequest" };
+            }
             catch (Exception ex)
             {
                 return new CreateTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateOptInTransaction)), ErrorType = ex.GetType().ToString() };
@@ -544,7 +553,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "createAssetCreateTransaction"),
-         Description("Builds an unsigned Algorand Standard Asset (ASA) creation transaction from the signed-in Biatec account - does NOT sign or broadcast it. Pass the result's UnsignedTransaction to signTransaction next, then executeAlgorandTransaction to broadcast it. manager/reserve/freeze/clawback each default to the creator's own address if not given.")]
+         Description("Builds an unsigned Algorand Standard Asset (ASA) creation transaction from the signed-in Biatec account - does NOT sign or broadcast it. Pass the result's UnsignedTransaction to signTransaction next, then executeTransaction to broadcast it. manager/reserve/freeze/clawback each default to the creator's own address if not given.")]
         public async Task<CreateTransactionResponse> CreateAssetCreateTransaction(
             [Description("Total units of the asset that will ever exist, in its own base units.")] ulong total,
             [Description("Number of decimal places the asset's base unit is divided into.")] ulong decimals,
@@ -552,7 +561,7 @@ namespace BiatecMCP.MCP
             [Description("Full asset name (max 32 characters).")] string assetName,
             [Description("Optional URL with more information about the asset.")] string? url = null,
             [Description("Whether newly-opted-in holders start frozen (requires the freeze address to unfreeze them).")] bool defaultFrozen = false,
-            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
+            [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to create the asset from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to create the asset from. Defaults to 0 (matches the signed-in identity).")] int slot = 0,
             [Description("Manager address. Defaults to the creator's own address.")] string? manager = null,
@@ -591,6 +600,10 @@ namespace BiatecMCP.MCP
             {
                 return new CreateTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
             }
+            catch (ArgumentException ex)
+            {
+                return new CreateTransactionResponse { Error = ex.Message, ErrorType = "InvalidRequest" };
+            }
             catch (Exception ex)
             {
                 return new CreateTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateAssetCreateTransaction)), ErrorType = ex.GetType().ToString() };
@@ -613,13 +626,13 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "createSwapTransaction"),
-         Description("Quotes a swap across Biatec Router, Folks Router, and Haystack Router and reports the best price. Only builds a real unsigned transaction for Biatec Router's own route today - if a competing aggregator quotes better, the comparison is still returned but no transaction is attached for it yet (transaction building for the others isn't wired up). Pass any returned UnsignedTransactions to signTransaction next, then executeAlgorandTransaction to broadcast.")]
+         Description("Quotes a swap across Biatec Router, Folks Router, and Haystack Router and reports the best price. Only builds a real unsigned transaction for Biatec Router's own route today - if a competing aggregator quotes better, the comparison is still returned but no transaction is attached for it yet (transaction building for the others isn't wired up). Pass any returned UnsignedTransactions to signTransaction next, then executeTransaction to broadcast.")]
         public async Task<CreateSwapTransactionResponse> CreateSwapTransaction(
             [Description("Asset id to swap from. 0 = native ALGO.")] long fromAssetId,
             [Description("Asset id to swap to. 0 = native ALGO.")] long toAssetId,
             [Description("Amount to swap, in fromAssetId's base units.")] long amount,
             [Description("Minimum acceptable output amount, in toAssetId's base units. 0 = no minimum.")] long receiveMinimum = 0,
-            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0",
+            [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address to swap from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to swap from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
@@ -676,6 +689,12 @@ namespace BiatecMCP.MCP
                 response.ErrorType = "Unauthorized";
                 return response;
             }
+            catch (ArgumentException ex)
+            {
+                response.Error = ex.Message;
+                response.ErrorType = "InvalidRequest";
+                return response;
+            }
             catch (Exception ex)
             {
                 response.Error = SanitizeForToolResponse(ex, nameof(CreateSwapTransaction));
@@ -714,17 +733,11 @@ namespace BiatecMCP.MCP
             ["mainnet-v1.0"] = 416001
         };
 
-        /// <summary>
-        /// Accepted spellings of the one source network Aramid bridging supports today - a small local
-        /// alias check rather than a live <see cref="INetworkResolver"/> lookup, since this never needs to
-        /// change dynamically (there is exactly one supported source, hardcoded) and keeping it local avoids
-        /// a redundant second network-resolution round trip alongside <see cref="GetSuggestedParamsAsync"/>'s
-        /// own resolution of the same value.
-        /// </summary>
-        private static readonly string[] AlgorandMainnetAliases = ["mainnet-v1.0", "algorand", "algorand mainnet"];
+        /// <summary>The one source network code Aramid bridging supports today - see <see cref="CreateBridgeTransaction"/>.</summary>
+        private const string AlgorandMainnetCode = "algorand-mainnet";
 
         [McpServerTool(Name = "createBridgeTransaction"),
-         Description("Builds an unsigned Aramid Finance bridge transaction (a pay/axfer sent to Aramid's bridge deposit address, with a note field encoding the destination chain/address/amounts) - does NOT sign or broadcast it. Fetches Aramid's live bridge configuration first and validates the route and amount bounds against it. For Algorand-family destination chains with a currently-live public algod node, also verifies the bridge deposit address there actually holds enough of the destination token, and refuses to build the transaction (InsufficientDestinationLiquidity) if not; for other destinations the response's LiquidityVerified/Warning fields explain why it couldn't be checked - confirm independently in that case before broadcasting anything but a small amount. Consider calling getBridgeConfiguration first to see valid routes/chains. Pass the result's UnsignedTransaction to signTransaction next, then executeAlgorandTransaction to broadcast.")]
+         Description("Builds an unsigned Aramid Finance bridge transaction (a pay/axfer sent to Aramid's bridge deposit address, with a note field encoding the destination chain/address/amounts) - does NOT sign or broadcast it. Fetches Aramid's live bridge configuration first and validates the route and amount bounds against it. For Algorand-family destination chains with a currently-live public algod node, also verifies the bridge deposit address there actually holds enough of the destination token, and refuses to build the transaction (InsufficientDestinationLiquidity) if not; for other destinations the response's LiquidityVerified/Warning fields explain why it couldn't be checked - confirm independently in that case before broadcasting anything but a small amount. Consider calling getBridgeConfiguration first to see valid routes/chains. Pass the result's UnsignedTransaction to signTransaction next, then executeTransaction (network=\"algorand-mainnet\") to broadcast.")]
         public async Task<CreateBridgeTransactionResponse> CreateBridgeTransaction(
             [Description("ASA id to bridge from Algorand. 0 = native ALGO.")] ulong assetId,
             [Description("Total amount to bridge, in the source asset's base units, INCLUDING Aramid's bridge fee - the fee is deducted from this amount, never added on top.")] ulong amount,
@@ -732,14 +745,14 @@ namespace BiatecMCP.MCP
             [Description("Recipient address on the destination chain.")] string destinationAddress,
             [Description("Destination token identifier, as defined in Aramid's bridge configuration for this route.")] string destinationToken,
             [Description("Optional memo forwarded to the destination chain, max 50 characters, letters/numbers/whitespace/./,/-/_//,@,*,+,$,% only.")] string? note = null,
-            [Description("Which network to bridge from. Only Algorand mainnet ('algorand'/'mainnet-v1.0') is supported today.")] string network = "mainnet-v1.0",
+            [Description("Which network to bridge from. Only 'algorand-mainnet' is supported today.")] string network = AlgorandMainnetCode,
             [Description("A specific seed's identifying address to bridge from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to bridge from. Defaults to 0.")] int slot = 0)
         {
-            if (!AlgorandMainnetAliases.Any(alias => string.Equals(alias, network, StringComparison.OrdinalIgnoreCase)) ||
+            if (!string.Equals(AlgorandMainnetCode, network, StringComparison.OrdinalIgnoreCase) ||
                 !AramidSourceChainIdsByGenesisId.TryGetValue("mainnet-v1.0", out var sourceChainId))
             {
-                return new CreateBridgeTransactionResponse { Error = $"Aramid bridging is only supported from Algorand mainnet today (got '{network}').", ErrorType = "InvalidRequest" };
+                return new CreateBridgeTransactionResponse { Error = $"Aramid bridging is only supported from network '{AlgorandMainnetCode}' today (got '{network}').", ErrorType = "InvalidRequest" };
             }
 
             try
@@ -837,6 +850,10 @@ namespace BiatecMCP.MCP
             catch (UnauthorizedAccessException ex)
             {
                 return new CreateBridgeTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (ArgumentException ex)
+            {
+                return new CreateBridgeTransactionResponse { Error = ex.Message, ErrorType = "InvalidRequest" };
             }
             catch (Exception ex)
             {
@@ -1041,7 +1058,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "createMultisigTransaction"),
-         Description("Builds an unsigned multisig payment/ASA transfer proposal from a (version, threshold, participantAddresses) multisig account - does NOT sign it. Each participant independently signs the returned UnsignedTransactionEnvelope with their own signTransaction call (in their own wallet/MCP session, not necessarily this one), then the signed copies are combined with mergeMultisigTransactions before executeAlgorandTransaction broadcasts the result.")]
+         Description("Builds an unsigned multisig payment/ASA transfer proposal from a (version, threshold, participantAddresses) multisig account - does NOT sign it. Each participant independently signs the returned UnsignedTransactionEnvelope with their own signTransaction call (in their own wallet/MCP session, not necessarily this one), then the signed copies are combined with mergeMultisigTransactions before executeTransaction broadcasts the result.")]
         public async Task<CreateMultisigTransactionResponse> CreateMultisigTransaction(
             [Description("Multisig version - always 1 for every multisig account created on Algorand today.")] int version,
             [Description("How many of participantAddresses must sign before the transaction can be broadcast.")] int threshold,
@@ -1050,7 +1067,7 @@ namespace BiatecMCP.MCP
             [Description("ASA id to transfer. If 0, builds a native ALGO payment instead.")] ulong assetId = 0,
             [Description("Amount to transfer, in the asset's base units.")] ulong amount = 0,
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
-            [Description("Which network to build against - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0")
+            [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet")
         {
             if (participantAddresses == null || participantAddresses.Count == 0)
             {
@@ -1077,6 +1094,10 @@ namespace BiatecMCP.MCP
 
                 return new CreateMultisigTransactionResponse { UnsignedTransactionEnvelope = envelope, MultisigAddress = multisigAddress };
             }
+            catch (ArgumentException ex)
+            {
+                return new CreateMultisigTransactionResponse { Error = ex.Message, ErrorType = "InvalidRequest" };
+            }
             catch (Exception ex)
             {
                 return new CreateMultisigTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateMultisigTransaction)), ErrorType = ex.GetType().ToString() };
@@ -1091,10 +1112,10 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "signTransaction"),
-         Description("Signs one or more unsigned transactions via BiatecOIDC, as 'address' on 'network' - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash are all supported. For AVM, each transaction is from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope (base64-encoded msgpack). For EVM (no create* tool builds these yet), each transaction is base64-encoded UTF-8 JSON with fields chainId/nonce/to/value/data/gasLimit plus either gasPrice (legacy) or maxFeePerGas+maxPriorityFeePerGas (EIP-1559) - all numeric fields as decimal or 0x-prefixed hex strings. For Bitcoin/Bitcoin Cash, pass exactly one transaction - the UnsignedTransaction from createBitcoinTransaction. Requires the 'sign' scope. 'address' must be the same address the create* tool (or getCryptoAddress/listAlgorandAddresses) returned as the sender - use getAddressInfo/activateCryptoAddress first if it's not the signed-in account's own default address. Pass the result to executeAlgorandTransaction (AVM) or executeBitcoinTransaction (Bitcoin/Bitcoin Cash) to broadcast, or to mergeMultisigTransactions first if this was a multisig envelope.")]
+         Description("Signs one or more unsigned transactions via BiatecOIDC, as 'address' on 'network' - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash are all supported. For AVM, each transaction is from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope (base64-encoded msgpack). For EVM (no create* tool builds these yet), each transaction is base64-encoded UTF-8 JSON with fields chainId/nonce/to/value/data/gasLimit plus either gasPrice (legacy) or maxFeePerGas+maxPriorityFeePerGas (EIP-1559) - all numeric fields as decimal or 0x-prefixed hex strings. For Bitcoin/Bitcoin Cash, pass exactly one transaction - the UnsignedTransaction from createBitcoinTransaction. Requires the 'sign' scope. 'address' must be the same address the create* tool (or getCryptoAddress/listAlgorandAddresses) returned as the sender - use getAddressInfo/activateCryptoAddress first if it's not the signed-in account's own default address. Pass the result to executeTransaction (same 'network') to broadcast, or to mergeMultisigTransactions first if this was a multisig envelope. 'network' must be the exact same network code the transaction was built for - see listSupportedNetworks for the full list.")]
         public async Task<SignTransactionResponse> SignTransaction(
             [Description("Unsigned transaction(s) - base64-encoded msgpack for an AVM network, or base64-encoded UTF-8 JSON for an EVM one (see this tool's own description for the JSON shape).")] List<string> unsignedTransactions,
-            [Description("Which network 'address' belongs to. Call listSupportedNetworks to see valid values.")] string network,
+            [Description("Which network 'address' belongs to - the exact code from listSupportedNetworks (e.g. 'algorand-mainnet', 'bitcoin').")] string network,
             [Description("Which identity signs - the sender address returned by the create* tool that built these transactions.")] string address)
         {
             var authError = RequireSignClaim();
@@ -1121,6 +1142,13 @@ namespace BiatecMCP.MCP
             try
             {
                 var bearerToken = GetBearerToken();
+
+                var resolved = await _networkResolver.ResolveAsync(network);
+                if (resolved == null)
+                {
+                    return new SignTransactionResponse { Error = await BuildUnknownNetworkErrorAsync(network), ErrorType = "InvalidRequest" };
+                }
+
                 var signResult = await _walletClient.SignAsync(bearerToken, network, address, rawTransactions);
                 return new SignTransactionResponse { SignedTransactions = signResult.SignedTransactions };
             }
@@ -1305,7 +1333,7 @@ namespace BiatecMCP.MCP
          Description("Broadcasts one or more already-signed transactions to the blockchain - the one broadcast tool for every chain family this server supports (Algorand-family/AVM, Bitcoin, Bitcoin Cash). 'network' (see listSupportedNetworks) must be the exact same network the transaction(s) were built and signed for - broadcasting to the wrong network always fails, since a transaction signed for one network's genesis/chain is invalid on any other. Requires the 'sign' scope.")]
         public async Task<ExecuteTransactionResponse> ExecuteTransaction(
             [Description("Signed transaction(s) to broadcast, base64-encoded, in submission order. AVM: one or more msgpack-encoded transactions (e.g. from signTransaction or mergeMultisigTransactions). Bitcoin/BitcoinCash: exactly one raw signed transaction.")] List<string> signedTransactions,
-            [Description("Which network to broadcast on - the exact network the transaction(s) were built/signed for, e.g. 'algorand', 'testnet-v1.0', 'voi', 'Bitcoin', 'BitcoinCash'. Call listSupportedNetworks to see valid AVM values.")] string network)
+            [Description("Which network to broadcast on - the exact network code the transaction(s) were built/signed for, e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'bitcoin', 'bitcoin-cash'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network)
         {
             var authError = RequireSignClaim();
             if (authError != null)
@@ -1323,7 +1351,7 @@ namespace BiatecMCP.MCP
                 var resolved = await _networkResolver.ResolveAsync(network);
                 if (resolved == null)
                 {
-                    return new ExecuteTransactionResponse { Error = $"Unknown network '{network}'. Call listSupportedNetworks to see valid values.", ErrorType = "InvalidRequest" };
+                    return new ExecuteTransactionResponse { Error = await BuildUnknownNetworkErrorAsync(network), ErrorType = "InvalidRequest" };
                 }
 
                 if (resolved.Family is ChainFamily.Btc or ChainFamily.Bch)
@@ -1345,6 +1373,10 @@ namespace BiatecMCP.MCP
             catch (Algorand.ApiException<Algorand.Algod.Model.ErrorResponse> ex)
             {
                 return new ExecuteTransactionResponse { Error = ex.Result.Message, ErrorType = ex.GetType().ToString() };
+            }
+            catch (ArgumentException ex)
+            {
+                return new ExecuteTransactionResponse { Error = ex.Message, ErrorType = "InvalidRequest" };
             }
             catch (Exception ex)
             {
@@ -1405,16 +1437,11 @@ namespace BiatecMCP.MCP
         }
 
         /// <summary>
-        /// Explorer URLs for chains whose genesis id is known here, even when connection details themselves
-        /// come from the dynamic <see cref="INetworkResolver"/> registry rather than a locally-configured
-        /// <c>Algod:Networks</c> entry - e.g. a caller naming the network by its friendly name ("algorand")
-        /// rather than its literal genesis id ("mainnet-v1.0") still resolves the right explorer, since both
-        /// ultimately resolve to the same <see cref="AlgorandChain.GenesisId"/> here. Different Algorand
-        /// network *variants* need genuinely different explorer URLs - a mainnet explorer doesn't
-        /// necessarily support testnet, and vice versa (Allo Explorer, this table's previous blanket
-        /// fallback for every AVM chain regardless of variant, is mainnet-only and silently returned a
-        /// non-working link for testnet - the bug this table exists to prevent). A chain with no entry here
-        /// (Voi, Aramid, ...) simply gets no explorer link rather than a guessed one that might not work.
+        /// Explorer URLs for chains whose genesis id is known here. Different Algorand network *variants*
+        /// need genuinely different explorer URLs - a mainnet explorer doesn't necessarily support testnet,
+        /// and vice versa (Allo Explorer, a single blanket fallback this table replaced, is mainnet-only and
+        /// silently returned a non-working link for testnet). A chain with no entry here (Voi, Aramid, ...)
+        /// simply gets no explorer link rather than a guessed one that might not work.
         /// </summary>
         private static readonly Dictionary<string, string> KnownExplorerBaseUrls = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -1423,38 +1450,38 @@ namespace BiatecMCP.MCP
         };
 
         /// <summary>
-        /// Resolves algod connection details for <paramref name="network"/> (a friendly name like
-        /// <c>"algorand"</c>/<c>"voi"</c>, or a raw genesis id) - locally-configured <c>Algod:Networks</c>
-        /// entries take precedence by literal genesis id (preserves operator control over connection
-        /// details), falling back to <see cref="INetworkResolver"/>'s dynamically discovered,
-        /// liveness-verified public chain registry for anything not explicitly configured - a superset of
-        /// what a literal genesis id alone used to resolve. Either way, the explorer link is resolved from
-        /// <see cref="KnownExplorerBaseUrls"/> by the chain's actual genesis id - a configured entry's own
-        /// <see cref="AlgodNetworkSettings.ExplorerBaseUrl"/> only overrides that when explicitly set, so an
-        /// operator can still point at a custom/self-hosted explorer per network. Throws
-        /// <see cref="ArgumentException"/> for an unresolvable network, or one that resolves to an EVM chain
-        /// (not supported for these tools yet).
+        /// Resolves algod connection details for <paramref name="network"/> - an exact network code (see
+        /// <see cref="INetworkResolver"/>'s remarks), never a friendly/fuzzy name. The explorer link is
+        /// resolved from <see cref="KnownExplorerBaseUrls"/> by the chain's actual genesis id; a
+        /// locally-configured <c>Algod:Networks</c> entry's own <see cref="AlgodNetworkSettings.ExplorerBaseUrl"/>
+        /// overrides that when explicitly set, so an operator can still point at a custom/self-hosted
+        /// explorer per network. Throws <see cref="ArgumentException"/> (message lists every valid network
+        /// code) for an unresolvable network, or one that resolves to a non-AVM chain family.
         /// </summary>
         internal async Task<(string apiAddress, string apiToken, string explorerBaseUrl)> GetAlgodSettings(string network)
         {
-            var algodConfig = _algodConfig.CurrentValue;
-
-            if (algodConfig.Networks.TryGetValue(network.ToLowerInvariant(), out var networkSettings))
-            {
-                var explorerBaseUrl = !string.IsNullOrEmpty(networkSettings.ExplorerBaseUrl)
-                    ? networkSettings.ExplorerBaseUrl
-                    : KnownExplorerBaseUrls.GetValueOrDefault(network, string.Empty);
-                return (networkSettings.ApiAddress, networkSettings.ApiToken, explorerBaseUrl);
-            }
-
             var resolved = await _networkResolver.ResolveAsync(network);
-            if (resolved is { Family: ChainFamily.Avm, AvmChain: not null })
+            if (resolved is not { Family: ChainFamily.Avm, AvmChain: not null })
             {
-                var explorerBaseUrl = KnownExplorerBaseUrls.GetValueOrDefault(resolved.AvmChain.GenesisId, string.Empty);
-                return (resolved.AvmChain.AlgodApiAddress, resolved.AvmChain.AlgodApiToken, explorerBaseUrl);
+                throw new ArgumentException(await BuildUnknownNetworkErrorAsync(network));
             }
 
-            throw new ArgumentException($"Unknown or unsupported network '{network}'. Call listSupportedNetworks to see valid values.");
+            var explorerBaseUrl = resolved.ConfiguredExplorerBaseUrlOverride
+                ?? KnownExplorerBaseUrls.GetValueOrDefault(resolved.AvmChain.GenesisId, string.Empty);
+            return (resolved.AvmChain.AlgodApiAddress, resolved.AvmChain.AlgodApiToken, explorerBaseUrl);
+        }
+
+        /// <summary>
+        /// Builds a clear "unknown network" error naming every currently-valid network code (see
+        /// <see cref="INetworkResolver.ListNetworksAsync"/>), used consistently across every
+        /// <c>create*</c>/<c>getCryptoAddress</c>/<c>getCryptoBalance</c>/<c>executeTransaction</c> tool so a
+        /// connected agent always sees the same closed vocabulary and error shape regardless of which tool
+        /// it called with a bad <c>network</c> value.
+        /// </summary>
+        private async Task<string> BuildUnknownNetworkErrorAsync(string network)
+        {
+            var codes = (await _networkResolver.ListNetworksAsync()).Select(n => n.Code);
+            return $"Unknown network '{network}'. Supported network codes: {string.Join(", ", codes)}.";
         }
 
         /// <summary>Fetches Algod's current suggested transaction parameters for <paramref name="network"/> - used by every <c>create*</c> tool.</summary>

@@ -37,25 +37,47 @@ Registration / resource-indicator contract in detail.
 
 ## Multi-chain support
 
-Every tool's `network` parameter isn't limited to a small hardcoded list — it accepts any Algorand-family
-chain published in [scholtz.github.io/AlgorandPublicData's genesis list](https://scholtz.github.io/AlgorandPublicData/genesis/genesis-list.json)
-that currently has at least one publicly reachable algod node reporting the matching genesis hash (checked
+Every tool's `network` parameter is a **strict, closed vocabulary** — see `listSupportedNetworks` and the
+"Available MCP tools" section below for the full rules. AVM (Algorand-family) codes are `{chain}-{variant}`
+(`algorand-mainnet`, `algorand-testnet`, `voi-mainnet`, `aramid-mainnet`, ...), derived from whichever chains
+are currently published in [scholtz.github.io/AlgorandPublicData's genesis list](https://scholtz.github.io/AlgorandPublicData/genesis/genesis-list.json)
+*and* currently have at least one publicly reachable algod node reporting the matching genesis hash (checked
 live against each chain's [`public-algod-providers.json`](https://scholtz.github.io/AlgorandPublicData/algod/mainnet-v1.0/public-algod-providers.json),
-via that node's own `/v2/transactions/params`). A locally-configured `Algod:Networks` entry always takes
-precedence for a given `network`/genesis id (so an operator can still pin a specific node/explorer link); anything else
-falls back to this dynamically discovered, liveness-verified registry, cached in-process for ~10 minutes. The
-same registry backs `createBridgeTransaction`'s destination-liquidity check (below) and BiatecOIDC's public
-`GET /chains` endpoint.
+via that node's own `/v2/transactions/params`) — so a chain that goes offline simply stops being a valid code
+until it's live again, rather than resolving to a dead node. A locally-configured `Algod:Networks` entry
+(e.g. testnet, which never appears in the public genesis list) always takes precedence by genesis id for
+connection details; the code itself still goes through the same table either way. This dynamic set is cached
+in-process for ~10 minutes and also backs `createBridgeTransaction`'s destination-liquidity check (below) and
+BiatecOIDC's public `GET /chains` endpoint. Unlike AVM, the EVM and Bitcoin-family code sets are fixed
+(`ethereum`/`gnosis`/`arbitrum`/`base`, `bitcoin`/`bitcoin-cash`) - deliberately not open to the ~2,700-chain
+public EVM universe some earlier version of this server accepted by name or numeric chain id, since a small,
+predictable, always-listed vocabulary is far less likely for a connected AI agent to get wrong (or to recover
+from getting wrong) than an open-ended one - see "Strict network codes" below for the real reported confusion
+this fixes.
+
+## Strict network codes: never guess, never retry with a different value
+
+Every tool taking a `network` parameter (`create*`, `getCryptoAddress`, `getCryptoBalance`, `signTransaction`,
+`executeTransaction`) validates it against the exact same closed set `listSupportedNetworks` returns - no
+fuzzy matching, no display names, no genesis ids, no numeric EVM chain ids. Passing anything else fails with
+an error that lists every currently-valid code, specifically so a connected AI agent never has to guess: call
+`listSupportedNetworks` first if you're not sure, read the error's code list if a call fails, and use the
+exact code from there - never retry a failed `create*`/`signTransaction`/`executeTransaction` call by trying a
+*different* `network` value as a guess. This matters most for `executeTransaction`: a transaction signed for
+one network is only ever valid for broadcast on that exact same network (different genesis hash for AVM,
+different chain rules for Bitcoin-family) - trying a different network on broadcast failure doesn't "fix" it,
+it just fails differently (or, worse, silently targets the wrong chain if the code happens to also be valid
+there).
 
 ## EVM (Ethereum-family) support
 
 Every Biatec account already has an Ethereum-family identity too, derived from the exact same seed as its
 Algorand identity — no separate sign-in or consent needed. `getCryptoAddress`/`getCryptoBalance` work across
-both chain families (Algorand-family and Ethereum-family) via one `network` parameter — pass `"Algorand"`,
-`"Voi"`, `"Aramid"`, `"Ethereum"`, `"Gnosis"`, `"Arbitrum"`, `"Base"`, or any other public chain name/id; call
-`listSupportedNetworks` to see what's currently resolvable. EVM chain RPCs are discovered from
-[chainid.network's public chain list](https://chainid.network/chains.json), verified live only for the
-specific chain asked about (not the whole ~2,700-chain list). BiatecOIDC's `POST /wallet/{network}/{address}/sign`
+both chain families (Algorand-family and Ethereum-family) via one `network` parameter — pass `"ethereum"`,
+`"gnosis"`, `"arbitrum"`, or `"base"` (the closed EVM code set - see "Strict network codes" above); call
+`listSupportedNetworks` to see the full list. EVM chain RPCs are discovered from
+[chainid.network's public chain list](https://chainid.network/chains.json), verified live only for these four
+well-known chains. BiatecOIDC's `POST /wallet/{network}/{address}/sign`
 signs EVM transactions too (legacy or EIP-1559) — there is no `create*` tool that builds one yet, so build
 the JSON yourself (see `signTransaction`'s own description below for the shape) and pass it to
 `signTransaction` directly. **Remaining EVM gaps**: no `create*`/build tool, no ERC-20 token balances,
@@ -102,10 +124,14 @@ seed/slot, since that's a different concern (choosing which identity produces th
   by the *existing* key), then call `activateCryptoAddress` with the new seed's `seedAddress`/`slot` and the
   external address — BiatecOIDC verifies the on-chain rekey before registering it, and only then does
   `signTransaction` start working for that address under the new key.
-- **`listSupportedNetworks`** — lists every blockchain network currently usable with `getCryptoAddress`/
-  `getCryptoBalance`: every live Algorand-family chain, plus a few well-known Ethereum-family chains
-  (Ethereum, Gnosis, Arbitrum, Base). Other public EVM chains not listed here also work by name or numeric
-  chain id. No authentication required.
+- **`listSupportedNetworks`** — lists the exact, closed set of `network` codes every `create*`/
+  `getCryptoAddress`/`getCryptoBalance`/`signTransaction`/`executeTransaction` tool accepts: every live
+  Algorand-family chain (`algorand-mainnet`, `algorand-testnet`, `voi-mainnet`, `aramid-mainnet`, ...),
+  Ethereum-family chain (`ethereum`, `gnosis`, `arbitrum`, `base`), and Bitcoin-family chain (`bitcoin`,
+  `bitcoin-cash`). **`network` must match one of these `code` values exactly** (case-insensitive, no
+  fuzzy/partial matching, no display names, no genesis ids, no numeric EVM chain ids) - passing anything else
+  fails with an error listing every valid code. Always call this first if you're not certain of the exact
+  code, and never retry a failed call by guessing a different `network` value. No authentication required.
 - **`getCryptoAddress`** — returns the signed-in account's address on a given `network` (Algorand-family,
   Ethereum-family, Bitcoin, or Bitcoin Cash — all derived from the same seed). An Algorand-family address is
   the same across every AVM chain; an Ethereum-family address is the same across every EVM chain — `network`
@@ -179,48 +205,48 @@ seed/slot, since that's a different concern (choosing which identity produces th
 
 ### Example prompts
 
-- *"what is my algorand address"* → `getCryptoAddress(network="Algorand")`
-- *"what is my second address"* → `getCryptoAddress(network="Algorand", slot=1)`
+- *"what is my algorand address"* → `getCryptoAddress(network="algorand-mainnet")`
+- *"what is my second address"* → `getCryptoAddress(network="algorand-mainnet", slot=1)`
 - *"list all my algorand addresses"* → `listAlgorandAddresses()`
 - *"what networks can I use"* → `listSupportedNetworks()`
-- *"what is my ethereum address"* → `getCryptoAddress(network="Ethereum")`
-- *"what is my address on Voi"* → `getCryptoAddress(network="Voi")` — same result as `network="Algorand"`,
+- *"what is my ethereum address"* → `getCryptoAddress(network="ethereum")`
+- *"what is my address on Voi"* → `getCryptoAddress(network="voi-mainnet")` — same result as `network="algorand-mainnet"`,
   since an Algorand-family address is the same across every AVM chain.
-- *"how much ETH do I have"* → `getCryptoBalance(network="Ethereum")`
-- *"check the balance of 0xABCD...WXYZ on Arbitrum"* → `getCryptoBalance(network="Arbitrum", address="0xABCD...WXYZ")`
+- *"how much ETH do I have"* → `getCryptoBalance(network="ethereum")`
+- *"check the balance of 0xABCD...WXYZ on Arbitrum"* → `getCryptoBalance(network="arbitrum", address="0xABCD...WXYZ")`
 - *"pay to address ABCD...WXYZ 1 algo with note biatec"* → `createPaymentTransaction(receiverAccount="ABCD...WXYZ",
   amount=1000000, note="biatec")` (returns the built transaction plus its `Sender`) → `signTransaction(...,
-  network="algorand", address="<Sender>")` → `executeTransaction(..., network="algorand")` — three chained calls, signing
+  network="algorand-mainnet", address="<Sender>")` → `executeTransaction(..., network="algorand-mainnet")` — three chained calls, signing
   with the default identity (primary seed, slot 0).
 - *"pay to address ABCD...WXYZ 1 algo with note biatec with my arc76 address SEED2...ADDR and slot 10"* → same
   chain, with `seedAddress="SEED2...ADDR", slot=10` passed to `createPaymentTransaction`, then
-  `signTransaction(..., network="algorand", address="<the derived slot-10 address>")`.
+  `signTransaction(..., network="algorand-mainnet", address="<the derived slot-10 address>")`.
 - *"do self transfer with 1 algo amount and note field biatecmcp"* → `createPaymentTransaction(amount=1000000,
-  note="biatecmcp")` (empty `receiverAccount` self-transfers) → `signTransaction(..., network="algorand",
-  address="<Sender>")` → `executeTransaction(..., network="algorand")`.
-- *"opt in to asset 31566704"* → `createOptInTransaction(assetId=31566704)` → `signTransaction(..., network="algorand",
-  address="<Sender>")` → `executeTransaction(..., network="algorand")`.
+  note="biatecmcp")` (empty `receiverAccount` self-transfers) → `signTransaction(..., network="algorand-mainnet",
+  address="<Sender>")` → `executeTransaction(..., network="algorand-mainnet")`.
+- *"opt in to asset 31566704"* → `createOptInTransaction(assetId=31566704)` → `signTransaction(..., network="algorand-mainnet",
+  address="<Sender>")` → `executeTransaction(..., network="algorand-mainnet")`.
 - *"swap 1 algo for USDC"* → `createSwapTransaction(fromAssetId=0, toAssetId=31566704, amount=1000000)` — quotes
-  all three aggregators; if Biatec Router wins, chain `signTransaction(..., network="algorand", address="<Sender>")`
-  → `executeTransaction(..., network="algorand")` on the returned transaction(s), otherwise the response explains which
+  all three aggregators; if Biatec Router wins, chain `signTransaction(..., network="algorand-mainnet", address="<Sender>")`
+  → `executeTransaction(..., network="algorand-mainnet")` on the returned transaction(s), otherwise the response explains which
   aggregator quoted better and that its transaction can't be built yet.
 - *"propose a 2-of-3 multisig payment of 5 algo to address ABCD...WXYZ between my address, SEED2...ADDR, and
   SEED3...ADDR"* → `createMultisigTransaction(version=1, threshold=2, participantAddresses=[...], ...)`, then
-  each participant runs `signTransaction(..., network="algorand", address="<their own participant address>")` on
+  each participant runs `signTransaction(..., network="algorand-mainnet", address="<their own participant address>")` on
   the returned envelope in their own session, and any one party runs `mergeMultisigTransactions` on the collected
-  signed copies followed by `executeTransaction(..., network="algorand")`.
+  signed copies followed by `executeTransaction(..., network="algorand-mainnet")`.
 - *"what bridge routes are available from Algorand mainnet"* → `getBridgeConfiguration()`, or
   `getBridgeConfiguration(destinationChainId=416101)` to filter to a specific destination (e.g. Voi).
 - *"bridge 1 algo to my address VOI...ADDR on Voi"* → `createBridgeTransaction(assetId=0, amount=1000000,
   destinationNetwork=416101, destinationAddress="VOI...ADDR", destinationToken="<Voi ALGO token id>")` → review
-  the returned fee/amount breakdown and `LiquidityVerified`/`Warning` fields → `signTransaction(..., network="algorand",
-  address="<Sender>")` → `executeTransaction(..., network="algorand")`.
-- *"is my address ABCD...WXYZ active"* → `getAddressInfo(network="algorand", address="ABCD...WXYZ")`.
+  the returned fee/amount breakdown and `LiquidityVerified`/`Warning` fields → `signTransaction(..., network="algorand-mainnet",
+  address="<Sender>")` → `executeTransaction(..., network="algorand-mainnet")`.
+- *"is my address ABCD...WXYZ active"* → `getAddressInfo(network="algorand-mainnet", address="ABCD...WXYZ")`.
 - *"I rekeyed ABCD...WXYZ on-chain to my new seed EFGH...ADDR at slot 0 — register it"* →
-  `activateCryptoAddress(network="algorand", seedAddress="EFGH...ADDR", slot=0, address="ABCD...WXYZ")` —
-  now `signTransaction(..., network="algorand", address="ABCD...WXYZ")` signs with the new key.
+  `activateCryptoAddress(network="algorand-mainnet", seedAddress="EFGH...ADDR", slot=0, address="ABCD...WXYZ")` —
+  now `signTransaction(..., network="algorand-mainnet", address="ABCD...WXYZ")` signs with the new key.
 - *"what addresses can I currently sign with"* → `listActiveAddresses()`.
-- *"send 1 ETH from my ethereum address to 0x13f0...999c"* → `getCryptoAddress(network="Ethereum")` for the
+- *"send 1 ETH from my ethereum address to 0x13f0...999c"* → `getCryptoAddress(network="ethereum")` for the
   sender, then build the unsigned transaction JSON yourself (nonce/gas price from a public RPC or
   `getCryptoBalance`) and call `signTransaction(unsignedTransactions=['<base64 JSON>'], network="ethereum",
   address="<sender>")` — broadcast the returned signed bytes via that chain's own `eth_sendRawTransaction`

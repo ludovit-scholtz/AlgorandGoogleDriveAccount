@@ -633,10 +633,10 @@ setup stage needs.
   `IPublicAlgodDataSource`/`PublicAlgodDataSource` is a deliberate seam (the interface is what
   `AlgorandChainRegistry`'s tests mock; `PublicAlgodDataSource`, the real HTTP-calling implementation, is
   left to manual/E2E verification, same precedent as this repo's other leaf HTTP providers). In `BiatecMCP`,
-  every tool's `genesisId` parameter resolves through `GetAlgodSettings` - a locally-configured
-  `Algod:Networks` entry always wins first (operator control over a specific node/explorer link), falling
-  back to this registry for anything else - so a chain doesn't need an `appsettings.json` entry to become
-  usable, only public listing + liveness. In `BiatecOIDC`, the same registry backs a public,
+  this registry is the AVM half of `INetworkResolver`'s strict code vocabulary (see "Strict network codes"
+  below) - a chain doesn't need an `appsettings.json` entry to become usable, only public listing + liveness,
+  though a locally-configured `Algod:Networks` entry always wins first for connection details (operator
+  control over a specific node/explorer link) when present. In `BiatecOIDC`, the same registry backs a public,
   `[AllowAnonymous]` `GET /chains` (`ChainsController`) so relying parties other than `BiatecMCP` can query
   which chains this deployment currently considers usable; the response deliberately omits each node's own
   auth token/header (`AlgodApiToken`/`AlgodApiTokenHeader`), unlike `BiatecMCP`'s internal copy which needs
@@ -687,22 +687,42 @@ setup stage needs.
   [chainid.network's public chain list](https://chainid.network/chains.json) - unlike
   `IAlgorandChainRegistry`'s eager whole-list liveness check (affordable only because that list has ~7
   entries), this list has ~2,700 entries, so liveness is verified **lazily, per requested chain only**
-  (`TryGetChainAsync(chainId)`/`TryGetChainByNameAsync(name)`), with a short per-chain result cache (a few
-  minutes) on top of the ~10-minute raw-list cache. `IPublicEvmRpcDataSource`/`PublicEvmRpcDataSource` is the
-  same interface-seam/real-HTTP-impl split as `IPublicAlgodDataSource` - raw JSON-RPC (`eth_chainId` for
-  liveness, `eth_getBalance` for balance) via plain `HttpClient` POSTs, no Nethereum.Web3/RPC package needed.
-  Name matching strips a trailing " Mainnet"/" One" before comparing (so "Ethereum" matches chains.json's
-  "Ethereum Mainnet" and "Arbitrum" matches "Arbitrum One") - this alone covers every chain name the wallet
-  needs without a hardcoded alias table.
+  (`TryGetChainAsync(chainId)`), with a short per-chain result cache (a few minutes) on top of the
+  ~10-minute raw-list cache. `IPublicEvmRpcDataSource`/`PublicEvmRpcDataSource` is the same
+  interface-seam/real-HTTP-impl split as `IPublicAlgodDataSource` - raw JSON-RPC (`eth_chainId` for liveness,
+  `eth_getBalance` for balance) via plain `HttpClient` POSTs, no Nethereum.Web3/RPC package needed.
+  `IEvmChainRegistry.TryGetChainByNameAsync` (fuzzy name matching, stripping a trailing " Mainnet"/" One")
+  still exists on the interface as a general-purpose capability, but `NetworkResolver` itself no longer calls
+  it - see "Strict network codes" immediately below for why.
 
-  `INetworkResolver`/`NetworkResolver` (`BiatecMCP/BusinessLogic/`) unifies both registries behind one
-  `network` string parameter: locally-configured `Algod:Networks` first (same precedence `GetAlgodSettings`
-  already applies, independently reimplemented here rather than refactoring that method), then live AVM
-  genesis-id/name match, then numeric EVM chain id, then EVM name match (covering the whole public list, not
-  just well-known chains). Backs three new, chain-family-agnostic MCP tools: `listSupportedNetworks`
-  (every live AVM chain plus four well-known EVM chains - Ethereum/Gnosis/Arbitrum/Base, the ones named when
-  this was built - for discovery; other public EVM chains resolve too, just aren't listed there),
-  `getCryptoAddress` (AVM family delegates straight to the existing `ResolveAlgorandAddressAsync`, EVM family
+  **Strict network codes**: `INetworkResolver`/`NetworkResolver` (`BiatecMCP/BusinessLogic/`) resolves the
+  `network` parameter shared by every `create*`/`getCryptoAddress`/`getCryptoBalance`/`signTransaction`/
+  `executeTransaction` tool against a small, closed, exact-match vocabulary - `ResolveAsync` builds the full
+  `ListNetworksAsync()` result and matches `network` case-insensitively against each entry's own `Code`,
+  nothing else (no raw genesis id, no display name, no numeric EVM chain id, no fuzzy/partial matching). This
+  replaced a much more permissive design (genesis-id/name/numeric-id/whole-EVM-universe fuzzy matching) after
+  a real reported incident: a connected AI agent, given a signed testnet transaction, tried broadcasting it
+  to `network: "Bitcoin"` and then `network: "algorand"` before finding the right tool/network combination by
+  trial and error - a closed, always-enumerable vocabulary with an error that lists every valid code (see
+  `BuildUnknownNetworkErrorAsync`) is far less guessable-around than an open one. Naming convention: AVM codes
+  are `{chain}-{variant}` (`algorand-mainnet`, `algorand-testnet`, `voi-mainnet`, `aramid-mainnet`, ...) -
+  `KnownAvmCodesByGenesisId` pins the exact code for chains whose live display name wouldn't slugify to the
+  intended one on its own (Algorand's own mainnet/testnet in particular, whose display name the dynamic
+  registry may report just as `"Algorand"` with no "Mainnet"/"Testnet" suffix), and any other AVM chain the
+  dynamic registry currently reports falls back to `SlugifyAvmName` on its own display name, so a newly-added
+  public AVM chain still gets a predictable code with no code change here first. EVM and Bitcoin-family codes
+  have no variant suffix (`ethereum`, `arbitrum`, `base`, `bitcoin`, `bitcoin-cash`) - EVM is deliberately just
+  the closed `WellKnownEvmChains` table (`ethereum`/`gnosis`/`arbitrum`/`base`), not the whole ~2,700-chain
+  public universe a caller could previously address by name or numeric id. `BiatecOIDC` has its own
+  independent copy of this same table (per this repo's no-compile-time-coupling rule) - it must stay in sync,
+  since BiatecMCP's `signTransaction`/`executeTransaction` forward their own `network` code straight through
+  to `BiatecOIDC`'s `POST /wallet/{network}/{address}/sign`, and a code one side accepts but the other
+  doesn't would 400 there instead of failing at the tool layer with a clear message.
+
+  Backs three chain-family-agnostic MCP tools: `listSupportedNetworks` (every live AVM chain plus the four
+  well-known EVM chains plus Bitcoin/Bitcoin Cash - the complete, exhaustive set `ResolveAsync` will ever
+  accept, not a discovery-only subset), `getCryptoAddress` (AVM family delegates straight to the existing
+  `ResolveAlgorandAddressAsync`, EVM family
   to `ResolveEvmAddressAsync` - both now thin wrappers over one shared `ResolveDerivedAddressAsync` that
   always derives via a live BiatecOIDC `GET /wallet/address/{seedAddress}/{slot}` call (see "JWT issuer /
   OIDC provider"'s `primary_seed_address` claim note below for why there's deliberately no per-chain-family

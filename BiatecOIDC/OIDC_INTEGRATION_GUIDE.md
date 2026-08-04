@@ -149,20 +149,28 @@ that can silently go stale if a chain's public infrastructure changes.
 **Breaking change**: `POST /wallet/sign` and `GET`/`PUT /wallet/limits` used to take an optional
 `seedAddress`/`slot` selector (a body field for sign, query params for limits) to pick which seed/slot
 signs or owns a spending-limit bucket, defaulting to the vault's primary seed at slot 0. That selector is
-gone - the *address itself* is now a route segment, alongside a `network` segment (a friendly chain name
-like `algorand`/`voi`, or a raw genesis id):
+gone - the *address itself* is now a route segment, alongside a `network` segment (an exact network code
+like `algorand-mainnet`/`voi-mainnet` - see "Strict network codes" below, not a raw genesis id or a fuzzy
+display name):
 
 | Before | After |
 |---|---|
-| `POST /wallet/sign` with body `{ "transactions": [...], "seedAddress": "SEED", "slot": 5 }` | `POST /wallet/algorand/{address}/sign` with body `{ "transactions": [...] }` |
-| `GET /wallet/limits?seedAddress=SEED&slot=5` | `GET /wallet/algorand/{address}/limits` |
-| `PUT /wallet/limits?seedAddress=SEED&slot=5` | `PUT /wallet/algorand/{address}/limits` |
+| `POST /wallet/sign` with body `{ "transactions": [...], "seedAddress": "SEED", "slot": 5 }` | `POST /wallet/algorand-mainnet/{address}/sign` with body `{ "transactions": [...] }` |
+| `GET /wallet/limits?seedAddress=SEED&slot=5` | `GET /wallet/algorand-mainnet/{address}/limits` |
+| `PUT /wallet/limits?seedAddress=SEED&slot=5` | `PUT /wallet/algorand-mainnet/{address}/limits` |
 | `GET`/`PUT /wallet/limits` (no selector - global bucket) | unchanged |
 | `GET /wallet/address` (list) | removed - use `GET /wallet/seeds` instead (same data) |
 | `GET /wallet/evm/address` (list) | removed - use `GET /wallet/{network}/{address}/info` to check a specific address, or `GET /wallet/seeds` + `GET /wallet/address/{seedAddress}/{slot?}` per seed |
 | `GET /wallet/evm/address/{seedAddress}/{slot?}` (derive) | removed - `GET /wallet/address/{seedAddress}/{slot?}` now derives and returns both the AVM and EVM address in one call |
 | `POST /wallet/{network}/{address}/activate` with body `{ "seedAddress": "SEED", "slot": 0 }` | `POST /wallet/{network}/{seedAddress}/{slot}/activate` with body `{ "address": "..." }` - `seedAddress`/`slot` are route segments now, the address being activated is the body field |
 | *(no equivalent)* | `GET /wallet/active-addresses` (new) - lists every currently-active address in one call |
+
+**Strict network codes**: `network` must exactly match one of a small, closed set of codes - AVM chains are
+`{chain}-{variant}` (`algorand-mainnet`, `algorand-testnet`, `voi-mainnet`, `aramid-mainnet`, ...), EVM and
+Bitcoin-family chains have no variant suffix (`ethereum`, `arbitrum`, `base`, `bitcoin`, `bitcoin-cash`). No
+fuzzy matching, raw genesis id, display name, or numeric EVM chain id is accepted - an unrecognized value
+fails with `400 unknown_network`. BiatecMCP's `listSupportedNetworks` tool enumerates the current full set if
+you're integrating outside BiatecMCP and need to discover it programmatically.
 
 `address` must be a **known** address - resolved to the seed/slot that actually signs for it via:
 
