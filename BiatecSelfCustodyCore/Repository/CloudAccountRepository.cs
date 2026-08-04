@@ -531,6 +531,7 @@ namespace BiatecSelfCustodyCore.Repository
             var parsed = TryParseVault(existing);
             if (parsed != null)
             {
+                await HealMissingSeedAddressesAsync(email, storageProvider, context, parsed);
                 return parsed;
             }
 
@@ -543,6 +544,37 @@ namespace BiatecSelfCustodyCore.Repository
             await SaveVaultAsync(storageProvider, context, email, migratedVault);
             _logger.LogInformation("Migrated the legacy single-seed account file to the multi-seed vault format for {Email}.", email);
             return migratedVault;
+        }
+
+        /// <summary>
+        /// Self-heals <see cref="SeedVaultEntry.SeedAddress"/> for a vault persisted before that property
+        /// was renamed from <c>PrimaryAddress</c> - a plain (unattributed) C# property is also its own
+        /// System.Text.Json key by default, so a vault file written under the old name still has JSON key
+        /// <c>"PrimaryAddress"</c>, which the current <see cref="SeedVaultEntry"/> no longer recognizes.
+        /// Deserialization silently leaves such an entry's <c>SeedAddress</c> at its <c>string.Empty</c>
+        /// default rather than failing - every address-based lookup for that seed (derive, sign, activate)
+        /// then breaks with a confusing "no such seed" error even though the seed (and its mnemonic) is
+        /// intact. <c>SeedAddress</c> is always deterministically re-derivable from <c>Mnemonic</c> (the
+        /// exact computation <see cref="BuildSeedEntry"/> uses), so this recomputes and persists it once -
+        /// same "migrate on read" precedent as the legacy plain-mnemonic-file migration just above.
+        /// </summary>
+        private async Task HealMissingSeedAddressesAsync(string email, ICloudStorageProvider storageProvider, VaultContext context, SeedVault vault)
+        {
+            var healedAny = false;
+            foreach (var entry in vault.Seeds)
+            {
+                if (string.IsNullOrEmpty(entry.SeedAddress) && !string.IsNullOrEmpty(entry.Mnemonic))
+                {
+                    entry.SeedAddress = AlgorandArc76.GetEmailAccount(email, entry.Mnemonic, slot: 0).Address.EncodeAsString();
+                    healedAny = true;
+                }
+            }
+
+            if (healedAny)
+            {
+                await SaveVaultAsync(storageProvider, context, email, vault);
+                _logger.LogInformation("Healed missing seed address(es) (pre-rename vault data) for {Email}.", email);
+            }
         }
 
         /// <summary>Like <see cref="LoadVaultOrEmptyAsync"/>, but if the vault is empty (a user's very first access), creates and persists its first seed (primary) before returning.</summary>

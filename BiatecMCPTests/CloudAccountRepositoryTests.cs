@@ -134,6 +134,46 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task LoadAccountAsync_VaultPersistedUnderOldPrimaryAddressJsonKey_HealsSeedAddressAndResaves()
+        {
+            // SeedVaultEntry.SeedAddress was renamed from PrimaryAddress (a plain, unattributed C#
+            // property is also its own System.Text.Json key by default) - simulates a vault file written
+            // before that rename deployed: its JSON still says "primaryAddress", which the current
+            // SeedVaultEntry no longer recognizes, so a naive deserialize would silently leave
+            // SeedAddress at string.Empty (the exact bug reported: listAlgorandAddresses/getAlgorandAddress
+            // returning/resolving an empty or garbled address for an otherwise-intact seed).
+            var activeKey = _aesOptionsValue.Keys.First(k => k.KeyId == ActiveKeyId);
+            var activeFileName = ActiveFileName(activeKey);
+            var mnemonic = new Algorand.Algod.Model.Account().ToMnemonic();
+            var expectedAddress = ARC76Account.Algorand.ARC76.GetEmailAccount(TestEmail, mnemonic, slot: 0).Address.EncodeAsString();
+
+            var legacyJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                seeds = new[]
+                {
+                    new { mnemonic, primaryAddress = expectedAddress, createdUtc = DateTimeOffset.UtcNow, isPrimary = true }
+                }
+            });
+            var encrypted = AesEncryptionHelper.Encrypt(System.Text.Encoding.UTF8.GetBytes(legacyJson), AesKeyRingResolver.KeyBytes(activeKey), AesKeyRingResolver.IvBytes(activeKey), TestEmail);
+            _fakeProvider.Files[activeFileName] = encrypted;
+
+            var repository = CreateRepository();
+            var seeds = await repository.ListSeedsAsync(TestEmail, "Fake", "token");
+
+            Assert.That(seeds, Has.Count.EqualTo(1));
+            Assert.That(seeds[0].SeedAddress, Is.EqualTo(expectedAddress));
+
+            // Healed in place and re-saved under the (now-correct) "seedAddress" JSON key, so subsequent
+            // by-address lookups (derive/sign/activate) work without needing to heal again every time.
+            var decrypted = AesEncryptionHelper.Decrypt(_fakeProvider.Files[activeFileName], AesKeyRingResolver.KeyBytes(activeKey), AesKeyRingResolver.IvBytes(activeKey), TestEmail);
+            var healedVault = System.Text.Json.JsonSerializer.Deserialize<SeedVault>(decrypted, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            Assert.That(healedVault!.Seeds[0].SeedAddress, Is.EqualTo(expectedAddress));
+
+            var derived = await repository.DeriveAddressAsync(TestEmail, "Fake", expectedAddress, 0, "token");
+            Assert.That(derived, Is.EqualTo(expectedAddress));
+        }
+
+        [Test]
         public void LoadAccountAsync_NoAccessToken_ThrowsUnauthorizedAccessException()
         {
             _fakeProvider.AmbientAccessToken = null;
