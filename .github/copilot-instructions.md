@@ -72,7 +72,7 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — 19 MCP tools split into three chainable steps (build → sign → execute) rather than
+  - `MCP/BiatecMCP.cs` — 18 MCP tools split into three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast:
     `listAlgorandAddresses`, `getBridgeConfiguration`, `listSupportedNetworks`, `getCryptoAddress`,
@@ -89,9 +89,10 @@ dependency on `BiatecSelfCustodyCore`.
     seed/slot → address pairing - the entry point for rekeying an external Algorand address to a
     Biatec-controlled key, requires `sign`); `signTransaction` (standalone - forwards
     to BiatecOIDC's `POST /wallet/{network}/{address}/sign`, requires `sign`), `mergeMultisigTransactions`
-    (combines independently-signed multisig copies, no BiatecOIDC/Algod call); `executeAlgorandTransaction`
-    (broadcasts already-signed Algorand transactions via algod, requires `sign`), `executeBitcoinTransaction`
-    (broadcasts already-signed Bitcoin/Bitcoin Cash transactions via Blockchair, requires `sign`). Every
+    (combines independently-signed multisig copies, no BiatecOIDC/Algod call); `executeTransaction`
+    (the *one* broadcast tool for every chain family this server supports - AVM via algod, Bitcoin/Bitcoin
+    Cash via Blockchair, dispatched internally by `network`'s resolved `ChainFamily` rather than exposing a
+    separate tool per family - see "Unified broadcast tool" below; requires `sign`). Every
     tool's `[Description]` names the next
     tool in the
     chain, since MCP has no other side-channel for teaching the connected agent the intended protocol. All
@@ -99,13 +100,24 @@ dependency on `BiatecSelfCustodyCore`.
     server" under Architecture notes below for the full request flow. The `create*`/`getCryptoAddress`
     tools accept optional `seedAddress`/`slot` parameters to build against/from a specific seed/ARC-76
     slot instead of the default identity (see BiatecOIDC's "Address-centric wallet API and rekey support"
-    note) - `signTransaction` and `getAddressInfo` instead take the address itself, matching BiatecOIDC's
+    note) - `signTransaction`, `getAddressInfo`, and `executeTransaction` instead take the address/`network`
+    itself (`executeTransaction` has no seed/slot concept at all - it only broadcasts already-signed bytes),
+    matching BiatecOIDC's
     address-centric wallet route shape; `activateCryptoAddress` takes `seedAddress`/`slot` as required
     parameters (route segments on the BiatecOIDC side) plus the `address` being activated (a body field on
     the BiatecOIDC side). Every `network` parameter across these tools
     (renamed from `genesisId` for consistency with this address-centric surface) resolves against the
     dynamic, liveness-verified `IAlgorandChainRegistry` (see "Multi-chain support" below) when it isn't one
-    of the locally-configured `Algod:Networks` entries.
+    of the locally-configured `Algod:Networks` entries - **and must always be the exact network a
+    transaction was actually built/signed for**: `network` selects both how a transaction is *interpreted*
+    (its genesis hash for AVM, its chain rules for Bitcoin-family) at signing time and which live node/
+    explorer `executeTransaction` broadcasts it to, so passing a different `network` at any step - build,
+    sign, or execute - than the one actually intended always fails, sometimes confusingly (a signed-for-
+    testnet transaction handed to `executeTransaction` with `network="algorand"` doesn't "become" a mainnet
+    transaction, it just fails to broadcast). Every `create*`/`getCryptoAddress`/`executeTransaction` tool's
+    own `[Description]` says this explicitly, specifically to stop a connected agent from trying a different
+    `network` value as a guess after a broadcast failure instead of using the one the transaction was
+    actually built for.
   - `BusinessLogic/IBiatecWalletClient.cs` + `BiatecWalletClient.cs` — typed `HttpClient` wrapping BiatecOIDC's
     `POST /wallet/{network}/{address}/sign`/`GET /wallet/seeds`/
     `GET /wallet/address/{seedAddress}/{slot}` (returns both the AVM and EVM address for that seed/slot in
@@ -132,7 +144,7 @@ dependency on `BiatecSelfCustodyCore`.
   - `BusinessLogic/IPublicBitcoinDataSource.cs`/`BlockchairDataSource.cs`, `Helper/BitcoinTransactionBuilder.cs`,
     `Model/BitcoinModels.cs` — Bitcoin/Bitcoin Cash UTXO data source and coin-selection/fee-estimation logic
     (see "Bitcoin/Bitcoin Cash support" below); backs `getCryptoAddress`/`getCryptoBalance`'s Btc/Bch
-    branches, `createBitcoinTransaction`, and `executeBitcoinTransaction`
+    branches, `createBitcoinTransaction`, and `executeTransaction`'s Bitcoin-family branch
   - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in/asset-create
     transactions (Algorand4 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material
     ever touches this project
@@ -542,8 +554,9 @@ setup stage needs.
   enforces the `sign`/`rekey` claim and both spending-limit tiers there —
   `McpTransferLimitsConfiguration`/`TransferPolicy` were removed from `BiatecMCP` entirely, since
   `/wallet/{network}/{address}/sign` already does this uniformly for every relying party) and requires the
-  `sign` claim itself; `executeAlgorandTransaction` broadcasts the signed bytes to Algod via a shared private
-  `SubmitSignedTransactionsAsync` helper, also requiring `sign`. `mergeMultisigTransactions` combines
+  `sign` claim itself; `executeTransaction`'s AVM branch broadcasts the signed bytes to Algod via a shared
+  private `SubmitSignedTransactionsAsync` helper, also requiring `sign` (see "Unified broadcast tool" below
+  for its Bitcoin-family branch and why this is one tool, not two). `mergeMultisigTransactions` combines
   independently-signed copies of a `createMultisigTransaction` envelope (no BiatecOIDC/Algod call - pure
   local combination via the Algorand4 SDK). `createBridgeTransaction` builds a real Aramid Finance bridge
   transaction (see "Aramid bridge integration" below). `getAddressInfo(network, address)`,
@@ -604,7 +617,7 @@ setup stage needs.
   **fresh** copy each call (not mutating in place) - exactly right for "collect N independent copies, then
   merge" - so no BiatecOIDC-side change was needed for this. `mergeMultisigTransactions` combines the
   collected copies via the Algorand4 SDK's `SignedTransaction.MergeMultisigTransactionBytes` once at least
-  `threshold` of them are present, ready for `executeAlgorandTransaction`.
+  `threshold` of them are present, ready for `executeTransaction`.
 - **Multi-chain support**: `IAlgorandChainRegistry`/`AlgorandChainRegistry` (independently implemented in
   both `BiatecMCP/BusinessLogic/` and `BiatecOIDC/BusinessLogic/` - no shared code, per this repo's
   no-compile-time-coupling rule) discovers which Algorand-family chains are currently safe to use: it fetches
@@ -745,13 +758,11 @@ setup stage needs.
   coin-selection logic (greedy largest-first, fee re-estimated as each input is added, change folded into
   the fee if it would be dust) - fully unit-tested without needing live UTXO data.
 
-  Three chain-family-agnostic MCP tools gained Bitcoin/Bitcoin Cash branches for free (`getCryptoAddress`,
+  Four chain-family-agnostic MCP tools gained Bitcoin/Bitcoin Cash branches for free (`getCryptoAddress`,
   `getCryptoBalance`, `signTransaction` - the last needs no branch at all, since it already just forwards
-  whatever blob it's given to BiatecOIDC's sign endpoint); two new ones complete the transfer flow:
-  `createBitcoinTransaction` (fetches UTXOs/fee rate, builds the unsigned wire DTO via
-  `BitcoinTransactionBuilder`) and `executeBitcoinTransaction` (broadcasts the signed raw bytes via
-  Blockchair - separate from `executeAlgorandTransaction` since the broadcast mechanism is entirely
-  different, REST push vs. algod).
+  whatever blob it's given to BiatecOIDC's sign endpoint - and `executeTransaction`, see "Unified broadcast
+  tool" below); one new tool completes the transfer flow: `createBitcoinTransaction` (fetches UTXOs/fee
+  rate, builds the unsigned wire DTO via `BitcoinTransactionBuilder`).
 
   Spending limits **do** apply here (unlike EVM, which has none yet) - per the same daily/weekly/monthly
   `ISpendingLimitService` buckets Algorand mainnet uses, keyed the same way (resolved `seedAddress`/`slot`).
@@ -763,6 +774,43 @@ setup stage needs.
   a day). Only non-change outputs are priced (`BitcoinTransactionOutput.IsChange`) - money returning to the
   sender's own change address was never actually spent, so counting it would overstate every transfer's
   real cost against the limit.
+- **Unified broadcast tool**: `executeTransaction` (`BiatecMCP/MCP/BiatecMCP.cs`) is the single MCP tool for
+  submitting an already-signed transaction to any blockchain this server supports - replaced two earlier,
+  separate tools (`executeAlgorandTransaction`/`executeBitcoinTransaction`) that made a connected agent guess
+  which broadcast tool matched a given `network`, a real reported failure mode where an agent tried
+  `executeBitcoinTransaction` (network `"Bitcoin"`), then a bare `executeAlgorandTransaction`-shaped call with
+  network `"algorand"`, before finding the actual right tool - purely because two tools existed to choose
+  between. `executeTransaction` takes the same `network` parameter every other tool already does
+  (`ChainFamily` resolved once via `INetworkResolver`, exactly like `getCryptoAddress`/`getCryptoBalance`) and
+  dispatches internally: AVM submits via the resolved network's algod connection
+  (`GetAlgodSettings`/`SubmitSignedTransactionsAsync`, unchanged from the old Algorand-only tool, one
+  transaction or a full msgpack group), Bitcoin/Bitcoin Cash broadcasts the one signed raw transaction via
+  Blockchair (unchanged from the old Bitcoin-only tool); an EVM `network` returns a clear "not supported yet,
+  broadcast it yourself via `eth_sendRawTransaction`" error rather than a generic "unknown network" one,
+  since EVM signing (via `signTransaction`) already works today - only broadcasting doesn't. Every
+  `create*`/`getCryptoAddress`/`executeTransaction` tool's own `[Description]` explicitly says `network` must
+  be the exact network a transaction was built/signed for - broadcasting to a different one always fails
+  (different genesis hash for AVM, different chain rules for Bitcoin-family), so an agent should never retry
+  `executeTransaction` with a *different* `network` value after a failure, only investigate why the original,
+  correct one failed.
+
+  `ExecuteTransactionResponse.ExplorerLink` resolves from a small `KnownExplorerBaseUrls` table keyed by
+  Algorand genesis id (`BiatecMCP/MCP/BiatecMCP.cs`), checked regardless of whether the network was resolved
+  from a locally-configured `Algod:Networks` entry or the dynamic `INetworkResolver` registry - so a friendly
+  name (`"algorand"`) and its literal genesis id (`"mainnet-v1.0"`) both resolve the same correct link. This
+  replaced a single hardcoded `"https://allo.info/tx/"` fallback used for *every* dynamically-resolved AVM
+  chain regardless of variant - Allo Explorer doesn't support Algorand testnet, so every testnet broadcast
+  silently returned a non-working explorer link (the other half of the same real reported bug). Algorand
+  mainnet now links to Biatec's own explorer (`https://algorand.scan.biatec.io/transaction/`), testnet to
+  AlgoKit's Lora explorer (`https://lora.algokit.io/testnet/transaction/`, which mainnet does *not* work
+  against either - these are two genuinely different URLs, not a shared base with a network suffix); a chain
+  with no entry in the table (Voi, Aramid, ...) gets no explorer link at all rather than a guessed one that
+  might not work - a `null`/omitted link is strictly better than a confidently wrong one. A locally-configured
+  `Algod:Networks` entry's own `ExplorerBaseUrl` still wins when explicitly set (operator override for a
+  custom/self-hosted explorer); `AlgodNetworkSettings.ExplorerBaseUrl` itself now has no default value for
+  the same "don't guess" reason. Bitcoin/Bitcoin Cash broadcasts always link to Blockchair
+  (`https://blockchair.com/{chainSlug}/transaction/{txId}`, the same explorer already used for balance/UTXO
+  lookups, so no separate table is needed there).
 - **Aramid bridge integration**: `createBridgeTransaction` bridges assets off Algorand via
   [Aramid Finance](https://aramid.finance), per its published AI-agent integration guide
   (`https://raw.githubusercontent.com/AramidFinance/docs/refs/heads/main/docs/developers/ai-agent-integration.md`).

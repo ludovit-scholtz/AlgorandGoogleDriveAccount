@@ -216,8 +216,9 @@ for a legacy transaction, or the same with `"gasPrice"` replaced by `"maxFeePerG
 for EIP-1559 - every numeric field is a decimal or `0x`-prefixed hex **string** (wei-scale values exceed a
 safe JSON number), base64-encode the UTF-8 JSON, and pass it as one of `POST /wallet/{network}/{address}/sign`'s
 `transactions` entries. The response's signed bytes (also base64) are ready to broadcast via that chain's own
-`eth_sendRawTransaction` - this API does not broadcast for you (unlike Algorand transactions, which BiatecMCP's
-`executeAlgorandTransaction` submits through the shared Algod connection). No spending-limit enforcement for
+`eth_sendRawTransaction` - this API does not broadcast for you (unlike Algorand/Bitcoin-family transactions,
+which BiatecMCP's one `executeTransaction` tool submits, via the shared Algod connection or a public block
+explorer respectively, depending on the `network` parameter). No spending-limit enforcement for
 EVM yet (BiatecMCP's `getCryptoBalance` tool queries EVM balances directly against a public RPC, without ever
 involving this API, since that needs no key material).
 

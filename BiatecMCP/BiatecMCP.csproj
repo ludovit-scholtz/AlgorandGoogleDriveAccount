@@ -12,6 +12,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Lets BiatecMCPTests unit-test a handful of internal, no-network-I/O helpers directly (e.g.
+         GetAlgodSettings' explorer-URL resolution) without needing a live algod node - same "seam for
+         testability" precedent as this project's other IPublicXDataSource interfaces. -->
+    <InternalsVisibleTo Include="BiatecMCPTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Algorand4: transaction construction/encoding and Algod broadcast only - no key material ever
          touches this project (see MCP/BiatecMCP.cs's class remarks). Microsoft.AspNetCore.Authentication.JwtBearer
          + ModelContextProtocol.AspNetCore: OAuth 2.1 resource-server wiring delegating to BiatecOIDC -

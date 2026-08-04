@@ -1301,10 +1301,11 @@ namespace BiatecMCP.MCP
             public string? ExplorerLink { get; set; }
         }
 
-        [McpServerTool(Name = "executeAlgorandTransaction"), Description("Broadcasts one or more already-signed Algorand transactions (base64 msgpack, e.g. from signTransaction or mergeMultisigTransactions) to the network. Requires the 'sign' scope.")]
+        [McpServerTool(Name = "executeTransaction"),
+         Description("Broadcasts one or more already-signed transactions to the blockchain - the one broadcast tool for every chain family this server supports (Algorand-family/AVM, Bitcoin, Bitcoin Cash). 'network' (see listSupportedNetworks) must be the exact same network the transaction(s) were built and signed for - broadcasting to the wrong network always fails, since a transaction signed for one network's genesis/chain is invalid on any other. Requires the 'sign' scope.")]
         public async Task<ExecuteTransactionResponse> ExecuteTransaction(
-            [Description("Signed transaction(s), base64-encoded msgpack, in submission order.")] List<string> signedTransactions,
-            [Description("Which network to broadcast on - e.g. 'algorand', 'voi', 'mainnet-v1.0'. Call listSupportedNetworks to see valid values.")] string network = "mainnet-v1.0")
+            [Description("Signed transaction(s) to broadcast, base64-encoded, in submission order. AVM: one or more msgpack-encoded transactions (e.g. from signTransaction or mergeMultisigTransactions). Bitcoin/BitcoinCash: exactly one raw signed transaction.")] List<string> signedTransactions,
+            [Description("Which network to broadcast on - the exact network the transaction(s) were built/signed for, e.g. 'algorand', 'testnet-v1.0', 'voi', 'Bitcoin', 'BitcoinCash'. Call listSupportedNetworks to see valid AVM values.")] string network)
         {
             var authError = RequireSignClaim();
             if (authError != null)
@@ -1319,6 +1320,22 @@ namespace BiatecMCP.MCP
 
             try
             {
+                var resolved = await _networkResolver.ResolveAsync(network);
+                if (resolved == null)
+                {
+                    return new ExecuteTransactionResponse { Error = $"Unknown network '{network}'. Call listSupportedNetworks to see valid values.", ErrorType = "InvalidRequest" };
+                }
+
+                if (resolved.Family is ChainFamily.Btc or ChainFamily.Bch)
+                {
+                    return await ExecuteBitcoinTransactionAsync(resolved.Family, signedTransactions);
+                }
+
+                if (resolved.Family == ChainFamily.Evm)
+                {
+                    return new ExecuteTransactionResponse { Error = "Broadcasting EVM transactions isn't supported yet - submit the signed raw transaction yourself via that chain's own eth_sendRawTransaction RPC.", ErrorType = "InvalidRequest" };
+                }
+
                 var (apiAddress, apiToken, explorerBaseUrl) = await GetAlgodSettings(network);
                 using var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
                 var algodApi = new DefaultApi(httpClient);
@@ -1335,55 +1352,32 @@ namespace BiatecMCP.MCP
             }
         }
 
-        [McpServerTool(Name = "executeBitcoinTransaction"),
-         Description("Broadcasts an already-signed Bitcoin or Bitcoin Cash transaction (raw bytes, base64-encoded, as returned by signTransaction) to the network via a public block explorer. Requires the 'sign' scope.")]
-        public async Task<ExecuteTransactionResponse> ExecuteBitcoinTransaction(
-            [Description("The signed transaction, base64-encoded raw bytes (as returned by signTransaction).")] string signedTransaction,
-            [Description("Which network to broadcast on - 'Bitcoin' or 'BitcoinCash'.")] string network)
+        private async Task<ExecuteTransactionResponse> ExecuteBitcoinTransactionAsync(ChainFamily family, List<string> signedTransactions)
         {
-            var authError = RequireSignClaim();
-            if (authError != null)
+            if (signedTransactions.Count != 1)
             {
-                return new ExecuteTransactionResponse { Error = authError, ErrorType = "InsufficientScope" };
+                return new ExecuteTransactionResponse { Error = "Exactly one signed transaction is required for Bitcoin/Bitcoin Cash.", ErrorType = "InvalidRequest" };
             }
 
-            if (string.IsNullOrWhiteSpace(signedTransaction))
-            {
-                return new ExecuteTransactionResponse { Error = "A signed transaction is required.", ErrorType = "InvalidRequest" };
-            }
-
+            byte[] rawBytes;
             try
             {
-                var resolved = await _networkResolver.ResolveAsync(network);
-                if (resolved == null || resolved.Family is not (ChainFamily.Btc or ChainFamily.Bch))
-                {
-                    return new ExecuteTransactionResponse { Error = $"Unknown or unsupported network '{network}'. Use 'Bitcoin' or 'BitcoinCash'.", ErrorType = "InvalidRequest" };
-                }
-
-                byte[] rawBytes;
-                try
-                {
-                    rawBytes = Convert.FromBase64String(signedTransaction);
-                }
-                catch (FormatException)
-                {
-                    return new ExecuteTransactionResponse { Error = "The signed transaction must be base64-encoded.", ErrorType = "InvalidRequest" };
-                }
-
-                var chainSlug = resolved.Family == ChainFamily.Btc ? BlockchairChainSlugs.Bitcoin : BlockchairChainSlugs.BitcoinCash;
-                var rawHex = Convert.ToHexStringLower(rawBytes);
-                var txId = await _bitcoinDataSource.TryBroadcastAsync(chainSlug, rawHex);
-                if (txId == null)
-                {
-                    return new ExecuteTransactionResponse { Error = "The block explorer rejected the broadcast, or was unreachable. Try again shortly.", ErrorType = "BroadcastFailed" };
-                }
-
-                return new ExecuteTransactionResponse { TxId = txId };
+                rawBytes = Convert.FromBase64String(signedTransactions[0]);
             }
-            catch (Exception ex)
+            catch (FormatException)
             {
-                return new ExecuteTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(ExecuteBitcoinTransaction)), ErrorType = ex.GetType().ToString() };
+                return new ExecuteTransactionResponse { Error = "The signed transaction must be base64-encoded.", ErrorType = "InvalidRequest" };
             }
+
+            var chainSlug = family == ChainFamily.Btc ? BlockchairChainSlugs.Bitcoin : BlockchairChainSlugs.BitcoinCash;
+            var rawHex = Convert.ToHexStringLower(rawBytes);
+            var txId = await _bitcoinDataSource.TryBroadcastAsync(chainSlug, rawHex);
+            if (txId == null)
+            {
+                return new ExecuteTransactionResponse { Error = "The block explorer rejected the broadcast, or was unreachable. Try again shortly.", ErrorType = "BroadcastFailed" };
+            }
+
+            return new ExecuteTransactionResponse { TxId = txId, ExplorerLink = $"https://blockchair.com/{chainSlug}/transaction/{txId}" };
         }
 
         private const string BiatecRouterProviderName = "BiatecRouter";
@@ -1403,32 +1397,61 @@ namespace BiatecMCP.MCP
                 postResult = await Algorand.Utils.Utils.SubmitTransaction(algodApi, signedTransaction);
             }
 
-            return new ExecuteTransactionResponse { TxId = postResult.Txid, ExplorerLink = $"{explorerBaseUrl}{postResult.Txid}" };
+            return new ExecuteTransactionResponse
+            {
+                TxId = postResult.Txid,
+                ExplorerLink = string.IsNullOrEmpty(explorerBaseUrl) ? null : $"{explorerBaseUrl}{postResult.Txid}"
+            };
         }
+
+        /// <summary>
+        /// Explorer URLs for chains whose genesis id is known here, even when connection details themselves
+        /// come from the dynamic <see cref="INetworkResolver"/> registry rather than a locally-configured
+        /// <c>Algod:Networks</c> entry - e.g. a caller naming the network by its friendly name ("algorand")
+        /// rather than its literal genesis id ("mainnet-v1.0") still resolves the right explorer, since both
+        /// ultimately resolve to the same <see cref="AlgorandChain.GenesisId"/> here. Different Algorand
+        /// network *variants* need genuinely different explorer URLs - a mainnet explorer doesn't
+        /// necessarily support testnet, and vice versa (Allo Explorer, this table's previous blanket
+        /// fallback for every AVM chain regardless of variant, is mainnet-only and silently returned a
+        /// non-working link for testnet - the bug this table exists to prevent). A chain with no entry here
+        /// (Voi, Aramid, ...) simply gets no explorer link rather than a guessed one that might not work.
+        /// </summary>
+        private static readonly Dictionary<string, string> KnownExplorerBaseUrls = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["mainnet-v1.0"] = "https://algorand.scan.biatec.io/transaction/",
+            ["testnet-v1.0"] = "https://lora.algokit.io/testnet/transaction/"
+        };
 
         /// <summary>
         /// Resolves algod connection details for <paramref name="network"/> (a friendly name like
         /// <c>"algorand"</c>/<c>"voi"</c>, or a raw genesis id) - locally-configured <c>Algod:Networks</c>
-        /// entries take precedence by literal genesis id (preserves operator control/custom explorer links),
-        /// falling back to <see cref="INetworkResolver"/>'s dynamically discovered, liveness-verified public
-        /// chain registry for anything not explicitly configured - a superset of what a literal genesis id
-        /// alone used to resolve. The registry doesn't publish explorer URLs, so a dynamically-resolved
-        /// chain gets a generic Allo Explorer-style fallback. Throws <see cref="ArgumentException"/> for an
-        /// unresolvable network, or one that resolves to an EVM chain (not supported for these tools yet).
+        /// entries take precedence by literal genesis id (preserves operator control over connection
+        /// details), falling back to <see cref="INetworkResolver"/>'s dynamically discovered,
+        /// liveness-verified public chain registry for anything not explicitly configured - a superset of
+        /// what a literal genesis id alone used to resolve. Either way, the explorer link is resolved from
+        /// <see cref="KnownExplorerBaseUrls"/> by the chain's actual genesis id - a configured entry's own
+        /// <see cref="AlgodNetworkSettings.ExplorerBaseUrl"/> only overrides that when explicitly set, so an
+        /// operator can still point at a custom/self-hosted explorer per network. Throws
+        /// <see cref="ArgumentException"/> for an unresolvable network, or one that resolves to an EVM chain
+        /// (not supported for these tools yet).
         /// </summary>
-        private async Task<(string apiAddress, string apiToken, string explorerBaseUrl)> GetAlgodSettings(string network)
+        internal async Task<(string apiAddress, string apiToken, string explorerBaseUrl)> GetAlgodSettings(string network)
         {
             var algodConfig = _algodConfig.CurrentValue;
 
             if (algodConfig.Networks.TryGetValue(network.ToLowerInvariant(), out var networkSettings))
             {
-                return (networkSettings.ApiAddress, networkSettings.ApiToken, networkSettings.ExplorerBaseUrl);
+                var explorerBaseUrl = !string.IsNullOrEmpty(networkSettings.ExplorerBaseUrl)
+                    ? networkSettings.ExplorerBaseUrl
+                    : KnownExplorerBaseUrls.GetValueOrDefault(network, string.Empty);
+                return (networkSettings.ApiAddress, networkSettings.ApiToken, explorerBaseUrl);
             }
 
             var resolved = await _networkResolver.ResolveAsync(network);
             if (resolved is { Family: ChainFamily.Avm, AvmChain: not null })
             {
-                return (resolved.AvmChain.AlgodApiAddress, resolved.AvmChain.AlgodApiToken, "https://allo.info/tx/");
+                var explorerBaseUrl = KnownExplorerBaseUrls.GetValueOrDefault(resolved.AvmChain.GenesisId, string.Empty);
+                return (resolved.AvmChain.AlgodApiAddress, resolved.AvmChain.AlgodApiToken, explorerBaseUrl);
             }
 
             throw new ArgumentException($"Unknown or unsupported network '{network}'. Call listSupportedNetworks to see valid values.");

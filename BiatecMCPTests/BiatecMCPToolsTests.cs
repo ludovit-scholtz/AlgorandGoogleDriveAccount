@@ -517,7 +517,7 @@ namespace BiatecMCPTests
             _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
-        // ───────────────────────── createBitcoinTransaction / executeBitcoinTransaction ─────────────────────────
+        // ───────────────────────── createBitcoinTransaction / executeTransaction (Bitcoin) ─────────────────────────
 
         [Test]
         public async Task CreateBitcoinTransaction_HappyPath_BuildsUnsignedTransactionFromUtxos()
@@ -578,19 +578,19 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public async Task ExecuteBitcoinTransaction_MissingSignClaim_ReturnsInsufficientScope()
+        public async Task ExecuteTransaction_Bitcoin_MissingSignClaim_ReturnsInsufficientScope()
         {
             SetClaims();
             SetBearerToken("tok");
 
-            var result = await CreateTool().ExecuteBitcoinTransaction(Convert.ToBase64String(new byte[] { 1, 2, 3 }), "Bitcoin");
+            var result = await CreateTool().ExecuteTransaction(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "Bitcoin");
 
             Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
             _bitcoinDataSource.Verify(d => d.TryBroadcastAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
-        public async Task ExecuteBitcoinTransaction_ValidRequest_BroadcastsAndReturnsTxId()
+        public async Task ExecuteTransaction_Bitcoin_ValidRequest_BroadcastsAndReturnsTxIdAndExplorerLink()
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
@@ -601,14 +601,15 @@ namespace BiatecMCPTests
                 .Setup(d => d.TryBroadcastAsync(BlockchairChainSlugs.Bitcoin, "010203", It.IsAny<CancellationToken>()))
                 .ReturnsAsync("abc123txid");
 
-            var result = await CreateTool().ExecuteBitcoinTransaction(Convert.ToBase64String(new byte[] { 1, 2, 3 }), "Bitcoin");
+            var result = await CreateTool().ExecuteTransaction(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "Bitcoin");
 
             Assert.That(result.Error, Is.Empty);
             Assert.That(result.TxId, Is.EqualTo("abc123txid"));
+            Assert.That(result.ExplorerLink, Is.EqualTo("https://blockchair.com/bitcoin/transaction/abc123txid"));
         }
 
         [Test]
-        public async Task ExecuteBitcoinTransaction_BroadcastFails_ReturnsClearError()
+        public async Task ExecuteTransaction_Bitcoin_BroadcastFails_ReturnsClearError()
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
@@ -619,9 +620,53 @@ namespace BiatecMCPTests
                 .Setup(d => d.TryBroadcastAsync(BlockchairChainSlugs.Bitcoin, It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync((string?)null);
 
-            var result = await CreateTool().ExecuteBitcoinTransaction(Convert.ToBase64String(new byte[] { 1, 2, 3 }), "Bitcoin");
+            var result = await CreateTool().ExecuteTransaction(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "Bitcoin");
 
             Assert.That(result.ErrorType, Is.EqualTo("BroadcastFailed"));
+        }
+
+        [Test]
+        public async Task ExecuteTransaction_Bitcoin_MoreThanOneTransaction_ReturnsInvalidRequest()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Bitcoin", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" });
+
+            var result = await CreateTool().ExecuteTransaction(new List<string> { "AQ==", "Ag==" }, "Bitcoin");
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+            _bitcoinDataSource.Verify(d => d.TryBroadcastAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task ExecuteTransaction_UnknownNetwork_ReturnsInvalidRequest()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("notanetwork", It.IsAny<CancellationToken>()))
+                .ReturnsAsync((ResolvedNetwork?)null);
+
+            var result = await CreateTool().ExecuteTransaction(new List<string> { "AA==" }, "notanetwork");
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        [Test]
+        public async Task ExecuteTransaction_EvmNetwork_ReturnsNotSupportedError()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum Mainnet", EvmChain = new EvmChain { ChainId = 1, Name = "Ethereum Mainnet" } });
+
+            var result = await CreateTool().ExecuteTransaction(new List<string> { "AA==" }, "Ethereum");
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+            Assert.That(result.Error, Does.Contain("EVM"));
         }
 
         [Test]
@@ -719,15 +764,15 @@ namespace BiatecMCPTests
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
         }
 
-        // ───────────────────────── executeAlgorandTransaction ─────────────────────────
+        // ───────────────────────── executeTransaction (Algorand) ─────────────────────────
 
         [Test]
-        public async Task ExecuteTransaction_MissingSignClaim_ReturnsInsufficientScope()
+        public async Task ExecuteTransaction_Avm_MissingSignClaim_ReturnsInsufficientScope()
         {
             SetClaims();
             SetBearerToken("tok");
 
-            var result = await CreateTool().ExecuteTransaction(new List<string> { "AA==" });
+            var result = await CreateTool().ExecuteTransaction(new List<string> { "AA==" }, "mainnet-v1.0");
 
             Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
         }
@@ -738,9 +783,91 @@ namespace BiatecMCPTests
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
 
-            var result = await CreateTool().ExecuteTransaction(new List<string>());
+            var result = await CreateTool().ExecuteTransaction(new List<string>(), "mainnet-v1.0");
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        // ───────────────────────── GetAlgodSettings (explorer link resolution) ─────────────────────────
+        //
+        // Regression coverage: the dynamic-chain fallback used to hardcode "https://allo.info/tx/" for
+        // every AVM network regardless of variant - Allo Explorer doesn't support Algorand testnet, so a
+        // testnet execute/create call always returned a non-working explorer link. Fixed by resolving the
+        // link from the chain's actual genesis id (KnownExplorerBaseUrls) instead of guessing one constant
+        // for every network - a network with no known entry now gets no link at all rather than a wrong one.
+
+        [Test]
+        public async Task GetAlgodSettings_ConfiguredNetworkWithExplicitExplorerUrl_UsesConfiguredValue()
+        {
+            var config = new AlgodConfiguration
+            {
+                Networks = { ["mainnet-v1.0"] = new AlgodNetworkSettings { ApiAddress = "https://algod.example.com", ExplorerBaseUrl = "https://custom.example.com/tx/" } }
+            };
+            _algodConfig = Mock.Of<IOptionsMonitor<AlgodConfiguration>>(m => m.CurrentValue == config);
+
+            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("mainnet-v1.0");
+
+            Assert.That(explorerBaseUrl, Is.EqualTo("https://custom.example.com/tx/"));
+        }
+
+        [Test]
+        public async Task GetAlgodSettings_ConfiguredNetworkWithNoExplorerUrl_FallsBackToKnownTable()
+        {
+            var config = new AlgodConfiguration
+            {
+                Networks = { ["testnet-v1.0"] = new AlgodNetworkSettings { ApiAddress = "https://algod.example.com" } }
+            };
+            _algodConfig = Mock.Of<IOptionsMonitor<AlgodConfiguration>>(m => m.CurrentValue == config);
+
+            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("testnet-v1.0");
+
+            Assert.That(explorerBaseUrl, Is.EqualTo("https://lora.algokit.io/testnet/transaction/"));
+        }
+
+        [Test]
+        public async Task GetAlgodSettings_DynamicallyResolvedMainnet_UsesBiatecScanExplorer()
+        {
+            _networkResolver
+                .Setup(r => r.ResolveAsync("algorand", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Algorand Mainnet", AvmChain = new AlgorandChain { GenesisId = "mainnet-v1.0", AlgodApiAddress = "https://algod.example.com" } });
+
+            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("algorand");
+
+            Assert.That(explorerBaseUrl, Is.EqualTo("https://algorand.scan.biatec.io/transaction/"));
+        }
+
+        [Test]
+        public async Task GetAlgodSettings_DynamicallyResolvedTestnet_UsesLoraTestnetExplorer()
+        {
+            _networkResolver
+                .Setup(r => r.ResolveAsync("testnet", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Algorand Testnet", AvmChain = new AlgorandChain { GenesisId = "testnet-v1.0", AlgodApiAddress = "https://algod.example.com" } });
+
+            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("testnet");
+
+            Assert.That(explorerBaseUrl, Is.EqualTo("https://lora.algokit.io/testnet/transaction/"));
+        }
+
+        [Test]
+        public async Task GetAlgodSettings_DynamicallyResolvedUnknownChain_ReturnsNoExplorerLinkRatherThanGuessing()
+        {
+            _networkResolver
+                .Setup(r => r.ResolveAsync("voi", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Voi Mainnet", AvmChain = new AlgorandChain { GenesisId = "voimain-v1.0", AlgodApiAddress = "https://algod.example.com" } });
+
+            var (_, _, explorerBaseUrl) = await CreateTool().GetAlgodSettings("voi");
+
+            Assert.That(explorerBaseUrl, Is.Empty);
+        }
+
+        [Test]
+        public void GetAlgodSettings_UnresolvableNetwork_ThrowsArgumentException()
+        {
+            _networkResolver
+                .Setup(r => r.ResolveAsync("notanetwork", It.IsAny<CancellationToken>()))
+                .ReturnsAsync((ResolvedNetwork?)null);
+
+            Assert.That(async () => await CreateTool().GetAlgodSettings("notanetwork"), Throws.TypeOf<ArgumentException>());
         }
 
         // ───────────────────────── createSwapTransaction ─────────────────────────

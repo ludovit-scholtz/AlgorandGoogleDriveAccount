@@ -67,8 +67,14 @@ capability matrix.
 
 Wallet operations are three separate, chainable steps — **build** an unsigned transaction, **sign** it, then
 **execute** (broadcast) it — rather than one monolithic call. Each `create*` tool only builds and never touches
-BiatecOIDC or the network; only `signTransaction`, `activateCryptoAddress`, and `executeAlgorandTransaction`
-require the `sign` scope.
+BiatecOIDC or the network; only `signTransaction`, `activateCryptoAddress`, and `executeTransaction`
+require the `sign` scope. `executeTransaction` is the *only* broadcast tool - one tool for every supported
+chain family (AVM, Bitcoin, Bitcoin Cash), never a separate per-chain-family tool to pick between - `network`
+(the same parameter name/values every other tool uses) is what tells it where to broadcast. **Always pass the
+exact same `network` value the transaction was built/signed for** - a transaction is only ever valid on the
+one network it was built against (its own genesis hash for AVM, its own chain rules for Bitcoin-family), so
+broadcasting to a different network always fails; never guess a different `network` value on a failure, and
+never try Bitcoin/BitcoinCash networks for a signed Algorand transaction or vice versa.
 Every tool's own description tells the connected AI assistant which tool to call next, so a plain "pay X"
 request is handled as three chained tool calls automatically. `signTransaction` and `getAddressInfo` take the
 address itself (rather than `seedAddress`/`slot`), matching BiatecOIDC's
@@ -155,12 +161,21 @@ seed/slot, since that's a different concern (choosing which identity produces th
   transaction, or the same with `gasPrice` replaced by `maxFeePerGas`+`maxPriorityFeePerGas` for EIP-1559 —
   every numeric field a decimal or `0x`-prefixed hex string (never a JSON number). The response is the signed
   transaction(s) in the same encoding — broadcast an EVM one yourself via that chain's own
-  `eth_sendRawTransaction` (there is no `executeAlgorandTransaction`-equivalent EVM broadcast tool).
+  `eth_sendRawTransaction` (`executeTransaction` doesn't support EVM yet - see its own entry below).
 - **`mergeMultisigTransactions`** — combines independently-signed copies of the same multisig envelope (collected
   from each cosigner's own `signTransaction` call) into one transaction, once at least `threshold` signatures are
   present.
-- **`executeAlgorandTransaction`** — broadcasts one or more already-signed transactions (base64 msgpack) to the
-  network. Requires the `sign` scope.
+- **`executeTransaction`** — the *only* broadcast tool, for every supported chain family: broadcasts one or
+  more already-signed transactions (base64-encoded) to `network` (see `listSupportedNetworks`) - AVM via the
+  network's own algod node, Bitcoin/BitcoinCash via a public block explorer (exactly one signed transaction
+  for those two, never a group). `network` **must** be the exact network the transaction(s) were actually
+  built/signed for - a transaction is only ever valid on the network whose genesis hash (AVM) or chain rules
+  (Bitcoin-family) it was signed against, so broadcasting to any other `network` value always fails; never
+  guess a different one after a failure, and never call this for an EVM network (broadcast that yourself via
+  the chain's own `eth_sendRawTransaction` - see `signTransaction`'s EVM section above). Requires the `sign`
+  scope. Response includes `explorerLink` when a working block explorer URL is known for that specific
+  network (e.g. Algorand mainnet vs. testnet use different explorers - a chain with no confirmed explorer
+  simply omits the link rather than guessing a URL that might not work).
 
 ### Example prompts
 
@@ -175,31 +190,31 @@ seed/slot, since that's a different concern (choosing which identity produces th
 - *"check the balance of 0xABCD...WXYZ on Arbitrum"* → `getCryptoBalance(network="Arbitrum", address="0xABCD...WXYZ")`
 - *"pay to address ABCD...WXYZ 1 algo with note biatec"* → `createPaymentTransaction(receiverAccount="ABCD...WXYZ",
   amount=1000000, note="biatec")` (returns the built transaction plus its `Sender`) → `signTransaction(...,
-  network="algorand", address="<Sender>")` → `executeAlgorandTransaction(...)` — three chained calls, signing
+  network="algorand", address="<Sender>")` → `executeTransaction(..., network="algorand")` — three chained calls, signing
   with the default identity (primary seed, slot 0).
 - *"pay to address ABCD...WXYZ 1 algo with note biatec with my arc76 address SEED2...ADDR and slot 10"* → same
   chain, with `seedAddress="SEED2...ADDR", slot=10` passed to `createPaymentTransaction`, then
   `signTransaction(..., network="algorand", address="<the derived slot-10 address>")`.
 - *"do self transfer with 1 algo amount and note field biatecmcp"* → `createPaymentTransaction(amount=1000000,
   note="biatecmcp")` (empty `receiverAccount` self-transfers) → `signTransaction(..., network="algorand",
-  address="<Sender>")` → `executeAlgorandTransaction`.
+  address="<Sender>")` → `executeTransaction(..., network="algorand")`.
 - *"opt in to asset 31566704"* → `createOptInTransaction(assetId=31566704)` → `signTransaction(..., network="algorand",
-  address="<Sender>")` → `executeAlgorandTransaction`.
+  address="<Sender>")` → `executeTransaction(..., network="algorand")`.
 - *"swap 1 algo for USDC"* → `createSwapTransaction(fromAssetId=0, toAssetId=31566704, amount=1000000)` — quotes
   all three aggregators; if Biatec Router wins, chain `signTransaction(..., network="algorand", address="<Sender>")`
-  → `executeAlgorandTransaction` on the returned transaction(s), otherwise the response explains which
+  → `executeTransaction(..., network="algorand")` on the returned transaction(s), otherwise the response explains which
   aggregator quoted better and that its transaction can't be built yet.
 - *"propose a 2-of-3 multisig payment of 5 algo to address ABCD...WXYZ between my address, SEED2...ADDR, and
   SEED3...ADDR"* → `createMultisigTransaction(version=1, threshold=2, participantAddresses=[...], ...)`, then
   each participant runs `signTransaction(..., network="algorand", address="<their own participant address>")` on
   the returned envelope in their own session, and any one party runs `mergeMultisigTransactions` on the collected
-  signed copies followed by `executeAlgorandTransaction`.
+  signed copies followed by `executeTransaction(..., network="algorand")`.
 - *"what bridge routes are available from Algorand mainnet"* → `getBridgeConfiguration()`, or
   `getBridgeConfiguration(destinationChainId=416101)` to filter to a specific destination (e.g. Voi).
 - *"bridge 1 algo to my address VOI...ADDR on Voi"* → `createBridgeTransaction(assetId=0, amount=1000000,
   destinationNetwork=416101, destinationAddress="VOI...ADDR", destinationToken="<Voi ALGO token id>")` → review
   the returned fee/amount breakdown and `LiquidityVerified`/`Warning` fields → `signTransaction(..., network="algorand",
-  address="<Sender>")` → `executeAlgorandTransaction`.
+  address="<Sender>")` → `executeTransaction(..., network="algorand")`.
 - *"is my address ABCD...WXYZ active"* → `getAddressInfo(network="algorand", address="ABCD...WXYZ")`.
 - *"I rekeyed ABCD...WXYZ on-chain to my new seed EFGH...ADDR at slot 0 — register it"* →
   `activateCryptoAddress(network="algorand", seedAddress="EFGH...ADDR", slot=0, address="ABCD...WXYZ")` —
