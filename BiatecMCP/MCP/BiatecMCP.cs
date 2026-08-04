@@ -1074,14 +1074,10 @@ namespace BiatecMCP.MCP
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
             [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet")
         {
-            if (participantAddresses == null || participantAddresses.Count == 0)
+            var configurationError = ValidateMultisigConfiguration(threshold, participantAddresses);
+            if (configurationError != null)
             {
-                return new CreateMultisigTransactionResponse { Error = "At least one participant address is required.", ErrorType = "InvalidRequest" };
-            }
-
-            if (threshold < 1 || threshold > participantAddresses.Count)
-            {
-                return new CreateMultisigTransactionResponse { Error = "threshold must be between 1 and the number of participant addresses.", ErrorType = "InvalidRequest" };
+                return new CreateMultisigTransactionResponse { Error = configurationError, ErrorType = "InvalidRequest" };
             }
 
             try
@@ -1106,6 +1102,145 @@ namespace BiatecMCP.MCP
             catch (Exception ex)
             {
                 return new CreateMultisigTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateMultisigTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        /// <summary>Shared (threshold, participants) sanity check for every multisig tool - returns the error message, or <c>null</c> when valid.</summary>
+        private static string? ValidateMultisigConfiguration(int threshold, List<string> participantAddresses)
+        {
+            if (participantAddresses == null || participantAddresses.Count == 0)
+            {
+                return "At least one participant address is required.";
+            }
+
+            if (threshold < 1 || threshold > participantAddresses.Count)
+            {
+                return "threshold must be between 1 and the number of participant addresses.";
+            }
+
+            return null;
+        }
+
+        public class GetMultisigAddressResponse
+        {
+            public string MultisigAddress { get; set; } = string.Empty;
+            public int Version { get; set; }
+            public int Threshold { get; set; }
+            public List<string> ParticipantAddresses { get; set; } = new();
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "getMultisigAddress"),
+         Description("Derives the Algorand-family (AVM) multisig account address for a (version, threshold, ordered participantAddresses) configuration - a pure computation, nothing is signed, stored, or broadcast, and no scope is required. The participant ORDER matters: the same addresses in a different order derive a DIFFERENT multisig address, so agree the order once and reuse it identically everywhere. Use the returned address as the sender when building transactions (createPaymentTransaction etc.), then wrap those unsigned transactions with convertToMultisigTransactions for cosigning.")]
+        public Task<GetMultisigAddressResponse> GetMultisigAddress(
+            [Description("How many of participantAddresses must sign before a transaction from this account can be broadcast.")] int threshold,
+            [Description("The multisig account's participants in their agreed, fixed order - each identified by their own normal Algorand address. Order matters for the derived address.")] List<string> participantAddresses,
+            [Description("Multisig version - always 1 for every multisig account created on Algorand today.")] int version = 1)
+        {
+            var configurationError = ValidateMultisigConfiguration(threshold, participantAddresses);
+            if (configurationError != null)
+            {
+                return Task.FromResult(new GetMultisigAddressResponse { Error = configurationError, ErrorType = "InvalidRequest" });
+            }
+
+            try
+            {
+                var multisigAddress = MultisigTransactionBuilder.DeriveAddress(version, threshold, participantAddresses);
+                return Task.FromResult(new GetMultisigAddressResponse
+                {
+                    MultisigAddress = multisigAddress,
+                    Version = version,
+                    Threshold = threshold,
+                    ParticipantAddresses = participantAddresses
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                return Task.FromResult(new GetMultisigAddressResponse { Error = ex.Message, ErrorType = "InvalidRequest" });
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult(new GetMultisigAddressResponse { Error = SanitizeForToolResponse(ex, nameof(GetMultisigAddress)), ErrorType = ex.GetType().ToString() });
+            }
+        }
+
+        public class ConvertToMultisigTransactionsResponse
+        {
+            public List<string> UnsignedTransactionEnvelopes { get; set; } = new();
+            public string MultisigAddress { get; set; } = string.Empty;
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "convertToMultisigTransactions"),
+         Description("Wraps standard unsigned AVM transactions (built by createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/... with the multisig account as the sender) into unsigned multisig envelopes for a (version, threshold, ordered participantAddresses) configuration - does NOT sign anything. Every transaction's sender must already be the exact multisig address this configuration derives (see getMultisigAddress); a mismatch fails without converting anything. Each participant then independently signs each returned envelope with their own signTransaction call, the signed copies are combined with mergeMultisigTransactions, and the merged result is broadcast with submitTransactionToBlockchain.")]
+        public Task<ConvertToMultisigTransactionsResponse> ConvertToMultisigTransactions(
+            [Description("Unsigned standard AVM transaction(s) to wrap - base64-encoded msgpack, e.g. a create* tool's UnsignedTransaction output. Must not already be multisig envelopes.")] List<string> unsignedTransactions,
+            [Description("How many of participantAddresses must sign before the transaction can be broadcast.")] int threshold,
+            [Description("The multisig account's participants in their agreed, fixed order - the exact same order used to derive the multisig sender address.")] List<string> participantAddresses,
+            [Description("Multisig version - always 1 for every multisig account created on Algorand today.")] int version = 1)
+        {
+            var configurationError = ValidateMultisigConfiguration(threshold, participantAddresses);
+            if (configurationError != null)
+            {
+                return Task.FromResult(new ConvertToMultisigTransactionsResponse { Error = configurationError, ErrorType = "InvalidRequest" });
+            }
+
+            if (unsignedTransactions == null || unsignedTransactions.Count == 0)
+            {
+                return Task.FromResult(new ConvertToMultisigTransactionsResponse { Error = "At least one unsigned transaction is required.", ErrorType = "InvalidRequest" });
+            }
+
+            try
+            {
+                var multisigAddress = MultisigTransactionBuilder.DeriveAddress(version, threshold, participantAddresses);
+
+                var envelopes = new List<string>(unsignedTransactions.Count);
+                foreach (var unsignedTransaction in unsignedTransactions)
+                {
+                    byte[] raw;
+                    try
+                    {
+                        raw = Convert.FromBase64String(unsignedTransaction);
+                    }
+                    catch (FormatException)
+                    {
+                        return Task.FromResult(new ConvertToMultisigTransactionsResponse { Error = "Each transaction must be base64-encoded.", ErrorType = "InvalidRequest" });
+                    }
+
+                    if (MultisigTransactionBuilder.TryGetParticipants(raw, out _))
+                    {
+                        return Task.FromResult(new ConvertToMultisigTransactionsResponse
+                        {
+                            Error = "A transaction is already a multisig envelope - pass it straight to each participant's signTransaction call instead of converting it again.",
+                            ErrorType = "InvalidRequest"
+                        });
+                    }
+
+                    var inner = Algorand.Utils.Encoder.DecodeFromMsgPack<Algorand.Algod.Model.Transactions.Transaction>(raw);
+                    var sender = inner?.Sender?.EncodeAsString();
+                    if (sender != multisigAddress)
+                    {
+                        return Task.FromResult(new ConvertToMultisigTransactionsResponse
+                        {
+                            Error = $"A transaction's sender is '{sender ?? "(none)"}' but this (version, threshold, participants) configuration derives the multisig address '{multisigAddress}' - rebuild the transaction with the multisig address as the sender (see getMultisigAddress), or fix the participant order/threshold to match the intended multisig account.",
+                            ErrorType = "InvalidRequest"
+                        });
+                    }
+
+                    envelopes.Add(MultisigTransactionBuilder.BuildEnvelope(raw, version, threshold, participantAddresses));
+                }
+
+                return Task.FromResult(new ConvertToMultisigTransactionsResponse { UnsignedTransactionEnvelopes = envelopes, MultisigAddress = multisigAddress });
+            }
+            catch (ArgumentException ex)
+            {
+                return Task.FromResult(new ConvertToMultisigTransactionsResponse { Error = ex.Message, ErrorType = "InvalidRequest" });
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult(new ConvertToMultisigTransactionsResponse { Error = SanitizeForToolResponse(ex, nameof(ConvertToMultisigTransactions)), ErrorType = ex.GetType().ToString() });
             }
         }
 
@@ -1152,6 +1287,26 @@ namespace BiatecMCP.MCP
                 if (resolved == null)
                 {
                     return new SignTransactionResponse { Error = await BuildUnknownNetworkErrorAsync(network), ErrorType = "InvalidRequest" };
+                }
+
+                // A multisig envelope can only be cosigned by one of its own participants - catch a wrong
+                // 'address' here with a clear, local error instead of letting BiatecOIDC sign with a key
+                // the envelope doesn't name (producing a subsig that mergeMultisigTransactions and the
+                // network would both reject much later, far from the actual mistake).
+                if (resolved.Family == ChainFamily.Avm)
+                {
+                    foreach (var rawTransaction in rawTransactions)
+                    {
+                        if (MultisigTransactionBuilder.TryGetParticipants(rawTransaction, out var participants)
+                            && !participants.Contains(address, StringComparer.Ordinal))
+                        {
+                            return new SignTransactionResponse
+                            {
+                                Error = $"'{address}' is not one of this multisig envelope's participants ({string.Join(", ", participants)}) - it cannot cosign this transaction. Call signTransaction with one of the participant addresses instead.",
+                                ErrorType = "InvalidRequest"
+                            };
+                        }
+                    }
                 }
 
                 var signResult = await _walletClient.SignAsync(bearerToken, network, address, rawTransactions);

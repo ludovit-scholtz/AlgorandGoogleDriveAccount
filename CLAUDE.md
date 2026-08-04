@@ -72,7 +72,7 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — 18 MCP tools split into three chainable steps (build → sign → execute) rather than
+  - `MCP/BiatecMCP.cs` — 20 MCP tools split into three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast:
     `listAlgorandAddresses`, `getBridgeConfiguration`, `listSupportedNetworks`, `getCryptoAddress`,
@@ -80,11 +80,15 @@ dependency on `BiatecSelfCustodyCore`.
     `listActiveAddresses` and the four before them are
     chain-family-agnostic, see "EVM (Ethereum-family) support"/"Bitcoin/Bitcoin Cash support" below and
     "Address-centric wallet API and
-    rekey support" in `BiatecOIDC`'s notes); `createPaymentTransaction`, `createOptInTransaction`,
+    rekey support" in `BiatecOIDC`'s notes), `getMultisigAddress` (pure derivation of a multisig account's
+    address from its ordered participants + threshold - see "Multisig transactions" below);
+    `createPaymentTransaction`, `createOptInTransaction`,
     `createAssetCreateTransaction`,
     `createSwapTransaction`, `createBridgeTransaction` (a real [Aramid Finance](https://aramid.finance)
     bridge integration - see "Aramid bridge integration" below), `createMultisigTransaction` (build-only, no
-    `sign` claim needed - see "Multisig transactions" below), `createBitcoinTransaction` (build-only, UTXO
+    `sign` claim needed - see "Multisig transactions" below), `convertToMultisigTransactions` (wraps
+    already-built standard unsigned AVM transactions into multisig cosigning envelopes, build-only - see
+    "Multisig transactions" below), `createBitcoinTransaction` (build-only, UTXO
     selection - see "Bitcoin/Bitcoin Cash support" below); `activateCryptoAddress` (registers a
     seed/slot → address pairing - the entry point for rekeying an external Algorand address to a
     Biatec-controlled key, requires `sign`); `signTransaction` (standalone - forwards
@@ -628,7 +632,18 @@ setup stage needs.
   **fresh** copy each call (not mutating in place) - exactly right for "collect N independent copies, then
   merge" - so no BiatecOIDC-side change was needed for this. `mergeMultisigTransactions` combines the
   collected copies via the Algorand4 SDK's `SignedTransaction.MergeMultisigTransactionBytes` once at least
-  `threshold` of them are present, ready for `submitTransactionToBlockchain`.
+  `threshold` of them are present, ready for `submitTransactionToBlockchain`. Two companion build-only tools
+  cover the case where the transaction was *not* built by `createMultisigTransaction` itself:
+  `getMultisigAddress` derives just the multisig account's address from `(version, threshold, ordered
+  participantAddresses)` (a pure computation - participant *order* is part of the account's identity, so a
+  different order derives a different address), and `convertToMultisigTransactions` wraps a list of standard
+  unsigned AVM transactions (from any `create*` tool, built with the multisig address as sender) into the
+  same cosigning envelopes `createMultisigTransaction` produces - it fails closed if a transaction's sender
+  isn't the exact address the given configuration derives, or if it's already a multisig envelope.
+  `signTransaction`'s AVM path also checks each payload via `MultisigTransactionBuilder.TryGetParticipants`:
+  a multisig envelope whose participants don't include the requested signing `address` is rejected locally
+  with the participant list in the error, instead of BiatecOIDC signing with a key the envelope doesn't name
+  (which would only surface much later, as a merge/broadcast failure far from the actual mistake).
 - **Multi-chain support**: `IAlgorandChainRegistry`/`AlgorandChainRegistry` (independently implemented in
   both `BiatecMCP/BusinessLogic/` and `BiatecOIDC/BusinessLogic/` - no shared code, per this repo's
   no-compile-time-coupling rule) discovers which Algorand-family chains are currently safe to use: it fetches

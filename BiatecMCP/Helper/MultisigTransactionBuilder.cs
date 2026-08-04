@@ -66,6 +66,36 @@ namespace BiatecMCP.Helper
             return Convert.ToBase64String(merged);
         }
 
+        /// <summary>
+        /// Extracts the participant addresses from <paramref name="rawTransaction"/> when it is a multisig
+        /// envelope or (partially) signed multisig transaction - a msgpack <c>SignedTransaction</c> whose
+        /// <c>MSig</c> is present. Returns <c>false</c> for a plain unsigned transaction, a non-multisig
+        /// signed transaction, or bytes that don't decode at all, so callers can tell "must be cosigned by
+        /// one of its participants" payloads apart from everything else without throwing.
+        /// </summary>
+        public static bool TryGetParticipants(byte[] rawTransaction, out IReadOnlyList<string> participantAddresses)
+        {
+            participantAddresses = Array.Empty<string>();
+            try
+            {
+                var signed = Algorand.Utils.Encoder.DecodeFromMsgPack<SignedTransaction>(rawTransaction);
+                if (signed?.MSig?.Subsigs == null || signed.MSig.Subsigs.Count == 0)
+                {
+                    return false;
+                }
+
+                participantAddresses = signed.MSig.Subsigs
+                    .Select(s => new Address(s.key.GetEncoded()).EncodeAsString())
+                    .ToList();
+                return true;
+            }
+            catch
+            {
+                // Untrusted bytes that aren't a multisig SignedTransaction - by design not an error here.
+                return false;
+            }
+        }
+
         private static List<byte[]> ToPublicKeyBytes(IReadOnlyList<string> participantAddresses) =>
             participantAddresses.Select(a => new Address(a).Bytes).ToList();
     }
