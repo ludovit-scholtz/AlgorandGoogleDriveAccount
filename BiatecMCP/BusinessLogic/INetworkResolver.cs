@@ -72,7 +72,7 @@ namespace BiatecMCP.BusinessLogic
     /// <see cref="NetworkResolver"/>. <see cref="ResolveAsync"/> only matches against the exact,
     /// case-insensitive canonical codes <see cref="ListNetworksAsync"/> itself returns - no fuzzy display-name
     /// matching, no raw genesis id, no numeric EVM chain id. This is deliberate: every
-    /// <c>create*</c>/<c>signTransaction</c>/<c>executeTransaction</c> tool shares this one resolver, so a
+    /// <c>create*</c>/<c>signTransaction</c>/<c>submitTransactionToBlockchain</c> tool shares this one resolver, so a
     /// connected AI agent that gets <c>network</c> wrong for one tool gets it wrong for all of them the same
     /// way, and a single clear, closed vocabulary (with an error that names every valid code) is much less
     /// likely to be misused than an open-ended, fuzzy-matched one - see the "Unified broadcast tool" /

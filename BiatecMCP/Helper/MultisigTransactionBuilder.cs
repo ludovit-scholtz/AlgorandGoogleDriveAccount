@@ -54,7 +54,7 @@ namespace BiatecMCP.Helper
         /// multisig envelope, each contributed by one cosigner (possibly via a different Biatec MCP session
         /// or a different wallet entirely) - into one transaction with every collected signature present,
         /// via the Algorand SDK's <c>SignedTransaction.MergeMultisigTransactionBytes</c>. The result is
-        /// broadcastable (via <c>executeAlgorandTransaction</c>) once at least <c>threshold</c> of the
+        /// broadcastable (via <c>submitTransactionToBlockchain</c>) once at least <c>threshold</c> of the
         /// participants have signed.
         /// </summary>
         public static string Merge(IReadOnlyList<string> signedTransactionsBase64)

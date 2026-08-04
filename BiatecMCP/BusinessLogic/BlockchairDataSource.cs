@@ -114,7 +114,7 @@ namespace BiatecMCP.BusinessLogic
         /// surfaced to callers as "Could not reach the block explorer", indistinguishable from a genuine
         /// outage). A Bitcoin (BTC) address never has this prefix, so this is a no-op for that chain -
         /// every address that reaches this class is normalized here rather than requiring every caller
-        /// (<c>getCryptoBalance</c>, <c>createBitcoinTransaction</c>, <c>executeBitcoinTransaction</c>) to
+        /// (<c>getCryptoBalance</c>, <c>createBitcoinTransaction</c>, <c>submitTransactionToBlockchain</c>) to
         /// know about the quirk.
         /// </summary>
         private static string NormalizeAddress(string address) =>

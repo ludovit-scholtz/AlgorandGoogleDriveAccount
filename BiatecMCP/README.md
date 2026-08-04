@@ -58,12 +58,12 @@ this fixes.
 ## Strict network codes: never guess, never retry with a different value
 
 Every tool taking a `network` parameter (`create*`, `getCryptoAddress`, `getCryptoBalance`, `signTransaction`,
-`executeTransaction`) validates it against the exact same closed set `listSupportedNetworks` returns - no
+`submitTransactionToBlockchain`) validates it against the exact same closed set `listSupportedNetworks` returns - no
 fuzzy matching, no display names, no genesis ids, no numeric EVM chain ids. Passing anything else fails with
 an error that lists every currently-valid code, specifically so a connected AI agent never has to guess: call
 `listSupportedNetworks` first if you're not sure, read the error's code list if a call fails, and use the
-exact code from there - never retry a failed `create*`/`signTransaction`/`executeTransaction` call by trying a
-*different* `network` value as a guess. This matters most for `executeTransaction`: a transaction signed for
+exact code from there - never retry a failed `create*`/`signTransaction`/`submitTransactionToBlockchain` call by trying a
+*different* `network` value as a guess. This matters most for `submitTransactionToBlockchain`: a transaction signed for
 one network is only ever valid for broadcast on that exact same network (different genesis hash for AVM,
 different chain rules for Bitcoin-family) - trying a different network on broadcast failure doesn't "fix" it,
 it just fails differently (or, worse, silently targets the wrong chain if the code happens to also be valid
@@ -89,8 +89,8 @@ capability matrix.
 
 Wallet operations are three separate, chainable steps — **build** an unsigned transaction, **sign** it, then
 **execute** (broadcast) it — rather than one monolithic call. Each `create*` tool only builds and never touches
-BiatecOIDC or the network; only `signTransaction`, `activateCryptoAddress`, and `executeTransaction`
-require the `sign` scope. `executeTransaction` is the *only* broadcast tool - one tool for every supported
+BiatecOIDC or the network; only `signTransaction`, `activateCryptoAddress`, and `submitTransactionToBlockchain`
+require the `sign` scope. `submitTransactionToBlockchain` is the *only* broadcast tool - one tool for every supported
 chain family (AVM, Bitcoin, Bitcoin Cash), never a separate per-chain-family tool to pick between - `network`
 (the same parameter name/values every other tool uses) is what tells it where to broadcast. **Always pass the
 exact same `network` value the transaction was built/signed for** - a transaction is only ever valid on the
@@ -125,7 +125,7 @@ seed/slot, since that's a different concern (choosing which identity produces th
   external address — BiatecOIDC verifies the on-chain rekey before registering it, and only then does
   `signTransaction` start working for that address under the new key.
 - **`listSupportedNetworks`** — lists the exact, closed set of `network` codes every `create*`/
-  `getCryptoAddress`/`getCryptoBalance`/`signTransaction`/`executeTransaction` tool accepts: every live
+  `getCryptoAddress`/`getCryptoBalance`/`signTransaction`/`submitTransactionToBlockchain` tool accepts: every live
   Algorand-family chain (`algorand-mainnet`, `algorand-testnet`, `voi-mainnet`, `aramid-mainnet`, ...),
   Ethereum-family chain (`ethereum`, `gnosis`, `arbitrum`, `base`), and Bitcoin-family chain (`bitcoin`,
   `bitcoin-cash`). **`network` must match one of these `code` values exactly** (case-insensitive, no
@@ -187,11 +187,11 @@ seed/slot, since that's a different concern (choosing which identity produces th
   transaction, or the same with `gasPrice` replaced by `maxFeePerGas`+`maxPriorityFeePerGas` for EIP-1559 —
   every numeric field a decimal or `0x`-prefixed hex string (never a JSON number). The response is the signed
   transaction(s) in the same encoding — broadcast an EVM one yourself via that chain's own
-  `eth_sendRawTransaction` (`executeTransaction` doesn't support EVM yet - see its own entry below).
+  `eth_sendRawTransaction` (`submitTransactionToBlockchain` doesn't support EVM yet - see its own entry below).
 - **`mergeMultisigTransactions`** — combines independently-signed copies of the same multisig envelope (collected
   from each cosigner's own `signTransaction` call) into one transaction, once at least `threshold` signatures are
   present.
-- **`executeTransaction`** — the *only* broadcast tool, for every supported chain family: broadcasts one or
+- **`submitTransactionToBlockchain`** — the *only* broadcast tool, for every supported chain family: broadcasts one or
   more already-signed transactions (base64-encoded) to `network` (see `listSupportedNetworks`) - AVM via the
   network's own algod node, Bitcoin/BitcoinCash via a public block explorer (exactly one signed transaction
   for those two, never a group). `network` **must** be the exact network the transaction(s) were actually
@@ -216,31 +216,31 @@ seed/slot, since that's a different concern (choosing which identity produces th
 - *"check the balance of 0xABCD...WXYZ on Arbitrum"* → `getCryptoBalance(network="arbitrum", address="0xABCD...WXYZ")`
 - *"pay to address ABCD...WXYZ 1 algo with note biatec"* → `createPaymentTransaction(receiverAccount="ABCD...WXYZ",
   amount=1000000, note="biatec")` (returns the built transaction plus its `Sender`) → `signTransaction(...,
-  network="algorand-mainnet", address="<Sender>")` → `executeTransaction(..., network="algorand-mainnet")` — three chained calls, signing
+  network="algorand-mainnet", address="<Sender>")` → `submitTransactionToBlockchain(..., network="algorand-mainnet")` — three chained calls, signing
   with the default identity (primary seed, slot 0).
 - *"pay to address ABCD...WXYZ 1 algo with note biatec with my arc76 address SEED2...ADDR and slot 10"* → same
   chain, with `seedAddress="SEED2...ADDR", slot=10` passed to `createPaymentTransaction`, then
   `signTransaction(..., network="algorand-mainnet", address="<the derived slot-10 address>")`.
 - *"do self transfer with 1 algo amount and note field biatecmcp"* → `createPaymentTransaction(amount=1000000,
   note="biatecmcp")` (empty `receiverAccount` self-transfers) → `signTransaction(..., network="algorand-mainnet",
-  address="<Sender>")` → `executeTransaction(..., network="algorand-mainnet")`.
+  address="<Sender>")` → `submitTransactionToBlockchain(..., network="algorand-mainnet")`.
 - *"opt in to asset 31566704"* → `createOptInTransaction(assetId=31566704)` → `signTransaction(..., network="algorand-mainnet",
-  address="<Sender>")` → `executeTransaction(..., network="algorand-mainnet")`.
+  address="<Sender>")` → `submitTransactionToBlockchain(..., network="algorand-mainnet")`.
 - *"swap 1 algo for USDC"* → `createSwapTransaction(fromAssetId=0, toAssetId=31566704, amount=1000000)` — quotes
   all three aggregators; if Biatec Router wins, chain `signTransaction(..., network="algorand-mainnet", address="<Sender>")`
-  → `executeTransaction(..., network="algorand-mainnet")` on the returned transaction(s), otherwise the response explains which
+  → `submitTransactionToBlockchain(..., network="algorand-mainnet")` on the returned transaction(s), otherwise the response explains which
   aggregator quoted better and that its transaction can't be built yet.
 - *"propose a 2-of-3 multisig payment of 5 algo to address ABCD...WXYZ between my address, SEED2...ADDR, and
   SEED3...ADDR"* → `createMultisigTransaction(version=1, threshold=2, participantAddresses=[...], ...)`, then
   each participant runs `signTransaction(..., network="algorand-mainnet", address="<their own participant address>")` on
   the returned envelope in their own session, and any one party runs `mergeMultisigTransactions` on the collected
-  signed copies followed by `executeTransaction(..., network="algorand-mainnet")`.
+  signed copies followed by `submitTransactionToBlockchain(..., network="algorand-mainnet")`.
 - *"what bridge routes are available from Algorand mainnet"* → `getBridgeConfiguration()`, or
   `getBridgeConfiguration(destinationChainId=416101)` to filter to a specific destination (e.g. Voi).
 - *"bridge 1 algo to my address VOI...ADDR on Voi"* → `createBridgeTransaction(assetId=0, amount=1000000,
   destinationNetwork=416101, destinationAddress="VOI...ADDR", destinationToken="<Voi ALGO token id>")` → review
   the returned fee/amount breakdown and `LiquidityVerified`/`Warning` fields → `signTransaction(..., network="algorand-mainnet",
-  address="<Sender>")` → `executeTransaction(..., network="algorand-mainnet")`.
+  address="<Sender>")` → `submitTransactionToBlockchain(..., network="algorand-mainnet")`.
 - *"is my address ABCD...WXYZ active"* → `getAddressInfo(network="algorand-mainnet", address="ABCD...WXYZ")`.
 - *"I rekeyed ABCD...WXYZ on-chain to my new seed EFGH...ADDR at slot 0 — register it"* →
   `activateCryptoAddress(network="algorand-mainnet", seedAddress="EFGH...ADDR", slot=0, address="ABCD...WXYZ")` —

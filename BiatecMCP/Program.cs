@@ -178,7 +178,7 @@ namespace BiatecMCP
                     // response) - unlike a single tool's own [Description], this is guaranteed to be in the
                     // agent's context for the whole session, not just while it's looking at one tool. Exists
                     // specifically to stop two real observed failure modes: (1) an agent stalling after
-                    // signTransaction and never finding executeTransaction (it kept re-calling the create*
+                    // signTransaction and never finding submitTransactionToBlockchain (it kept re-calling the create*
                     // tool instead), eventually giving up and shelling out to a local Python script that
                     // hand-built an algod client and broadcast the signed transaction to a third-party node
                     // - bypassing this server, and this account's own controls, entirely; (2) an agent
@@ -186,8 +186,8 @@ namespace BiatecMCP
                     // short and imperative - a wall of text is exactly what got missed before.
                     options.ServerInstructions =
                         "Every wallet transfer is exactly 3 tool calls in order: 1) a create* tool (build), " +
-                        "2) signTransaction (sign), 3) executeTransaction (broadcast to the real blockchain). " +
-                        "executeTransaction is the ONLY broadcast step - always call it last, every time, even " +
+                        "2) signTransaction (sign), 3) submitTransactionToBlockchain (broadcast to the real blockchain). " +
+                        "submitTransactionToBlockchain is the ONLY broadcast step - always call it last, every time, even " +
                         "if it is not the most recently mentioned tool. Never skip it, never substitute a " +
                         "create* tool call for it, and never write your own code or call any blockchain API " +
                         "directly - only these tools ever touch key material or submit transactions. " +

@@ -4,7 +4,7 @@ namespace BiatecOIDC.BusinessLogic
     /// <remarks>
     /// Matches the exact same strict, closed <c>network</c> code vocabulary as BiatecMCP's own
     /// (independent, no-compile-time-coupling) <c>NetworkResolver</c> - since BiatecMCP's
-    /// <c>signTransaction</c>/<c>executeTransaction</c> tools forward their own <c>network</c> parameter
+    /// <c>signTransaction</c>/<c>submitTransactionToBlockchain</c> tools forward their own <c>network</c> parameter
     /// straight through to this service's <c>POST /wallet/{network}/{address}/sign</c> route, both sides
     /// must recognize the same codes or a value BiatecMCP considers valid would 400 here. See CLAUDE.md's
     /// "Strict network codes" note for the naming convention and the real reported confusion (an agent
@@ -19,7 +19,7 @@ namespace BiatecOIDC.BusinessLogic
         /// suffix). Any genesis id not listed here falls back to <see cref="SlugifyAvmName"/> on the chain's
         /// own reported name - kept in sync with BiatecMCP's own copy of this table, since the same code
         /// must resolve to the same chain family on both sides of a <c>signTransaction</c>/
-        /// <c>executeTransaction</c> call.
+        /// <c>submitTransactionToBlockchain</c> call.
         /// </summary>
         private static readonly Dictionary<string, string> KnownAvmCodesByGenesisId = new(StringComparer.OrdinalIgnoreCase)
         {

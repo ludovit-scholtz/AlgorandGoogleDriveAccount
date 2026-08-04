@@ -89,7 +89,7 @@ dependency on `BiatecSelfCustodyCore`.
     seed/slot → address pairing - the entry point for rekeying an external Algorand address to a
     Biatec-controlled key, requires `sign`); `signTransaction` (standalone - forwards
     to BiatecOIDC's `POST /wallet/{network}/{address}/sign`, requires `sign`), `mergeMultisigTransactions`
-    (combines independently-signed multisig copies, no BiatecOIDC/Algod call); `executeTransaction`
+    (combines independently-signed multisig copies, no BiatecOIDC/Algod call); `submitTransactionToBlockchain`
     (the *one* broadcast tool for every chain family this server supports - AVM via algod, Bitcoin/Bitcoin
     Cash via Blockchair, dispatched internally by `network`'s resolved `ChainFamily` rather than exposing a
     separate tool per family - see "Unified broadcast tool" below; requires `sign`). Every
@@ -100,8 +100,8 @@ dependency on `BiatecSelfCustodyCore`.
     server" under Architecture notes below for the full request flow. The `create*`/`getCryptoAddress`
     tools accept optional `seedAddress`/`slot` parameters to build against/from a specific seed/ARC-76
     slot instead of the default identity (see BiatecOIDC's "Address-centric wallet API and rekey support"
-    note) - `signTransaction`, `getAddressInfo`, and `executeTransaction` instead take the address/`network`
-    itself (`executeTransaction` has no seed/slot concept at all - it only broadcasts already-signed bytes),
+    note) - `signTransaction`, `getAddressInfo`, and `submitTransactionToBlockchain` instead take the address/`network`
+    itself (`submitTransactionToBlockchain` has no seed/slot concept at all - it only broadcasts already-signed bytes),
     matching BiatecOIDC's
     address-centric wallet route shape; `activateCryptoAddress` takes `seedAddress`/`slot` as required
     parameters (route segments on the BiatecOIDC side) plus the `address` being activated (a body field on
@@ -111,10 +111,10 @@ dependency on `BiatecSelfCustodyCore`.
     of the locally-configured `Algod:Networks` entries - **and must always be the exact network a
     transaction was actually built/signed for**: `network` selects both how a transaction is *interpreted*
     (its genesis hash for AVM, its chain rules for Bitcoin-family) at signing time and which live node/
-    explorer `executeTransaction` broadcasts it to, so passing a different `network` at any step - build,
+    explorer `submitTransactionToBlockchain` broadcasts it to, so passing a different `network` at any step - build,
     sign, or execute - than the one actually intended always fails, sometimes confusingly (a signed-for-
-    testnet transaction handed to `executeTransaction` with `network="algorand"` doesn't "become" a mainnet
-    transaction, it just fails to broadcast). Every `create*`/`getCryptoAddress`/`executeTransaction` tool's
+    testnet transaction handed to `submitTransactionToBlockchain` with `network="algorand"` doesn't "become" a mainnet
+    transaction, it just fails to broadcast). Every `create*`/`getCryptoAddress`/`submitTransactionToBlockchain` tool's
     own `[Description]` says this explicitly, specifically to stop a connected agent from trying a different
     `network` value as a guess after a broadcast failure instead of using the one the transaction was
     actually built for.
@@ -144,7 +144,7 @@ dependency on `BiatecSelfCustodyCore`.
   - `BusinessLogic/IPublicBitcoinDataSource.cs`/`BlockchairDataSource.cs`, `Helper/BitcoinTransactionBuilder.cs`,
     `Model/BitcoinModels.cs` — Bitcoin/Bitcoin Cash UTXO data source and coin-selection/fee-estimation logic
     (see "Bitcoin/Bitcoin Cash support" below); backs `getCryptoAddress`/`getCryptoBalance`'s Btc/Bch
-    branches, `createBitcoinTransaction`, and `executeTransaction`'s Bitcoin-family branch
+    branches, `createBitcoinTransaction`, and `submitTransactionToBlockchain`'s Bitcoin-family branch
   - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in/asset-create
     transactions (Algorand4 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material
     ever touches this project
@@ -554,7 +554,7 @@ setup stage needs.
   enforces the `sign`/`rekey` claim and both spending-limit tiers there —
   `McpTransferLimitsConfiguration`/`TransferPolicy` were removed from `BiatecMCP` entirely, since
   `/wallet/{network}/{address}/sign` already does this uniformly for every relying party) and requires the
-  `sign` claim itself; `executeTransaction`'s AVM branch broadcasts the signed bytes to Algod via a shared
+  `sign` claim itself; `submitTransactionToBlockchain`'s AVM branch broadcasts the signed bytes to Algod via a shared
   private `SubmitSignedTransactionsAsync` helper, also requiring `sign` (see "Unified broadcast tool" below
   for its Bitcoin-family branch and why this is one tool, not two). `mergeMultisigTransactions` combines
   independently-signed copies of a `createMultisigTransaction` envelope (no BiatecOIDC/Algod call - pure
@@ -574,10 +574,10 @@ setup stage needs.
   short, always-surfaced summary of the create→sign→execute chain, sent to every connected client as part of
   the MCP `initialize` handshake rather than living only inside one tool's own `[Description]` - added after a
   real observed failure where a weaker connected agent, having signed a transaction but never found
-  `executeTransaction`, gave up and shelled out to a hand-written Python script that submitted the
+  `submitTransactionToBlockchain`, gave up and shelled out to a hand-written Python script that submitted the
   already-signed transaction straight to a third-party public node, bypassing this server (and its account's
   own spend controls) entirely. `signTransaction`'s own `[Description]` was also reordered so "always call
-  executeTransaction next" leads the text, rather than trailing after several sentences of AVM/EVM/Bitcoin
+  submitTransactionToBlockchain next" leads the text, rather than trailing after several sentences of AVM/EVM/Bitcoin
   encoding detail a given call usually doesn't need - a long description with the critical next-step
   instruction buried near the end is exactly what a low-capability agent is likely to miss. When adding or
   reordering tools, keep both of these short and imperative; a wall of conditional detail is the failure mode
@@ -628,7 +628,7 @@ setup stage needs.
   **fresh** copy each call (not mutating in place) - exactly right for "collect N independent copies, then
   merge" - so no BiatecOIDC-side change was needed for this. `mergeMultisigTransactions` combines the
   collected copies via the Algorand4 SDK's `SignedTransaction.MergeMultisigTransactionBytes` once at least
-  `threshold` of them are present, ready for `executeTransaction`.
+  `threshold` of them are present, ready for `submitTransactionToBlockchain`.
 - **Multi-chain support**: `IAlgorandChainRegistry`/`AlgorandChainRegistry` (independently implemented in
   both `BiatecMCP/BusinessLogic/` and `BiatecOIDC/BusinessLogic/` - no shared code, per this repo's
   no-compile-time-coupling rule) discovers which Algorand-family chains are currently safe to use: it fetches
@@ -708,7 +708,7 @@ setup stage needs.
 
   **Strict network codes**: `INetworkResolver`/`NetworkResolver` (`BiatecMCP/BusinessLogic/`) resolves the
   `network` parameter shared by every `create*`/`getCryptoAddress`/`getCryptoBalance`/`signTransaction`/
-  `executeTransaction` tool against a small, closed, exact-match vocabulary - `ResolveAsync` builds the full
+  `submitTransactionToBlockchain` tool against a small, closed, exact-match vocabulary - `ResolveAsync` builds the full
   `ListNetworksAsync()` result and matches `network` case-insensitively against each entry's own `Code`,
   nothing else (no raw genesis id, no display name, no numeric EVM chain id, no fuzzy/partial matching). This
   replaced a much more permissive design (genesis-id/name/numeric-id/whole-EVM-universe fuzzy matching) after
@@ -726,7 +726,7 @@ setup stage needs.
   the closed `WellKnownEvmChains` table (`ethereum`/`gnosis`/`arbitrum`/`base`), not the whole ~2,700-chain
   public universe a caller could previously address by name or numeric id. `BiatecOIDC` has its own
   independent copy of this same table (per this repo's no-compile-time-coupling rule) - it must stay in sync,
-  since BiatecMCP's `signTransaction`/`executeTransaction` forward their own `network` code straight through
+  since BiatecMCP's `signTransaction`/`submitTransactionToBlockchain` forward their own `network` code straight through
   to `BiatecOIDC`'s `POST /wallet/{network}/{address}/sign`, and a code one side accepts but the other
   doesn't would 400 there instead of failing at the tool layer with a clear message.
 
@@ -791,7 +791,7 @@ setup stage needs.
 
   Four chain-family-agnostic MCP tools gained Bitcoin/Bitcoin Cash branches for free (`getCryptoAddress`,
   `getCryptoBalance`, `signTransaction` - the last needs no branch at all, since it already just forwards
-  whatever blob it's given to BiatecOIDC's sign endpoint - and `executeTransaction`, see "Unified broadcast
+  whatever blob it's given to BiatecOIDC's sign endpoint - and `submitTransactionToBlockchain`, see "Unified broadcast
   tool" below); one new tool completes the transfer flow: `createBitcoinTransaction` (fetches UTXOs/fee
   rate, builds the unsigned wire DTO via `BitcoinTransactionBuilder`).
 
@@ -805,13 +805,13 @@ setup stage needs.
   a day). Only non-change outputs are priced (`BitcoinTransactionOutput.IsChange`) - money returning to the
   sender's own change address was never actually spent, so counting it would overstate every transfer's
   real cost against the limit.
-- **Unified broadcast tool**: `executeTransaction` (`BiatecMCP/MCP/BiatecMCP.cs`) is the single MCP tool for
+- **Unified broadcast tool**: `submitTransactionToBlockchain` (`BiatecMCP/MCP/BiatecMCP.cs`) is the single MCP tool for
   submitting an already-signed transaction to any blockchain this server supports - replaced two earlier,
   separate tools (`executeAlgorandTransaction`/`executeBitcoinTransaction`) that made a connected agent guess
   which broadcast tool matched a given `network`, a real reported failure mode where an agent tried
   `executeBitcoinTransaction` (network `"Bitcoin"`), then a bare `executeAlgorandTransaction`-shaped call with
   network `"algorand"`, before finding the actual right tool - purely because two tools existed to choose
-  between. `executeTransaction` takes the same `network` parameter every other tool already does
+  between. `submitTransactionToBlockchain` takes the same `network` parameter every other tool already does
   (`ChainFamily` resolved once via `INetworkResolver`, exactly like `getCryptoAddress`/`getCryptoBalance`) and
   dispatches internally: AVM submits via the resolved network's algod connection
   (`GetAlgodSettings`/`SubmitSignedTransactionsAsync`, unchanged from the old Algorand-only tool, one
@@ -819,13 +819,13 @@ setup stage needs.
   Blockchair (unchanged from the old Bitcoin-only tool); an EVM `network` returns a clear "not supported yet,
   broadcast it yourself via `eth_sendRawTransaction`" error rather than a generic "unknown network" one,
   since EVM signing (via `signTransaction`) already works today - only broadcasting doesn't. Every
-  `create*`/`getCryptoAddress`/`executeTransaction` tool's own `[Description]` explicitly says `network` must
+  `create*`/`getCryptoAddress`/`submitTransactionToBlockchain` tool's own `[Description]` explicitly says `network` must
   be the exact network a transaction was built/signed for - broadcasting to a different one always fails
   (different genesis hash for AVM, different chain rules for Bitcoin-family), so an agent should never retry
-  `executeTransaction` with a *different* `network` value after a failure, only investigate why the original,
+  `submitTransactionToBlockchain` with a *different* `network` value after a failure, only investigate why the original,
   correct one failed.
 
-  `ExecuteTransactionResponse.ExplorerLink` resolves from a small `KnownExplorerBaseUrls` table keyed by
+  `SubmitTransactionToBlockchainResponse.ExplorerLink` resolves from a small `KnownExplorerBaseUrls` table keyed by
   Algorand genesis id (`BiatecMCP/MCP/BiatecMCP.cs`), checked regardless of whether the network was resolved
   from a locally-configured `Algod:Networks` entry or the dynamic `INetworkResolver` registry - so a friendly
   name (`"algorand"`) and its literal genesis id (`"mainnet-v1.0"`) both resolve the same correct link. This

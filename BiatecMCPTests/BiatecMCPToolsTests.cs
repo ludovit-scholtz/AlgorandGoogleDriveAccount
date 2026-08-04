@@ -515,7 +515,7 @@ namespace BiatecMCPTests
             _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
-        // ───────────────────────── createBitcoinTransaction / executeTransaction (Bitcoin) ─────────────────────────
+        // ───────────────────────── createBitcoinTransaction / submitTransactionToBlockchain (Bitcoin) ─────────────────────────
 
         [Test]
         public async Task CreateBitcoinTransaction_HappyPath_BuildsUnsignedTransactionFromUtxos()
@@ -576,19 +576,19 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public async Task ExecuteTransaction_Bitcoin_MissingSignClaim_ReturnsInsufficientScope()
+        public async Task SubmitTransactionToBlockchain_Bitcoin_MissingSignClaim_ReturnsInsufficientScope()
         {
             SetClaims();
             SetBearerToken("tok");
 
-            var result = await CreateTool().ExecuteTransaction(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "Bitcoin");
+            var result = await CreateTool().SubmitTransactionToBlockchain(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "Bitcoin");
 
             Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
             _bitcoinDataSource.Verify(d => d.TryBroadcastAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
-        public async Task ExecuteTransaction_Bitcoin_ValidRequest_BroadcastsAndReturnsTxIdAndExplorerLink()
+        public async Task SubmitTransactionToBlockchain_Bitcoin_ValidRequest_BroadcastsAndReturnsTxIdAndExplorerLink()
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
@@ -599,7 +599,7 @@ namespace BiatecMCPTests
                 .Setup(d => d.TryBroadcastAsync(BlockchairChainSlugs.Bitcoin, "010203", It.IsAny<CancellationToken>()))
                 .ReturnsAsync("abc123txid");
 
-            var result = await CreateTool().ExecuteTransaction(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "Bitcoin");
+            var result = await CreateTool().SubmitTransactionToBlockchain(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "Bitcoin");
 
             Assert.That(result.Error, Is.Empty);
             Assert.That(result.TxId, Is.EqualTo("abc123txid"));
@@ -607,7 +607,7 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public async Task ExecuteTransaction_Bitcoin_BroadcastFails_ReturnsClearError()
+        public async Task SubmitTransactionToBlockchain_Bitcoin_BroadcastFails_ReturnsClearError()
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
@@ -618,13 +618,13 @@ namespace BiatecMCPTests
                 .Setup(d => d.TryBroadcastAsync(BlockchairChainSlugs.Bitcoin, It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync((string?)null);
 
-            var result = await CreateTool().ExecuteTransaction(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "Bitcoin");
+            var result = await CreateTool().SubmitTransactionToBlockchain(new List<string> { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }, "Bitcoin");
 
             Assert.That(result.ErrorType, Is.EqualTo("BroadcastFailed"));
         }
 
         [Test]
-        public async Task ExecuteTransaction_Bitcoin_MoreThanOneTransaction_ReturnsInvalidRequest()
+        public async Task SubmitTransactionToBlockchain_Bitcoin_MoreThanOneTransaction_ReturnsInvalidRequest()
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
@@ -632,14 +632,14 @@ namespace BiatecMCPTests
                 .Setup(r => r.ResolveAsync("Bitcoin", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" });
 
-            var result = await CreateTool().ExecuteTransaction(new List<string> { "AQ==", "Ag==" }, "Bitcoin");
+            var result = await CreateTool().SubmitTransactionToBlockchain(new List<string> { "AQ==", "Ag==" }, "Bitcoin");
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
             _bitcoinDataSource.Verify(d => d.TryBroadcastAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
-        public async Task ExecuteTransaction_UnknownNetwork_ReturnsInvalidRequest()
+        public async Task SubmitTransactionToBlockchain_UnknownNetwork_ReturnsInvalidRequest()
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
@@ -647,13 +647,13 @@ namespace BiatecMCPTests
                 .Setup(r => r.ResolveAsync("notanetwork", It.IsAny<CancellationToken>()))
                 .ReturnsAsync((ResolvedNetwork?)null);
 
-            var result = await CreateTool().ExecuteTransaction(new List<string> { "AA==" }, "notanetwork");
+            var result = await CreateTool().SubmitTransactionToBlockchain(new List<string> { "AA==" }, "notanetwork");
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
         }
 
         [Test]
-        public async Task ExecuteTransaction_EvmNetwork_ReturnsNotSupportedError()
+        public async Task SubmitTransactionToBlockchain_EvmNetwork_ReturnsNotSupportedError()
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
@@ -661,7 +661,7 @@ namespace BiatecMCPTests
                 .Setup(r => r.ResolveAsync("Ethereum", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum Mainnet", EvmChain = new EvmChain { ChainId = 1, Name = "Ethereum Mainnet" } });
 
-            var result = await CreateTool().ExecuteTransaction(new List<string> { "AA==" }, "Ethereum");
+            var result = await CreateTool().SubmitTransactionToBlockchain(new List<string> { "AA==" }, "Ethereum");
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
             Assert.That(result.Error, Does.Contain("EVM"));
@@ -784,26 +784,26 @@ namespace BiatecMCPTests
             _walletClient.Verify(c => c.SignAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
-        // ───────────────────────── executeTransaction (Algorand) ─────────────────────────
+        // ───────────────────────── submitTransactionToBlockchain (Algorand) ─────────────────────────
 
         [Test]
-        public async Task ExecuteTransaction_Avm_MissingSignClaim_ReturnsInsufficientScope()
+        public async Task SubmitTransactionToBlockchain_Avm_MissingSignClaim_ReturnsInsufficientScope()
         {
             SetClaims();
             SetBearerToken("tok");
 
-            var result = await CreateTool().ExecuteTransaction(new List<string> { "AA==" }, "mainnet-v1.0");
+            var result = await CreateTool().SubmitTransactionToBlockchain(new List<string> { "AA==" }, "mainnet-v1.0");
 
             Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
         }
 
         [Test]
-        public async Task ExecuteTransaction_EmptyList_ReturnsInvalidRequest()
+        public async Task SubmitTransactionToBlockchain_EmptyList_ReturnsInvalidRequest()
         {
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
 
-            var result = await CreateTool().ExecuteTransaction(new List<string>(), "mainnet-v1.0");
+            var result = await CreateTool().SubmitTransactionToBlockchain(new List<string>(), "mainnet-v1.0");
 
             Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
         }

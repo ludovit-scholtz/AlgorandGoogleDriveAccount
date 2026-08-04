@@ -23,7 +23,7 @@ namespace BiatecMCP.Model
         /// Deliberately no default here - different chains, and even different network variants of the same
         /// chain (mainnet vs. testnet), need genuinely different explorer URLs (an Algorand mainnet
         /// explorer doesn't necessarily support testnet, and vice versa), so guessing one is worse than
-        /// omitting the link entirely. Empty/unset means <c>ExecuteTransactionResponse.ExplorerLink</c> is
+        /// omitting the link entirely. Empty/unset means <c>SubmitTransactionToBlockchainResponse.ExplorerLink</c> is
         /// left <c>null</c> rather than built from a wrong assumption.
         /// </summary>
         public string ExplorerBaseUrl { get; set; } = string.Empty;
