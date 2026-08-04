@@ -175,7 +175,9 @@ namespace BiatecOIDC.Controllers
         /// <param name="scopeId">
         /// Test/dev-only (see <c>MOCK_TESTING.md</c>): combined with <c>idp=Mock</c>, skips the mock
         /// account picker too and signs in directly as the configured account with this
-        /// <c>CloudServices:Mock:Accounts[].ScopeId</c>. Ignored for any other <paramref name="idp"/>.
+        /// <c>CloudServices:Mock:Accounts[].ScopeId</c>. Without <paramref name="idp"/>, it's forwarded to
+        /// <see cref="SelectProvider"/>, where it's the only thing that makes the mock provider's button
+        /// render at all. Ignored for any other <paramref name="idp"/>.
         /// </param>
         /// <returns>
         /// A redirect to the provider picker or straight to sign-in, to the client's redirect URI with the
@@ -240,7 +242,7 @@ namespace BiatecOIDC.Controllers
                     return await AuthorizeChallenge(requestId, idp!, retried: false, scopeId: scopeId);
                 }
 
-                return RedirectToAction(nameof(SelectProvider), new { requestId });
+                return RedirectToAction(nameof(SelectProvider), new { requestId, scopeId });
             }
 
             return await RedirectToConsentAsync(normalizedRequest);
@@ -254,11 +256,28 @@ namespace BiatecOIDC.Controllers
         /// renders a sign-in button that can't work.
         /// </summary>
         /// <param name="requestId">Opaque id of the pending authorize request stored by <c>/authorize</c>.</param>
+        /// <param name="scopeId">
+        /// Test/dev-only (see <c>MOCK_TESTING.md</c>): the mock-account <c>scopeId</c> the caller passed to
+        /// <c>/authorize</c>, forwarded here so the picker knows the caller explicitly opted into mock
+        /// testing. The mock provider's button only renders when this names a configured
+        /// <c>CloudServices:Mock:Accounts</c> entry - never on the default picker, so a real user can't
+        /// stumble into the mock sign-in path by accident.
+        /// </param>
         [AllowAnonymous]
         [HttpGet("select-provider")]
-        public async Task<IActionResult> SelectProvider([FromQuery] string requestId)
+        public async Task<IActionResult> SelectProvider([FromQuery] string requestId, [FromQuery] string? scopeId = null)
         {
             var configuredProviders = _providerCatalog.All.Where(p => p.IsConfigured).ToList();
+
+            // Test/dev-only mock provider (see MOCK_TESTING.md): hidden from the default picker - it only
+            // shows up when the /authorize request explicitly named a configured mock account via
+            // ?scopeId=..., i.e. the caller deliberately selected one of the mock cloud scopes.
+            var mockScopeSelected = !string.IsNullOrWhiteSpace(scopeId)
+                && _mockConfig.CurrentValue.Accounts.Any(a => string.Equals(a.ScopeId, scopeId, StringComparison.Ordinal));
+            if (!mockScopeSelected)
+            {
+                configuredProviders.RemoveAll(p => string.Equals(p.Name, MockCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase));
+            }
 
             // Peek, not consume - AuthorizeChallenge/AuthorizeCallback still need the pending request
             // after the user picks a provider. Only used here to show the user who's asking (app name)
@@ -270,7 +289,11 @@ namespace BiatecOIDC.Controllers
             var buttonsHtml = new StringBuilder();
             foreach (var provider in configuredProviders)
             {
-                var url = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = provider.Name }, Request.Scheme);
+                // Only the mock provider's link carries the scopeId forward - AuthorizeChallenge ignores
+                // it for every real provider, and forwarding it here lets the mock button sign straight
+                // into the account the caller already named on /authorize.
+                var isMockProvider = string.Equals(provider.Name, MockCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase);
+                var url = Url.Action(nameof(AuthorizeChallenge), "JwtIssuer", new { requestId, idp = provider.Name, scopeId = isMockProvider ? scopeId : null }, Request.Scheme);
                 buttonsHtml.Append($"""
                     <a class="provider-button" href="{WebUtility.HtmlEncode(url)}">
                         <span class="provider-icon">{GetProviderIconSvg(provider.Name)}</span>

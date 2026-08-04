@@ -53,8 +53,12 @@ own fakes/mocks, e.g. `PersistentFakeCloudStorageProvider` in `CloudAccountRepos
   - `MockCloudStorageProvider` is only registered in DI (`Program.cs`) when `CloudServices:Mock:Enabled` is
     `true` **and** at least one account is configured - so it can never appear as a sign-in option unless
     explicitly turned on.
-  - When registered, it shows up on `/select-provider` like any other provider (`DisplayName` = "Mock
-    (Testing)"), linking to `GET /authorize/challenge?idp=Mock&requestId=...`.
+  - When registered, it does **not** show up on the default `/select-provider` page — the "Mock (Testing)"
+    button only renders when the `/authorize` request carried a `scopeId` matching a configured
+    `CloudServices:Mock:Accounts` entry (forwarded through the redirect to `/select-provider`), so a real
+    user can never stumble into the mock sign-in path from the normal picker. When shown, its button links
+    to `GET /authorize/challenge?idp=Mock&requestId=...&scopeId=...` (carrying that same scopeId, so the
+    click signs straight into the named account).
   - `AuthorizeChallenge` special-cases `idp=Mock`: instead of `Challenge()`-ing a real external IDP, it
     redirects to `GET /authorize/mock-select-account?requestId=...` - a picker page listing every configured
     account by its `ScopeId` (and email, for clarity).
@@ -115,8 +119,9 @@ local, git-ignored config file instead of editing the committed file directly.
    startup log for `"Seeded mock test account '{ScopeId}' ({Address})"` to confirm it worked and see the
    resulting address.
 2. Drive a normal OIDC `response_type=code` flow against `/authorize`, either:
-   - through the browser: `?idp=Mock` to land on the mock account picker (or omit `idp` entirely to land on
-     the normal `/select-provider` page, where "Mock (Testing)" now appears as a button), or
+   - through the browser: `?idp=Mock` to land on the mock account picker (or pass `?scopeId=app1` without
+     `idp` to land on the normal `/select-provider` page with a "Mock (Testing)" button next to the real
+     providers — without a configured `scopeId`, the mock button never appears there), or
    - fully scripted: `?idp=Mock&scopeId=app1` skips every picker and signs in immediately.
 3. Exchange the returned code at `/token` as usual - the resulting access/ID token is a **completely normal,
    real, signed Biatec token** (same claims, same `primary_seed_address`, same everything) - there is

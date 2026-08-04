@@ -456,7 +456,7 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task SelectProvider_MockProviderRegistered_ShowsMockButton()
+        public async Task SelectProvider_MockProviderRegisteredNoScopeId_HidesMockButton()
         {
             var jwtIssuerService = CreateJwtIssuerServiceMock();
             jwtIssuerService
@@ -468,7 +468,39 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Is.TypeOf<ContentResult>());
             var html = ((ContentResult)result).Content!;
+            Assert.That(html, Does.Not.Contain("Mock (Testing)"));
+        }
+
+        [Test]
+        public async Task SelectProvider_MockProviderRegisteredWithConfiguredScopeId_ShowsMockButton()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync((OidcAuthorizeRequest?)null);
+            var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = await controller.SelectProvider("request-id", scopeId: "app1");
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result).Content!;
             Assert.That(html, Does.Contain("Mock (Testing)"));
+        }
+
+        [Test]
+        public async Task SelectProvider_MockProviderRegisteredWithUnknownScopeId_HidesMockButton()
+        {
+            var jwtIssuerService = CreateJwtIssuerServiceMock();
+            jwtIssuerService
+                .Setup(service => service.PeekPendingAuthorizeRequestAsync("request-id"))
+                .ReturnsAsync((OidcAuthorizeRequest?)null);
+            var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache(), authenticated: false);
+
+            var result = await controller.SelectProvider("request-id", scopeId: "not-configured");
+
+            Assert.That(result, Is.TypeOf<ContentResult>());
+            var html = ((ContentResult)result).Content!;
+            Assert.That(html, Does.Not.Contain("Mock (Testing)"));
         }
 
         [Test]
