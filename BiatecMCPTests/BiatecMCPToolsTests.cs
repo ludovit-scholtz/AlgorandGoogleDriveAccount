@@ -65,29 +65,23 @@ namespace BiatecMCPTests
         private void SetClaims(params Claim[] claims) =>
             _httpContext.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
 
-        [Test]
-        public async Task GetAccountAddress_PrimarySeedAddressClaimPresent_UsesItAsSeedSelectorWithoutListingSeeds()
-        {
-            SetClaims(new Claim("primary_seed_address", "SOMESEED"));
-            SetBearerToken("tok");
-            _walletClient
-                .Setup(c => c.GetAddressAsync("tok", "SOMESEED", 0, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DerivedAddressResponse { Address = "SOMEADDRESS", SeedAddress = "SOMESEED", Slot = 0 });
+        // getAlgorandAddress was removed - getCryptoAddress(network: "Algorand") is the one canonical
+        // address-lookup tool now (same underlying ResolveDerivedAddressAsync resolution), so these cover
+        // that shared resolution logic through the surviving tool rather than duplicating it.
 
-            var result = await CreateTool().GetAccountAddress();
-
-            Assert.That(result.Address, Is.EqualTo("SOMEADDRESS"));
-            Assert.That(result.Error, Is.Empty);
-            _walletClient.Verify(c => c.ListSeedsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        }
+        private void SetAlgorandNetworkResolvable() =>
+            _networkResolver
+                .Setup(r => r.ResolveAsync("Algorand", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Avm, DisplayName = "Algorand Mainnet", AvmChain = new AlgorandChain { GenesisId = "mainnet-v1.0" } });
 
         [Test]
-        public async Task GetAccountAddress_PrimarySeedAddressClaimStale_FallsBackToLiveSeedList()
+        public async Task GetCryptoAddress_AvmPrimarySeedAddressClaimStale_FallsBackToLiveSeedList()
         {
             // Regression coverage: primary_seed_address is captured once at token issuance and carried
             // forward unchanged across refreshes, so a long-lived token can end up caching a seed
             // selector that no longer resolves (BiatecOIDC returns a "seed_not_found" ProblemDetails).
             // The tool must self-heal via GET /wallet/seeds instead of surfacing that error outright.
+            SetAlgorandNetworkResolvable();
             SetClaims(new Claim("primary_seed_address", "STALESEED"));
             SetBearerToken("tok");
             _walletClient
@@ -100,25 +94,26 @@ namespace BiatecMCPTests
                 .Setup(c => c.GetAddressAsync("tok", "REALPRIMARY", 0, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new DerivedAddressResponse { Address = "REALADDRESS", SeedAddress = "REALPRIMARY", Slot = 0 });
 
-            var result = await CreateTool().GetAccountAddress();
+            var result = await CreateTool().GetCryptoAddress("Algorand");
 
             Assert.That(result.Address, Is.EqualTo("REALADDRESS"));
             Assert.That(result.Error, Is.Empty);
         }
 
         [Test]
-        public async Task GetAccountAddress_ExplicitSeedAddressNotFound_DoesNotFallBackAndSurfacesError()
+        public async Task GetCryptoAddress_AvmExplicitSeedAddressNotFound_DoesNotFallBackAndSurfacesError()
         {
             // Unlike a claim-derived selector, a caller-supplied seedAddress was named on purpose - a
             // real "no such seed" for it must stay a clear error, never silently swapped for a
             // different seed's address.
+            SetAlgorandNetworkResolvable();
             SetClaims();
             SetBearerToken("tok");
             _walletClient
                 .Setup(c => c.GetAddressAsync("tok", "NOTAREALSEED", 0, It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new WalletApiException(400, "seed_not_found", "No seed with address 'NOTAREALSEED' exists for this account."));
 
-            var result = await CreateTool().GetAccountAddress(seedAddress: "NOTAREALSEED");
+            var result = await CreateTool().GetCryptoAddress("Algorand", seedAddress: "NOTAREALSEED");
 
             Assert.That(result.Address, Is.Empty);
             Assert.That(result.Error, Does.Contain("NOTAREALSEED"));
@@ -126,49 +121,27 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public async Task GetAccountAddress_NoClaim_FallsBackToPrimarySeedFromWalletApi()
+        public async Task GetCryptoAddress_AvmNoClaimAndNoSeeds_ReturnsClearError()
         {
-            SetClaims(); // no primary_seed_address claim
-            SetBearerToken("tok");
-            _walletClient
-                .Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ListSeedsResponse
-                {
-                    Seeds =
-                    {
-                        new SeedResponse { Address = "OLD", IsPrimary = false },
-                        new SeedResponse { Address = "PRIMARY", IsPrimary = true }
-                    }
-                });
-            _walletClient
-                .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 0, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DerivedAddressResponse { Address = "PRIMARY", SeedAddress = "PRIMARY", Slot = 0 });
-
-            var result = await CreateTool().GetAccountAddress();
-
-            Assert.That(result.Address, Is.EqualTo("PRIMARY"));
-        }
-
-        [Test]
-        public async Task GetAccountAddress_NoClaimAndNoSeeds_ReturnsClearError()
-        {
+            SetAlgorandNetworkResolvable();
             SetClaims();
             SetBearerToken("tok");
             _walletClient.Setup(c => c.ListSeedsAsync("tok", It.IsAny<CancellationToken>())).ReturnsAsync(new ListSeedsResponse());
 
-            var result = await CreateTool().GetAccountAddress();
+            var result = await CreateTool().GetCryptoAddress("Algorand");
 
             Assert.That(result.Address, Is.Empty);
             Assert.That(result.Error, Does.Contain("no Algorand address"));
         }
 
         [Test]
-        public async Task GetAccountAddress_NoClaimAndNoBearerToken_ReturnsUnauthorizedMessage()
+        public async Task GetCryptoAddress_AvmNoClaimAndNoBearerToken_ReturnsUnauthorizedMessage()
         {
+            SetAlgorandNetworkResolvable();
             SetClaims();
             // no bearer token set at all
 
-            var result = await CreateTool().GetAccountAddress();
+            var result = await CreateTool().GetCryptoAddress("Algorand");
 
             Assert.That(result.Error, Does.Contain("bearer token"));
         }
@@ -176,30 +149,32 @@ namespace BiatecMCPTests
         // ───────────────────────── Multi-address (ARC-76 slot) support ─────────────────────────
 
         [Test]
-        public async Task GetAccountAddress_NonZeroSlot_UsesPrimarySeedAddressClaimAsSeedSelector()
+        public async Task GetCryptoAddress_AvmNonZeroSlot_UsesPrimarySeedAddressClaimAsSeedSelector()
         {
+            SetAlgorandNetworkResolvable();
             SetClaims(new Claim("primary_seed_address", "PRIMARY"));
             SetBearerToken("tok");
             _walletClient
                 .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 1, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new DerivedAddressResponse { Address = "SECOND-ADDRESS", SeedAddress = "PRIMARY", Slot = 1 });
 
-            var result = await CreateTool().GetAccountAddress(slot: 1);
+            var result = await CreateTool().GetCryptoAddress("Algorand", slot: 1);
 
             Assert.That(result.Address, Is.EqualTo("SECOND-ADDRESS"));
             _walletClient.Verify(c => c.ListSeedsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
-        public async Task GetAccountAddress_ExplicitPrimaryAddress_DerivesFromThatSeedViaWalletApi()
+        public async Task GetCryptoAddress_AvmExplicitSeedAddress_DerivesFromThatSeedViaWalletApi()
         {
+            SetAlgorandNetworkResolvable();
             SetClaims();
             SetBearerToken("tok");
             _walletClient
                 .Setup(c => c.GetAddressAsync("tok", "OTHER-SEED", 0, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new DerivedAddressResponse { Address = "OTHER-DERIVED", SeedAddress = "OTHER-SEED", Slot = 0 });
 
-            var result = await CreateTool().GetAccountAddress(seedAddress: "OTHER-SEED");
+            var result = await CreateTool().GetCryptoAddress("Algorand", seedAddress: "OTHER-SEED");
 
             Assert.That(result.Address, Is.EqualTo("OTHER-DERIVED"));
             _walletClient.Verify(c => c.ListSeedsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);

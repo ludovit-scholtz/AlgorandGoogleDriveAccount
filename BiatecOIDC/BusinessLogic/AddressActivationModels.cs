@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace BiatecOIDC.BusinessLogic
 {
     /// <summary>
@@ -20,6 +22,31 @@ namespace BiatecOIDC.BusinessLogic
         public int Slot { get; set; }
 
         public DateTimeOffset ActivatedUtc { get; set; }
+
+        /// <summary>
+        /// Backward-compatibility shim for entries persisted before this property was named
+        /// <c>PrimaryAddress</c> in JSON (renamed to <c>SeedAddress</c> - a plain, unattributed C# property
+        /// is also its own JSON key by default, so an entry written under the old name still has JSON key
+        /// <c>"primaryAddress"</c> and would otherwise silently deserialize <see cref="SeedAddress"/> to
+        /// <c>string.Empty</c> - see CLAUDE.md's rename-hazard note). Unlike <c>SeedVaultEntry.SeedAddress</c>,
+        /// this value has no other field it can be recomputed from, so it must be read directly rather than
+        /// healed after the fact. Never itself written back out - new entries only ever set
+        /// <see cref="SeedAddress"/> directly, and <see cref="JsonIgnoreCondition.WhenWritingNull"/> (the
+        /// getter always returns <c>null</c>) keeps it out of newly-serialized documents.
+        /// </summary>
+        [JsonPropertyName("primaryAddress")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? LegacyPrimaryAddress
+        {
+            get => null;
+            set
+            {
+                if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(SeedAddress))
+                {
+                    SeedAddress = value;
+                }
+            }
+        }
     }
 
     /// <summary>The persisted document shape - one per user, stored as <c>AddressActivations.%AESID%.dat</c>.</summary>

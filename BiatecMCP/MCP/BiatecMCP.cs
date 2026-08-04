@@ -74,51 +74,13 @@ namespace BiatecMCP.MCP
             _logger = logger;
         }
 
-        public class GetAccountAddressResponse
-        {
-            public string Address { get; set; } = string.Empty;
-            public string Error { get; set; } = string.Empty;
-        }
-
-        [McpServerTool(Name = "getAlgorandAddress"), Description("Returns the Algorand address of the signed-in Biatec account. Use slot=1 for the 'second address', slot=2 for the 'third', etc.; use seedAddress (see listAlgorandAddresses) to derive from a different seed entirely.")]
-        public async Task<GetAccountAddressResponse> GetAccountAddress(
-            [Description("ARC-76 derivation slot. 0 = the default/first address (matches the signed-in identity), 1 = the 'second address', etc.")] int slot = 0,
-            [Description("A specific seed's identifying address (see listAlgorandAddresses) to derive from instead of the primary seed.")] string? seedAddress = null)
-        {
-            try
-            {
-                var address = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
-                if (string.IsNullOrWhiteSpace(address))
-                {
-                    return new GetAccountAddressResponse
-                    {
-                        Error = "This account has no Algorand address yet. Complete storage-provider consent by signing in through BiatecOIDC (https://oidc.biatec.io/authorize) first."
-                    };
-                }
-
-                return new GetAccountAddressResponse { Address = address };
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return new GetAccountAddressResponse { Error = ex.Message };
-            }
-            catch (WalletApiException ex)
-            {
-                return new GetAccountAddressResponse { Error = ex.Message };
-            }
-            catch (Exception ex)
-            {
-                return new GetAccountAddressResponse { Error = SanitizeForToolResponse(ex, nameof(GetAccountAddress)) };
-            }
-        }
-
         public class ListAlgorandAddressesResponse
         {
             public List<Model.SeedResponse> Addresses { get; set; } = new();
             public string Error { get; set; } = string.Empty;
         }
 
-        [McpServerTool(Name = "listAlgorandAddresses"), Description("Lists every seed's identifying address in the signed-in Biatec account, and which one is primary. Use an address from here as any create*/getAlgorandAddress tool's seedAddress parameter.")]
+        [McpServerTool(Name = "listAlgorandAddresses"), Description("Lists every seed's identifying address in the signed-in Biatec account, and which one is primary. Use an address from here as any create*/getCryptoAddress tool's seedAddress parameter.")]
         public async Task<ListAlgorandAddressesResponse> ListAlgorandAddresses()
         {
             try
@@ -1233,7 +1195,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "activateCryptoAddress"),
-         Description("Registers that a specific seed/slot's key signs for 'address' on 'network' - the entry point for AVM rekey support. Flow: rekey an external Algorand account to one of this account's addresses (see getAlgorandAddress/listAlgorandAddresses for candidates, or mint a fresh seed first), submit and confirm that rekey transaction on-chain yourself, then call this so signTransaction recognizes 'address' going forward. For a native address (already exactly the derived address for that seed/slot), this just registers it immediately - getAlgorandAddress/getCryptoAddress already does this automatically for any slot, so calling this for a native address is rarely necessary. Call listActiveAddresses to see everything already registered. Requires the 'sign' scope.")]
+         Description("Registers that a specific seed/slot's key signs for 'address' on 'network' - the entry point for AVM rekey support. Flow: rekey an external Algorand account to one of this account's addresses (see getCryptoAddress/listAlgorandAddresses for candidates, or mint a fresh seed first), submit and confirm that rekey transaction on-chain yourself, then call this so signTransaction recognizes 'address' going forward. For a native address (already exactly the derived address for that seed/slot), this just registers it immediately - getCryptoAddress already does this automatically for any slot, so calling this for a native address is rarely necessary. Call listActiveAddresses to see everything already registered. Requires the 'sign' scope.")]
         public async Task<ActivateCryptoAddressResponse> ActivateCryptoAddress(
             [Description("Which network 'address' belongs to. EVM networks are only accepted for a native address (EVM has no rekey concept).")] string network,
             [Description("Which seed's key signs for 'address' - its own identifying address (see listAlgorandAddresses).")] string seedAddress,

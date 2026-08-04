@@ -152,6 +152,34 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task EnsureWithinLimitsAsync_LedgerEntryPersistedUnderLegacyPrimaryAddressJsonKey_StillCountsTowardPerAddressLimit()
+        {
+            // SpendingLedgerEntry.SeedAddress was renamed from PrimaryAddress (a plain, unattributed C#
+            // property is also its own JSON key by default) - simulates a ledger entry written before that
+            // rename deployed: its JSON still says "primaryAddress". Without SpendingLedgerEntry's
+            // LegacyPrimaryAddress shim, this entry would silently stop counting toward the per-address
+            // bucket below (falling back to only the always-unbounded-here global tier) - quietly weakening
+            // enforcement rather than failing loudly.
+            const string seedAddress = "LEGACYSEED";
+            const int slot = 2;
+            await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { CurrencyCode = "USD", DailyLimit = 100 }, seedAddress, slot);
+
+            var activeKey = _aesOptionsValue.Keys.Single();
+            var fileName = "SpendingLedger." + BiatecSelfCustodyCore.Helper.AesEncryptionHelper.MakeAesId(BiatecSelfCustodyCore.Helper.AesKeyRingResolver.KeyBytes(activeKey), BiatecSelfCustodyCore.Helper.AesKeyRingResolver.IvBytes(activeKey)) + ".dat";
+            var legacyJson = System.Text.Json.JsonSerializer.Serialize(new[]
+            {
+                new { timestampUtc = DateTimeOffset.UtcNow, amountUsd = 80m, assetId = 0UL, kind = "Payment", primaryAddress = seedAddress, slot }
+            });
+            var encrypted = BiatecSelfCustodyCore.Helper.AesEncryptionHelper.Encrypt(System.Text.Encoding.UTF8.GetBytes(legacyJson), BiatecSelfCustodyCore.Helper.AesKeyRingResolver.KeyBytes(activeKey), BiatecSelfCustodyCore.Helper.AesKeyRingResolver.IvBytes(activeKey), TestEmail);
+            _fakeProvider.Files[fileName] = encrypted;
+
+            // 80 already spent (via the legacy-keyed entry) + 30 more would be 110, over the 100 per-address limit.
+            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+                await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 30m, seedAddress, slot));
+            Assert.That(ex!.Window, Is.EqualTo("address-daily"));
+        }
+
+        [Test]
         public async Task RecordSpendAsync_ThenEnsureWithinLimits_AccumulatesAcrossCalls()
         {
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 });

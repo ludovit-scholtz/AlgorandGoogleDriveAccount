@@ -1,4 +1,5 @@
 using BiatecOIDC.BusinessLogic;
+using BiatecSelfCustodyCore.Helper;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
 using Microsoft.Extensions.Hosting;
@@ -68,6 +69,33 @@ namespace BiatecOIDCTests
             Assert.That(resolved!.Family, Is.EqualTo("Avm"));
             Assert.That(resolved.SeedAddress, Is.EqualTo("SEED1"));
             Assert.That(resolved.Slot, Is.EqualTo(3));
+        }
+
+        [Test]
+        public async Task TryResolveAsync_EntryPersistedUnderLegacyPrimaryAddressJsonKey_StillResolvesSeedAddress()
+        {
+            // AddressActivationEntry.SeedAddress was renamed from PrimaryAddress (a plain, unattributed C#
+            // property is also its own JSON key by default) - simulates an entry written before that rename
+            // deployed: its JSON still says "primaryAddress", which the current SeedAddress property no
+            // longer recognizes by name. Unlike SeedVaultEntry, there's nothing to recompute SeedAddress
+            // from here, so AddressActivationEntry.LegacyPrimaryAddress must read the old key directly.
+            var activeKey = _aesOptionsValue.Keys.Single();
+            var fileName = "AddressActivations." + AesEncryptionHelper.MakeAesId(AesKeyRingResolver.KeyBytes(activeKey), AesKeyRingResolver.IvBytes(activeKey)) + ".dat";
+            var legacyJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                entries = new[]
+                {
+                    new { address = "ADDR1", family = "Avm", primaryAddress = "LEGACYSEED", slot = 2, activatedUtc = DateTimeOffset.UtcNow }
+                }
+            });
+            var encrypted = AesEncryptionHelper.Encrypt(System.Text.Encoding.UTF8.GetBytes(legacyJson), AesKeyRingResolver.KeyBytes(activeKey), AesKeyRingResolver.IvBytes(activeKey), TestEmail);
+            _fakeProvider.Files[fileName] = encrypted;
+
+            var resolved = await _service.TryResolveAsync(TestEmail, TestProvider, "token", "ADDR1");
+
+            Assert.That(resolved, Is.Not.Null);
+            Assert.That(resolved!.SeedAddress, Is.EqualTo("LEGACYSEED"));
+            Assert.That(resolved.Slot, Is.EqualTo(2));
         }
 
         [Test]

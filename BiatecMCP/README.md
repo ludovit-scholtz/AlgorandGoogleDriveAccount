@@ -69,19 +69,11 @@ Every tool's own description tells the connected AI assistant which tool to call
 request is handled as three chained tool calls automatically. `signTransaction` and `getAddressInfo` take the
 address itself (rather than `seedAddress`/`slot`), matching BiatecOIDC's
 address-centric wallet route shape (`/wallet/{network}/{address}/sign`, etc.) — the `create*` tools and
-`getAlgorandAddress` still take the optional `seedAddress`/`slot` pair to *build*/*derive* against a specific
+`getCryptoAddress` still take the optional `seedAddress`/`slot` pair to *build*/*derive* against a specific
 seed/slot, since that's a different concern (choosing which identity produces the address/transaction).
 `activateCryptoAddress` takes `seedAddress`/`slot` as required parameters (matching BiatecOIDC's
 `POST /wallet/{network}/{seedAddress}/{slot}/activate` route shape) plus the address being activated.
 
-- **`getAlgorandAddress`** — returns an Algorand address for the signed-in account. With no arguments, returns the
-  default identity, always resolved via a live `GET /wallet/address/{seedAddress}/{slot}` call (the bearer
-  token's own `primary_seed_address` claim supplies the default seed selector, falling back to the primary
-  seed from `GET /wallet/seeds` if that claim is absent). Pass `slot` (ARC-76 derivation index — `1` for the
-  "second address", `2` for the "third",
-  etc.) and/or `seedAddress` (a specific seed's identifying address, from `listAlgorandAddresses`) to derive a
-  different address instead — this also registers the derived address for later `signTransaction`/
-  `getAddressInfo` calls by address alone.
 - **`listAlgorandAddresses`** — lists every seed's identifying address in the account, and which one is primary.
   Use an address from here as `seedAddress` on the other tools.
 - **`getAddressInfo`** — reports whether a given `(network, address)` is currently active (resolvable to a
@@ -93,7 +85,7 @@ seed/slot, since that's a different concern (choosing which identity produces th
   `activateCryptoAddress`). No authentication beyond a valid bearer token required.
 - **`activateCryptoAddress`** — registers a `(seedAddress, slot)` → address pairing, requires the `sign`
   scope. If the address already matches what that seed/slot derives to, this is just an explicit alternative
-  to the automatic registration `getAlgorandAddress`/`getCryptoAddress` already do. The important case is
+  to the automatic registration `getCryptoAddress` already does. The important case is
   **rekeying an external Algorand address to a Biatec-controlled key**: mint a spare seed (ask for a new seed
   via BiatecOIDC's `/wallet/seeds`), submit and confirm an on-chain transaction that sets that external
   address's `rekey` field to the new seed's address (via `signTransaction` with a `rekey`-scoped token, signed
@@ -104,10 +96,17 @@ seed/slot, since that's a different concern (choosing which identity produces th
   `getCryptoBalance`: every live Algorand-family chain, plus a few well-known Ethereum-family chains
   (Ethereum, Gnosis, Arbitrum, Base). Other public EVM chains not listed here also work by name or numeric
   chain id. No authentication required.
-- **`getCryptoAddress`** — returns the signed-in account's address on a given `network` (Algorand-family
-  *or* Ethereum-family — both derived from the same seed). An Algorand-family address is the same across
-  every AVM chain; an Ethereum-family address is the same across every EVM chain — `network` just picks
-  which family's address to return.
+- **`getCryptoAddress`** — returns the signed-in account's address on a given `network` (Algorand-family,
+  Ethereum-family, Bitcoin, or Bitcoin Cash — all derived from the same seed). An Algorand-family address is
+  the same across every AVM chain; an Ethereum-family address is the same across every EVM chain — `network`
+  just picks which family's address to return. With no `slot`/`seedAddress`, returns the default identity,
+  always resolved via a live `GET /wallet/address/{seedAddress}/{slot}` call (the bearer token's own
+  `primary_seed_address` claim supplies the default seed selector, falling back to the primary seed from
+  `GET /wallet/seeds` if that claim is absent or no longer resolves). Pass `slot` (ARC-76 derivation index —
+  `1` for the "second address", `2` for the "third", etc.) and/or `seedAddress` (a specific seed's identifying
+  address, from `listAlgorandAddresses`) to derive a different address instead — this also registers the
+  derived address for later `signTransaction`/`getAddressInfo` calls by address alone. This is the one
+  address-lookup tool — there is no separate Algorand-only variant.
 - **`getCryptoBalance`** — returns the native-currency balance (and, on Algorand-family chains, ASA
   holdings) for an address on a given `network`. Omit `address` to check the signed-in account's own
   address. EVM balances are the native gas token only (e.g. ETH) — ERC-20 token balances aren't supported.
@@ -145,7 +144,7 @@ seed/slot, since that's a different concern (choosing which identity produces th
 - **`signTransaction`** — signs one or more unsigned transactions via BiatecOIDC's
   `POST /wallet/{network}/{address}/sign`. Requires the `sign` scope. `network` and `address` are both
   required — `address` must already be active (its own seed's slot-0 address, a previously-derived slot from
-  `getAlgorandAddress`, or a pairing registered via `activateCryptoAddress`). For an AVM `network`, each
+  `getCryptoAddress`, or a pairing registered via `activateCryptoAddress`). For an AVM `network`, each
   transaction is base64-encoded msgpack from any `create*` tool or a `createMultisigTransaction` envelope.
   For an EVM `network` (no `create*` tool builds these yet — build the JSON yourself), each transaction is
   base64-encoded UTF-8 JSON: `{"chainId","nonce","to","value","data","gasLimit","gasPrice"}` for a legacy
@@ -161,13 +160,13 @@ seed/slot, since that's a different concern (choosing which identity produces th
 
 ### Example prompts
 
-- *"what is my algorand address"* → `getAlgorandAddress()`
-- *"what is my second address"* → `getAlgorandAddress(slot=1)`
+- *"what is my algorand address"* → `getCryptoAddress(network="Algorand")`
+- *"what is my second address"* → `getCryptoAddress(network="Algorand", slot=1)`
 - *"list all my algorand addresses"* → `listAlgorandAddresses()`
 - *"what networks can I use"* → `listSupportedNetworks()`
 - *"what is my ethereum address"* → `getCryptoAddress(network="Ethereum")`
-- *"what is my address on Voi"* → `getCryptoAddress(network="Voi")` — same as `getAlgorandAddress()`, since an
-  Algorand-family address is the same across every AVM chain.
+- *"what is my address on Voi"* → `getCryptoAddress(network="Voi")` — same result as `network="Algorand"`,
+  since an Algorand-family address is the same across every AVM chain.
 - *"how much ETH do I have"* → `getCryptoBalance(network="Ethereum")`
 - *"check the balance of 0xABCD...WXYZ on Arbitrum"* → `getCryptoBalance(network="Arbitrum", address="0xABCD...WXYZ")`
 - *"pay to address ABCD...WXYZ 1 algo with note biatec"* → `createPaymentTransaction(receiverAccount="ABCD...WXYZ",

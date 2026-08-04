@@ -74,7 +74,7 @@ dependency on `BiatecSelfCustodyCore`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/mcp").RequireAuthorization()`.
   - `MCP/BiatecMCP.cs` — 19 MCP tools split into three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
-    combined as part of a multisig proposal before ever being broadcast: `getAlgorandAddress`,
+    combined as part of a multisig proposal before ever being broadcast:
     `listAlgorandAddresses`, `getBridgeConfiguration`, `listSupportedNetworks`, `getCryptoAddress`,
     `getCryptoBalance`, `getAddressInfo`, `listActiveAddresses` (read-only - `getAddressInfo`/
     `listActiveAddresses` and the four before them are
@@ -96,7 +96,7 @@ dependency on `BiatecSelfCustodyCore`.
     tool in the
     chain, since MCP has no other side-channel for teaching the connected agent the intended protocol. All
     forward the caller's own bearer token to BiatecOIDC rather than touching any key material - see "MCP
-    server" under Architecture notes below for the full request flow. The `create*`/`getAlgorandAddress`
+    server" under Architecture notes below for the full request flow. The `create*`/`getCryptoAddress`
     tools accept optional `seedAddress`/`slot` parameters to build against/from a specific seed/ARC-76
     slot instead of the default identity (see BiatecOIDC's "Address-centric wallet API and rekey support"
     note) - `signTransaction` and `getAddressInfo` instead take the address itself, matching BiatecOIDC's
@@ -410,6 +410,19 @@ setup stage needs.
   "Wallet API" bullet below and `AlgorandTransactionInspector`'s `IsRekey` detection. Only once that
   transaction is confirmed on-chain should the caller call `PUT /wallet/seeds/primary` — switching primary
   before that would make Biatec sign with a key the account no longer recognizes.
+  **Renaming a `SeedVaultEntry` property is a breaking data-migration hazard, not just a code change**: this
+  class has no `[JsonPropertyName]` attributes, so a plain C# property name *is* its persisted JSON key. A
+  same-day rename of `PrimaryAddress` → `SeedAddress` (no migration written) meant every vault file persisted
+  under the old name still had JSON key `"primaryAddress"` after that rename deployed — `SeedAddress` silently
+  deserialized to its `string.Empty` default instead of failing loudly, breaking every by-address lookup
+  (`getCryptoAddress`, sign, activate) for seeds created before the rename with no error pointing at the cause.
+  `CloudAccountRepository.LoadVaultOrEmptyAsync` now calls `HealMissingSeedAddressesAsync` after every parse —
+  since `SeedAddress` is always deterministically re-derivable from `Mnemonic` (the same computation
+  `BuildSeedEntry` uses), any entry found with an empty `SeedAddress` but an intact `Mnemonic` is recomputed
+  and the vault is re-saved once, self-healing on next read with no manual intervention. Renaming (or removing)
+  a property on `SeedVaultEntry`, `AddressActivationEntry`, `SpendingLimitSettings`/`SpendingLedgerEntry`, or
+  any other type serialized straight to a user's own persisted file needs either a compatible migration path
+  like this one or an explicit `[JsonPropertyName]` alias for the old key — never a bare rename.
 - **Cross-cloud vault backup**: an explicit, user-triggered copy of the encrypted vault file from a user's
   primary cloud provider to a second one they separately authorize (`IVaultBackupService`/`VaultBackupService`,
   `VaultBackupController`, all `BiatecOIDC`) — mitigates losing the keys to a ban or forgotten credentials on
@@ -506,10 +519,16 @@ setup stage needs.
   per-request network call to BiatecOIDC; (4) the tools (`MCP/BiatecMCP.cs`) forward that same bearer token
   to BiatecOIDC's wallet REST API (`IBiatecWalletClient`/`BiatecWalletClient`, internally wrapping the
   NSwag-generated `Generated.OidcApiClient` - see the "Generated OIDC API client" note below) —
-  `getAlgorandAddress`/`getCryptoAddress` always derive the real address via a live
-  `GET /wallet/address/{seedAddress}/{slot?}` call (`ResolveDerivedAddressAsync`), using the bearer token's
-  own `primary_seed_address` claim as the default seed selector when none is given (falling back to
-  `GET /wallet/seeds`'s primary seed if that claim is absent); `listAlgorandAddresses` lists every seed via
+  `getCryptoAddress` (the one canonical address-lookup tool - a former separate `getAlgorandAddress` tool
+  was removed as pure duplication, since an Algorand-family address is just `getCryptoAddress(network:
+  "Algorand")`) always derives the real address via a live `GET /wallet/address/{seedAddress}/{slot?}` call
+  (`ResolveDerivedAddressAsync`), using the bearer token's own `primary_seed_address` claim as the default
+  seed selector when none is given (falling back to `GET /wallet/seeds`'s primary seed if that claim is
+  absent). That claim is captured once at token issuance and carried forward unchanged across refreshes (see
+  `JwtIssuerService`'s refresh handling), so a long-lived token can end up caching a seed selector that no
+  longer resolves - `ResolveDerivedAddressAsync` self-heals a `seed_not_found` response for a claim-derived
+  selector by retrying against `GET /wallet/seeds`'s live primary seed, rather than surfacing that error
+  outright; a *caller*-supplied `seedAddress` is never second-guessed this way. `listAlgorandAddresses` lists every seed via
   `GET /wallet/seeds`; any non-default identity hits `GET /wallet/address/{seedAddress}/{slot?}` the same way
   - each such derive call also
   activates the derived address(es) on BiatecOIDC's side (see "Address-centric wallet API and rekey support"
