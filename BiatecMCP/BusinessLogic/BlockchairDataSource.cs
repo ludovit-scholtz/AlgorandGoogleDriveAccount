@@ -30,6 +30,7 @@ namespace BiatecMCP.BusinessLogic
         {
             try
             {
+                address = NormalizeAddress(address);
                 var response = await _httpClient.GetFromJsonAsync<DashboardResponse>(
                     $"{Uri.EscapeDataString(chainSlug)}/dashboards/address/{Uri.EscapeDataString(address)}?limit=0,200", JsonOptions, cancellationToken);
 
@@ -55,6 +56,7 @@ namespace BiatecMCP.BusinessLogic
         {
             try
             {
+                address = NormalizeAddress(address);
                 var response = await _httpClient.GetFromJsonAsync<DashboardResponse>(
                     $"{Uri.EscapeDataString(chainSlug)}/dashboards/address/{Uri.EscapeDataString(address)}", JsonOptions, cancellationToken);
 
@@ -102,6 +104,21 @@ namespace BiatecMCP.BusinessLogic
                 return null;
             }
         }
+
+        /// <summary>
+        /// Strips the <c>"bitcoincash:"</c> URI-scheme prefix from a CashAddr, if present. Every Bitcoin
+        /// Cash address this codebase derives (<c>CloudAccountRepository.DeriveBitcoinCashAddressAsync</c>,
+        /// via <c>NBitcoin.Altcoins.BCash</c>'s <c>ToString()</c>) includes this prefix, but Blockchair's
+        /// REST API - both in its URL path segment and in the response <c>data</c> dictionary's own key -
+        /// uses the bare CashAddr payload without it; sending the prefixed form 404s the request (silently
+        /// surfaced to callers as "Could not reach the block explorer", indistinguishable from a genuine
+        /// outage). A Bitcoin (BTC) address never has this prefix, so this is a no-op for that chain -
+        /// every address that reaches this class is normalized here rather than requiring every caller
+        /// (<c>getCryptoBalance</c>, <c>createBitcoinTransaction</c>, <c>executeBitcoinTransaction</c>) to
+        /// know about the quirk.
+        /// </summary>
+        private static string NormalizeAddress(string address) =>
+            address.StartsWith("bitcoincash:", StringComparison.OrdinalIgnoreCase) ? address["bitcoincash:".Length..] : address;
 
         private sealed class DashboardResponse
         {
