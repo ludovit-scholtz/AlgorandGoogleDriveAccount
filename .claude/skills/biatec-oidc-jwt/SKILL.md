@@ -132,13 +132,18 @@ way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `V
   accepts one; the Google/Microsoft token needed to read/decrypt the self-custody file *and* (AVM only) the
   spending-limit data is always resolved from the bearer token's own encrypted `provider_token` claim, via
   `WalletController.ResolveProviderAccessToken` (see "Provider access token caching" below) - never persisted
-  server-side in plaintext, never a caller-supplied parameter. For AVM, every `pay`/`axfer` transaction in the
-  group is
-  priced in USD via `IAssetValuationService` (`BiatecRouterValuationService`, quoting against the Biatec Router
-  - see below), summed, and the total is checked against **both** the signing identity's global and
-  per-address daily (trailing 24h)/weekly (trailing 7d)/monthly (trailing 30d) spending limits
+  server-side in plaintext, never a caller-supplied parameter. For AVM, **only when `network` resolves to
+  Algorand mainnet** (genesis id `mainnet-v1.0` - the Biatec Router isn't deployed anywhere else, so pricing
+  would always fail there) is every `pay`/`axfer` transaction in the group priced in USD via
+  `IAssetValuationService` (`BiatecRouterValuationService`, quoting against the Biatec Router - see below),
+  summed, and the total checked against **both** the signing identity's global and per-address daily
+  (trailing 24h)/weekly (trailing 7d)/monthly (trailing 30d) spending limits
   (`ISpendingLimitService.EnsureWithinLimitsAsync`) *before* any transaction is signed via the shared
-  `IDriveService.SignTransactionAsync` - a group that would exceed either tier never partially signs. Signed
+  `IDriveService.SignTransactionAsync` - a group that would exceed either tier never partially signs. On
+  every other AVM network this pricing/limit-check step is skipped outright
+  (`WalletService.SignTransactionGroupAsync`'s `applySpendingLimits` parameter, computed by
+  `WalletController.SignTransactionGroup` as `isAlgorandMainnet`) and the group signs unconditionally,
+  regardless of any limits configured for the account. Signed
   spend is then recorded to the caller's encrypted ledger (`ISpendingLimitService.RecordSpendAsync`), each
   entry tagged with the resolved `(seedAddress, slot)` identity that signed it. Throws (mapped to HTTP by
   `WalletController`): `SpendingLimitExceededException` → 403, `FormatException` (bad transaction) → 400,

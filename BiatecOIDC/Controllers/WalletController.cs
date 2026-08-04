@@ -43,6 +43,13 @@ namespace BiatecOIDC.Controllers
     [Route("wallet")]
     public class WalletController : ControllerBase
     {
+        /// <summary>
+        /// The only Algorand-family network the Biatec Router (and therefore asset valuation/spending
+        /// limits) is deployed to today - see <see cref="SignTransactionGroup"/>'s <c>isAlgorandMainnet</c>
+        /// check and CLAUDE.md's "chains.html" capability matrix note.
+        /// </summary>
+        private const string AlgorandMainnetGenesisId = "mainnet-v1.0";
+
         private readonly IJwtIssuerService _jwtIssuerService;
         private readonly IWalletService _walletService;
         private readonly ISpendingLimitService _spendingLimitService;
@@ -207,10 +214,17 @@ namespace BiatecOIDC.Controllers
                 });
             }
 
+            // The Biatec Router (asset valuation, and therefore the spending limit it feeds) is only
+            // deployed on Algorand mainnet - see CLAUDE.md's "chains.html" capability matrix note. Applying
+            // it on any other AVM network (testnet, Voi, Aramid, ...) would fail every transfer closed with
+            // a confusing "Unable to determine the USD value..." error, not because anything is actually
+            // wrong with the transfer itself.
+            var isAlgorandMainnet = string.Equals(resolvedNetwork.AvmChain?.GenesisId, AlgorandMainnetGenesisId, StringComparison.Ordinal);
+
             try
             {
                 var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, signer.Value.SeedAddress, signer.Value.Slot));
+                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, signer.Value.SeedAddress, signer.Value.Slot, isAlgorandMainnet));
                 return Ok(new SignTransactionGroupResponse
                 {
                     SignedTransactions = signed.Select(Convert.ToBase64String).ToList()

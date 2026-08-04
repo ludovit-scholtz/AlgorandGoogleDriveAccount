@@ -31,7 +31,7 @@ namespace BiatecOIDC.BusinessLogic
             _logger = logger;
         }
 
-        public async Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? seedAddress = null, int slot = 0)
+        public async Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? seedAddress = null, int slot = 0, bool applySpendingLimits = true)
         {
             if (string.IsNullOrWhiteSpace(email))
             {
@@ -54,36 +54,45 @@ namespace BiatecOIDC.BusinessLogic
             // Price every payment/asset-transfer in the group via the Biatec Router, and total it up -
             // every such transaction is subject to the spending limit, so an unpriceable asset fails the
             // whole request (AssetValuationException propagates) rather than being silently skipped.
+            // Skipped entirely off Algorand mainnet (applySpendingLimits: false, set by WalletController
+            // from the resolved network's genesis id) - the Biatec Router that prices every asset here is
+            // only deployed on mainnet, so pricing (and therefore the spending limit it feeds) is simply
+            // not a thing that exists yet for testnet/Voi/Aramid/etc. Trying anyway would fail every such
+            // transfer closed with a confusing "Unable to determine the USD value..." error, not because
+            // anything is actually wrong with the transfer.
             var now = DateTimeOffset.UtcNow;
             var ledgerEntries = new List<SpendingLedgerEntry>();
             var totalUsd = 0m;
 
-            foreach (var info in infos)
+            if (applySpendingLimits)
             {
-                if (info.Kind is not (AlgorandTransactionKind.Payment or AlgorandTransactionKind.AssetTransfer))
+                foreach (var info in infos)
                 {
-                    continue;
+                    if (info.Kind is not (AlgorandTransactionKind.Payment or AlgorandTransactionKind.AssetTransfer))
+                    {
+                        continue;
+                    }
+
+                    var usdValue = await _valuationService.GetUsdValueAsync(info.AssetId, info.Amount);
+                    totalUsd += usdValue;
+                    ledgerEntries.Add(new SpendingLedgerEntry
+                    {
+                        TimestampUtc = now,
+                        AmountUsd = usdValue,
+                        AssetId = info.AssetId,
+                        Kind = info.Kind.ToString(),
+                        SeedAddress = resolvedAddress,
+                        Slot = slot
+                    });
                 }
 
-                var usdValue = await _valuationService.GetUsdValueAsync(info.AssetId, info.Amount);
-                totalUsd += usdValue;
-                ledgerEntries.Add(new SpendingLedgerEntry
+                // Check the whole group's total spend against the caller's global and address-specific
+                // daily/weekly/monthly limits before signing any of it - signing has no rollback, so a group
+                // that would exceed a limit must never partially sign.
+                if (totalUsd > 0m)
                 {
-                    TimestampUtc = now,
-                    AmountUsd = usdValue,
-                    AssetId = info.AssetId,
-                    Kind = info.Kind.ToString(),
-                    SeedAddress = resolvedAddress,
-                    Slot = slot
-                });
-            }
-
-            // Check the whole group's total spend against the caller's global and address-specific
-            // daily/weekly/monthly limits before signing any of it - signing has no rollback, so a group
-            // that would exceed a limit must never partially sign.
-            if (totalUsd > 0m)
-            {
-                await _spendingLimitService.EnsureWithinLimitsAsync(email, provider, accessToken, totalUsd, resolvedAddress, slot);
+                    await _spendingLimitService.EnsureWithinLimitsAsync(email, provider, accessToken, totalUsd, resolvedAddress, slot);
+                }
             }
 
             var signed = new List<byte[]>(transactionsMsgPack.Count);

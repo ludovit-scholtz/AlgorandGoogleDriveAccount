@@ -900,16 +900,26 @@ setup stage needs.
   transaction's msgpack to find its real type/amount/asset id, its sender, and separately whether it's a rekey
   (`Transaction` subclasses' `type` property is a hardcoded per-class constant, not something decoded off the
   wire — the generic map must be peeked first; a rekey field can accompany any transaction type, independent of
-  that type discriminator). Every `pay`/`axfer` in a sign request
-  is priced in USD by `IAssetValuationService`/`BiatecRouterValuationService` (quoting against the Biatec Router,
-  via the `BiatecRouterConnector` NuGet package's public `/quote` endpoint — mainnet USDC by default, see
-  `SpendingLimitsConfiguration`), summed, converted into the caller's configured limit currency via
-  `IExchangeRateService`/`CnbExchangeRateService` (Czech National Bank daily fixing, cached in Redis), and checked
-  against **both** the global and the resolved `(seedAddress, slot)` identity's own per-address rolling
-  daily (24h)/weekly (7d)/monthly (30d) windows (see "Two-tier spending limits" below) **before** any
-  transaction in the group is signed — a group that would exceed either tier never partially signs. An asset that
-  can't be priced (`AssetValuationException`) or a limit currency whose rate can't be fetched
-  (`UnsupportedCurrencyException`) fails the whole request (503) rather than being silently treated as free.
+  that type discriminator). **Only when `network` resolves to Algorand mainnet** (genesis id
+  `mainnet-v1.0` — `WalletController.SignTransactionGroup` computes this once, as `isAlgorandMainnet`, and
+  passes it to `WalletService.SignTransactionGroupAsync` as its `applySpendingLimits` parameter) is every
+  `pay`/`axfer` in a sign request priced in USD by `IAssetValuationService`/`BiatecRouterValuationService`
+  (quoting against the Biatec Router, via the `BiatecRouterConnector` NuGet package's public `/quote`
+  endpoint — mainnet USDC by default, see `SpendingLimitsConfiguration`), summed, converted into the
+  caller's configured limit currency via `IExchangeRateService`/`CnbExchangeRateService` (Czech National
+  Bank daily fixing, cached in Redis), and checked against **both** the global and the resolved
+  `(seedAddress, slot)` identity's own per-address rolling daily (24h)/weekly (7d)/monthly (30d) windows
+  (see "Two-tier spending limits" below) **before** any transaction in the group is signed — a group that
+  would exceed either tier never partially signs. An asset that can't be priced (`AssetValuationException`)
+  or a limit currency whose rate can't be fetched (`UnsupportedCurrencyException`) fails the whole request
+  (503) rather than being silently treated as free. **On every other AVM network** (testnet, Voi, Aramid,
+  ...) `applySpendingLimits` is `false` and this whole pricing/limit-check step is skipped outright — the
+  Biatec Router isn't deployed there, so pricing would always fail, and a group signs unconditionally
+  regardless of any limits configured for the account (a deliberate, documented gap - see
+  `OIDC_INTEGRATION_GUIDE.md`'s AVM signing section - not something to silently patch around by making
+  pricing "best-effort"). Before this was wired up, a plain testnet payment would fail closed with a
+  confusing `asset_valuation_failed` error even though nothing was wrong with the transfer itself - the
+  root cause of a real reported bug fixed alongside this note.
   Both the limit settings and a rolling ledger of every signed `pay`/`axfer` (used to compute real trailing spend
   without re-querying the blockchain) are AES-encrypted and stored in the wallet owner's **own** cloud drive —
   not Redis, not Biatec's servers — via `SpendingLimitService`, reusing the same

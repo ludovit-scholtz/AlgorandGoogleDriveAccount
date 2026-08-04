@@ -203,6 +203,51 @@ namespace BiatecOIDCTests
             _mockSpendingLimitService.Verify(s => s.RecordSpendAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<SpendingLedgerEntry>>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
+        // ───────────────── applySpendingLimits: false (off Algorand mainnet) ─────────────────
+
+        [Test]
+        public async Task SignTransactionGroupAsync_ApplySpendingLimitsFalse_SignsWithoutValuingOrLimitChecking()
+        {
+            // Regression coverage: the Biatec Router (and therefore asset valuation/spending limits) is
+            // only deployed on Algorand mainnet - WalletController passes applySpendingLimits: false for
+            // every other AVM network (testnet, Voi, Aramid, ...). Previously this parameter didn't exist
+            // at all, so a plain testnet payment always tried to price itself via the Router and failed
+            // closed with AssetValuationException even though nothing was wrong with the transfer.
+            var tx = BuildPayment(200_000); // 0.2 ALGO
+
+            var result = await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, null, applySpendingLimits: false);
+
+            Assert.That(result, Has.Count.EqualTo(1));
+            _mockValuationService.Verify(v => v.GetUsdValueAsync(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockSpendingLimitService.Verify(s => s.RecordSpendAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<SpendingLedgerEntry>>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransactionGroupAsync_ApplySpendingLimitsFalse_SignsEvenWhenValuationServiceWouldThrow()
+        {
+            var tx = BuildPayment(200_000);
+            _mockValuationService
+                .Setup(v => v.GetUsdValueAsync(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new AssetValuationException(0, new InvalidOperationException("router not deployed on this network")));
+
+            var result = await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, null, applySpendingLimits: false);
+
+            Assert.That(result, Has.Count.EqualTo(1));
+        }
+
+        [Test]
+        public async Task SignTransactionGroupAsync_ApplySpendingLimitsDefaultsToTrue()
+        {
+            // Existing callers that don't pass the new parameter keep today's behavior - the valuation
+            // service is still consulted.
+            var tx = BuildAssetTransfer(assetAmount: 500, assetId: 31566704);
+
+            await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, null);
+
+            _mockValuationService.Verify(v => v.GetUsdValueAsync(31566704, 500, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
         [Test]
         public async Task SignTransactionGroupAsync_NonTransferTransaction_BypassesValuationAndLimitCheck()
         {

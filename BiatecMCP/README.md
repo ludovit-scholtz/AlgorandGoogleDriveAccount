@@ -25,7 +25,11 @@ delegates all authentication and signing to [BiatecOIDC](https://oidc.biatec.io)
    **locally** (JWKS fetched from BiatecOIDC, no per-request network call) against its own resource URI.
 6. Each tool call forwards that *same* bearer token to BiatecOIDC's wallet REST API
    (`POST /wallet/{network}/{address}/sign`/`GET /wallet/seeds`) — BiatecOIDC does the actual signing, and
-   enforces the caller's spending limit and the `rekey` claim, on the caller's behalf.
+   enforces the `rekey` claim on the caller's behalf, plus - **on Algorand mainnet only** - the caller's
+   spending limit (see `chains.html`'s capability matrix and `OIDC_INTEGRATION_GUIDE.md`'s AVM signing
+   section; the Biatec Router pricing that check depends on isn't deployed to testnet/Voi/Aramid/etc., so a
+   sign request there skips pricing/limit-checking entirely rather than failing closed on an unpriceable
+   asset).
 
 See the repo root [CLAUDE.md](../CLAUDE.md)'s "MCP server" architecture note for the full code-level walkthrough,
 and [BiatecOIDC/OIDC_INTEGRATION_GUIDE.md](../BiatecOIDC/OIDC_INTEGRATION_GUIDE.md) for the Dynamic Client

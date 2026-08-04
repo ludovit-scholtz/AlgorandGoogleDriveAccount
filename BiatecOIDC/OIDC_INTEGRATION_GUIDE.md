@@ -381,13 +381,19 @@ device/backend, not just the one the user originally signed in on.
   - **AVM**: each entry is base64 msgpack. Additionally needs `rekey` if any transaction carries Algorand's
     `rekey` field - a `sign`-only token gets `403 insufficient_scope` naming `rekey`, and nothing in the
     group signs. A transaction whose own sender doesn't match `address` fails with `400 sender_mismatch`.
-    Every payment/asset-transfer in the group is priced in USD via the Biatec Router, and the group's
-    *total* is checked against the signing identity's global **and** per-address spending limits *before*
-    anything is signed — if the total would exceed either configured (non-zero) limit, the whole request is
-    rejected (`403 spending_limit_exceeded`) and nothing is signed. A `503` (`asset_valuation_failed` or
+    **Only on Algorand mainnet** (`network` resolving to genesis id `mainnet-v1.0`) is every payment/
+    asset-transfer in the group priced in USD via the Biatec Router, with the group's *total* checked
+    against the signing identity's global **and** per-address spending limits *before* anything is
+    signed — if the total would exceed either configured (non-zero) limit, the whole request is rejected
+    (`403 spending_limit_exceeded`) and nothing is signed. A `503` (`asset_valuation_failed` or
     `spending_limit_currency_unavailable`) means a spent asset couldn't be priced, or the caller's limit
-    currency's exchange rate couldn't be fetched — every transaction is subject to the limit, so an
-    unpriceable asset fails the request rather than being silently treated as free.
+    currency's exchange rate couldn't be fetched — every transaction is subject to the limit on mainnet, so
+    an unpriceable asset fails the request rather than being silently treated as free. **On every other AVM
+    network** (testnet, Voi, Aramid, ...) the Biatec Router isn't deployed at all, so pricing/limit
+    enforcement is skipped entirely — a testnet transfer signs unconditionally regardless of any limits
+    configured for the account, since those limits are meaningless without mainnet's real USD pricing. This
+    is not a bug to work around: if you need enforced spending limits, test against mainnet, or treat
+    testnet transfers as inherently unlimited in your own integration.
   - **EVM**: each entry is base64-encoded UTF-8 JSON: `{ "chainId", "nonce", "to", "value", "data",
     "gasLimit", "gasPrice" }` for a legacy transaction, or the same with `gasPrice` replaced by
     `maxFeePerGas`+`maxPriorityFeePerGas` for EIP-1559 — every numeric field a decimal or `0x`-prefixed hex

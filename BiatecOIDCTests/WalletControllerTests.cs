@@ -322,6 +322,51 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task SignTransactionGroup_MainnetNetwork_PassesApplySpendingLimitsTrue()
+        {
+            // The default _mockNetworkResolver setup (see SetUp) resolves to GenesisId "mainnet-v1.0".
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("provider-token");
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "provider-token", TestAddress, 0, true))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
+
+            var result = await Sign(new SignTransactionGroupRequest { Transactions = new List<string> { BuildPaymentTransactionBase64() } });
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "provider-token", TestAddress, 0, true), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_NonMainnetAlgorandNetwork_PassesApplySpendingLimitsFalse()
+        {
+            // Regression coverage: the Biatec Router (asset valuation/spending limits) is only deployed on
+            // Algorand mainnet - a testnet/Voi/Aramid sign request must never try to price itself via the
+            // router, or every such transfer fails closed with a confusing valuation error even though
+            // nothing is wrong with the transfer.
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("testnet-v1.0", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork
+                {
+                    Family = ChainFamily.Avm,
+                    DisplayName = "Algorand Testnet",
+                    AvmChain = new AlgorandChain { GenesisId = "testnet-v1.0", Name = "Algorand Testnet", AlgodApiAddress = "https://algod.example.com", AlgodApiToken = "" }
+                });
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("provider-token");
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "provider-token", TestAddress, 0, false))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
+
+            var result = await Sign(new SignTransactionGroupRequest { Transactions = new List<string> { BuildPaymentTransactionBase64() } }, network: "testnet-v1.0");
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "provider-token", TestAddress, 0, false), Times.Once);
+        }
+
+        [Test]
         public async Task SignTransactionGroup_TransactionSenderDoesNotMatchRouteAddress_ReturnsBadRequest()
         {
             SetBearerHeader("valid-token");
