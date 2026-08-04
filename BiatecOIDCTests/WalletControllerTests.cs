@@ -135,6 +135,37 @@ namespace BiatecOIDCTests
 
         private static string BuildRekeyPaymentTransactionBase64() => BuildPaymentTransactionBase64(rekeyTo: new Account().Address);
 
+        private static string BuildCloseRemainderToPaymentTransactionBase64()
+        {
+            var pay = new PaymentTransaction
+            {
+                Sender = TestAccount.Address,
+                Receiver = TestAccount.Address,
+                Amount = 0,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash,
+                CloseRemainderTo = new Account().Address
+            };
+            return Convert.ToBase64String(Encoder.EncodeToMsgPackOrdered(pay));
+        }
+
+        private static string BuildAssetCreateTransactionBase64()
+        {
+            var acfg = new AssetCreateTransaction
+            {
+                Sender = TestAccount.Address,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash
+            };
+            return Convert.ToBase64String(Encoder.EncodeToMsgPackOrdered(acfg));
+        }
+
         // ───────────────────────── Authentication/authorization gating ─────────────────────────
 
         [Test]
@@ -356,6 +387,15 @@ namespace BiatecOIDCTests
             SetBearerHeader("valid-token");
             SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
             _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("provider-token");
+            // No limit configured (all-zero, the real service's default for a never-configured bucket) - the
+            // M-02/R-027 fail-closed check only refuses signing on a non-mainnet AVM network when a limit is
+            // actually configured, so this account signs through unaffected.
+            _mockSpendingLimitService
+                .Setup(s => s.GetLimitsAsync(TestEmail, "Google", "provider-token", null, 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SpendingLimitSettings());
+            _mockSpendingLimitService
+                .Setup(s => s.GetLimitsAsync(TestEmail, "Google", "provider-token", TestAddress, 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SpendingLimitSettings());
             _mockWalletService
                 .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "provider-token", TestAddress, 0, false))
                 .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
@@ -364,6 +404,35 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Is.InstanceOf<OkObjectResult>());
             _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), "provider-token", TestAddress, 0, false), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_NonMainnetAlgorandNetworkWithConfiguredLimit_ReturnsForbidden()
+        {
+            // Audit finding M-02/R-027: a non-mainnet AVM network (no Biatec Router deployed there) must not
+            // silently skip the spending-limit check for an account that has actually configured one - it
+            // should fail closed instead of signing with no limit enforced at all.
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("testnet-v1.0", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork
+                {
+                    Family = ChainFamily.Avm,
+                    DisplayName = "Algorand Testnet",
+                    AvmChain = new AlgorandChain { GenesisId = "testnet-v1.0", Name = "Algorand Testnet", AlgodApiAddress = "https://algod.example.com", AlgodApiToken = "" }
+                });
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"), new Claim(ProviderAccessTokenProtector.ClaimType, "protected-blob"));
+            _mockProviderTokenProtector.Setup(p => p.Unprotect("protected-blob", TestEmail)).Returns("provider-token");
+            _mockSpendingLimitService
+                .Setup(s => s.GetLimitsAsync(TestEmail, "Google", "provider-token", null, 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SpendingLimitSettings { DailyLimit = 100m });
+
+            var result = await Sign(new SignTransactionGroupRequest { Transactions = new List<string> { BuildPaymentTransactionBase64() } }, network: "testnet-v1.0");
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(403));
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<bool>()), Times.Never);
         }
 
         [Test]
@@ -461,6 +530,87 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Is.InstanceOf<OkObjectResult>());
             _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), TestAddress, 0), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_CloseRemainderToWithoutRekeyClaim_ReturnsForbiddenAndDoesNotSign()
+        {
+            // Audit finding H-01/R-024: a close-remainder-to payment sweeps the sender's entire remaining
+            // balance regardless of its own "amt" (here 0), so it must be refused the same way a rekey
+            // transaction is - a plain 'sign' claim is not enough.
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
+
+            var result = await Sign(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { BuildCloseRemainderToPaymentTransactionBase64() }
+            });
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_CloseRemainderToWithRekeyClaim_Signs()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim("rekey", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), TestAddress, 0))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 7 } });
+
+            var result = await Sign(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { BuildCloseRemainderToPaymentTransactionBase64() }
+            });
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), TestAddress, 0), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_AssetConfigTransaction_ReturnsUnpricedWarning()
+        {
+            // Audit finding M-03/R-028: a non-payment/non-transfer transaction is never priced against the
+            // spending limit - the response should say so rather than the group's spend history silently
+            // looking like nothing happened.
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), TestAddress, 0, It.IsAny<bool>()))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
+
+            var result = await Sign(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { BuildAssetCreateTransactionBase64() }
+            });
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as SignTransactionGroupResponse;
+            Assert.That(response!.Warnings, Is.Not.Empty);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_PlainPayment_ReturnsNoWarnings()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"), new Claim(AuthSchemeNames.IdpClaimType, "Google"));
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, "Google", It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), TestAddress, 0, It.IsAny<bool>()))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
+
+            var result = await Sign(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { BuildPaymentTransactionBase64() }
+            });
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as SignTransactionGroupResponse;
+            Assert.That(response!.Warnings, Is.Empty);
         }
 
         [Test]
@@ -891,6 +1041,37 @@ namespace BiatecOIDCTests
             Assert.That(response.Slot, Is.EqualTo(3));
             Assert.That(response.Address, Is.EqualTo("SOME-ADDR"));
             Assert.That(response.Network, Is.EqualTo(TestNetwork));
+            // Algorand mainnet (the default network resolution in SetUp) is where limits are actually
+            // enforced - audit finding M-01/R-026's LimitsEnforced field should say so.
+            Assert.That(response.LimitsEnforced, Is.True);
+        }
+
+        [Test]
+        public async Task GetSpendingLimitForAddress_EvmNetwork_ReportsLimitsNotEnforced()
+        {
+            // Audit finding M-01/R-026: EVM signing isn't priced/limit-checked at all yet - the limits API
+            // must say so rather than implying a configured limit protects an EVM address.
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+            _mockAddressActivationService
+                .Setup(s => s.TryResolveAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "0xEVMADDR", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AddressActivationEntry { Address = "0xEVMADDR", Family = "Evm", SeedAddress = "SEED-ADDR", Slot = 0 });
+            _mockAccountRepository
+                .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new List<SeedSummary>());
+            _mockSpendingLimitService
+                .Setup(s => s.GetLimitsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "SEED-ADDR", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SpendingLimitSettings { DailyLimit = 100 });
+
+            var result = await _controller.GetSpendingLimitForAddress("ethereum", "0xEVMADDR");
+
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            var response = okResult!.Value as SpendingLimitResponse;
+            Assert.That(response!.LimitsEnforced, Is.False);
         }
 
         [Test]
@@ -988,8 +1169,14 @@ namespace BiatecOIDCTests
 
             await _controller.GetAddress("ADDR1", 2);
 
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "DERIVED-ADDR", "Avm", "ADDR1", 2, It.IsAny<CancellationToken>()), Times.Once);
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "0xDERIVED", "Evm", "ADDR1", 2, It.IsAny<CancellationToken>()), Times.Once);
+            // All four families' activations are now written in a single ActivateManyAsync batch rather than
+            // one ActivateAsync call each (audit finding M-04/R-029).
+            _mockAddressActivationService.Verify(s => s.ActivateManyAsync(
+                TestEmail, It.IsAny<string>(), It.IsAny<string?>(),
+                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)>>(list =>
+                    list.Any(a => a.Address == "DERIVED-ADDR" && a.Family == "Avm" && a.SeedAddress == "ADDR1" && a.Slot == 2) &&
+                    list.Any(a => a.Address == "0xDERIVED" && a.Family == "Evm" && a.SeedAddress == "ADDR1" && a.Slot == 2)),
+                It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
@@ -1008,10 +1195,15 @@ namespace BiatecOIDCTests
 
             Assert.That(result, Is.InstanceOf<OkObjectResult>());
             _mockAccountRepository.Verify(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()), Times.Once);
-            // Slot 0 AVM is already the seed's own identifying address - no activation-registry entry needed.
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), "DERIVED-ADDR", "Avm", It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
-            // An EVM address is never a seed's own identifying address, even at slot 0 - always activated.
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "0xDERIVED", "Evm", "ADDR1", 0, It.IsAny<CancellationToken>()), Times.Once);
+            // Slot 0 AVM is already the seed's own identifying address - no activation-registry entry needed;
+            // an EVM address is never a seed's own identifying address, even at slot 0 - always activated.
+            // Both are asserted against the single ActivateManyAsync batch (audit finding M-04/R-029).
+            _mockAddressActivationService.Verify(s => s.ActivateManyAsync(
+                TestEmail, It.IsAny<string>(), It.IsAny<string?>(),
+                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)>>(list =>
+                    !list.Any(a => a.Family == "Avm") &&
+                    list.Any(a => a.Address == "0xDERIVED" && a.Family == "Evm" && a.SeedAddress == "ADDR1" && a.Slot == 0)),
+                It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
@@ -1026,6 +1218,53 @@ namespace BiatecOIDCTests
             var result = await _controller.GetAddress("NOTAREALADDRESS", null);
 
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task GetAddress_SlotOutOfRange_ReturnsBadRequestWithoutDeriving()
+        {
+            // Audit finding M-04/R-029: an unbounded caller-supplied slot on an identity-only endpoint would
+            // let the lowest-privilege token grow the activation registry without limit.
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+
+            var result = await _controller.GetAddress("ADDR1", 1_000_000);
+
+            Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
+            _mockAccountRepository.Verify(r => r.DeriveAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string?>()), Times.Never);
+        }
+
+        [Test]
+        public async Task GetAddress_NegativeSlot_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+
+            var result = await _controller.GetAddress("ADDR1", -1);
+
+            Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task GetAddress_ActivationRegistryConcurrencyConflict_ReturnsConflict()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("DERIVED-ADDR");
+            _mockAccountRepository
+                .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("0xDERIVED");
+            _mockAddressActivationService
+                .Setup(s => s.ActivateManyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)>>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new VaultConcurrencyConflictException("conflict"));
+
+            var result = await _controller.GetAddress("ADDR1", null);
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status409Conflict));
         }
 
         [Test]
@@ -1162,6 +1401,26 @@ namespace BiatecOIDCTests
             var result = await _controller.ActivateAddress("notanetwork", "SEED-ADDR", 0, new ActivateAddressRequest { Address = TestAddress });
 
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
+        }
+
+        [Test]
+        public async Task ActivateAddress_BitcoinFamilyNetwork_ReturnsBadRequest()
+        {
+            // Audit finding L-02: Bitcoin/Bitcoin Cash have no rekey concept (same as EVM), but previously
+            // fell into the EVM-derivation branch and then an AVM-only on-chain rekey check that
+            // dereferences a null AvmChain - surfaced as a confusing 503, not this clear 400.
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("bitcoin", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Btc, DisplayName = "Bitcoin" });
+
+            var result = await _controller.ActivateAddress("bitcoin", "SEED-ADDR", 0, new ActivateAddressRequest { Address = "bc1qsomeaddress" });
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult, Is.Not.Null);
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]

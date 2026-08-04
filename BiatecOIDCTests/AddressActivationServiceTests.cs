@@ -138,5 +138,55 @@ namespace BiatecOIDCTests
 
             Assert.That(resolved, Is.Not.Null);
         }
+
+        [Test]
+        public async Task ActivateManyAsync_MultipleEntries_PersistsAllInOneCall()
+        {
+            // Audit finding M-04/R-029: GetAddress derives up to four addresses at once and now activates
+            // them in a single batch rather than one round trip per family.
+            var results = await _service.ActivateManyAsync(TestEmail, TestProvider, "token", new[]
+            {
+                ("ADDR1", "Avm", "SEED1", 2),
+                ("0xEVM1", "Evm", "SEED1", 2),
+                ("bc1qbtc", "Btc", "SEED1", 2)
+            });
+
+            Assert.That(results, Has.Count.EqualTo(3));
+            var all = await _service.ListAsync(TestEmail, TestProvider, "token");
+            Assert.That(all, Has.Count.EqualTo(3));
+            Assert.That(all.Select(e => e.Address), Is.EquivalentTo(new[] { "ADDR1", "0xEVM1", "bc1qbtc" }));
+        }
+
+        [Test]
+        public void ActivateManyAsync_EmptyList_ReturnsEmptyWithoutTouchingStorage()
+        {
+            var result = _service.ActivateManyAsync(TestEmail, TestProvider, "token", Array.Empty<(string, string, string, int)>()).GetAwaiter().GetResult();
+
+            Assert.That(result, Is.Empty);
+            Assert.That(_fakeProvider.Files, Is.Empty);
+        }
+
+        [Test]
+        public void ActivateAsync_ConcurrentWriteBetweenReadAndWrite_ThrowsVaultConcurrencyConflictExceptionAndDoesNotOverwrite()
+        {
+            // Audit finding M-04/R-029: this file previously had no equivalent of
+            // CloudAccountRepository.SaveVaultWithConcurrencyCheckAsync at all - a concurrent writer could
+            // silently clobber another request's activation. Simulates the race directly against
+            // ICloudStorageProvider: the file is read as empty twice (document load + baseline capture), then
+            // found non-empty on the final pre-write re-check, as if another request wrote in between.
+            var mockProvider = new Mock<ICloudStorageProvider>();
+            mockProvider.SetupGet(p => p.Name).Returns(TestProvider);
+            mockProvider.Setup(p => p.GetAmbientAccessTokenAsync()).ReturnsAsync("token");
+            mockProvider.SetupSequence(p => p.TryDownloadAsync(It.IsAny<string>(), It.IsAny<string>()))
+                .ReturnsAsync((byte[]?)null)
+                .ReturnsAsync((byte[]?)null)
+                .ReturnsAsync(new byte[] { 1, 2, 3 });
+            _mockCatalog.Setup(c => c.Resolve(It.IsAny<string>())).Returns(mockProvider.Object);
+
+            Assert.ThrowsAsync<BiatecSelfCustodyCore.Repository.VaultConcurrencyConflictException>(async () =>
+                await _service.ActivateAsync(TestEmail, TestProvider, "token", "ADDR1", "Avm", "SEED1", 0));
+
+            mockProvider.Verify(p => p.UploadAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>()), Times.Never);
+        }
     }
 }

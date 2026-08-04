@@ -62,6 +62,16 @@ namespace BiatecOIDC.Model
     {
         /// <summary>The signed transactions, base64-encoded msgpack, in the same order as the request.</summary>
         public List<string> SignedTransactions { get; set; } = new();
+
+        /// <summary>
+        /// Non-fatal warnings about this signed group - currently populated only when it contains one or more
+        /// Algorand transactions of a type <c>POST /wallet/{network}/{address}/sign</c> does not price against
+        /// the spending limit (application calls, asset configuration, and any other non-payment/non-asset-
+        /// transfer type - <c>appl</c> in particular can move arbitrary value via inner transactions, which
+        /// this endpoint cannot see or price). Empty for a group with nothing to warn about. Added so a
+        /// signed group's spend history is never silently understated (audit finding M-03/R-028).
+        /// </summary>
+        public List<string> Warnings { get; set; } = new();
     }
 
     /// <summary>Request body for <c>PUT /wallet/limits</c>.</summary>
@@ -113,6 +123,18 @@ namespace BiatecOIDC.Model
 
         /// <summary>ARC-76 slot of <see cref="SeedAddress"/>'s bucket - meaningless when <see cref="SeedAddress"/> is <c>null</c>.</summary>
         public int Slot { get; set; }
+
+        /// <summary>
+        /// Whether this limit is actually enforced by <c>POST /wallet/{network}/{address}/sign</c> on
+        /// <see cref="Network"/> today. <c>true</c> for Bitcoin/Bitcoin Cash and Algorand mainnet; <c>false</c>
+        /// for every EVM chain (native-currency valuation isn't implemented yet) and every non-mainnet AVM
+        /// chain (the Biatec Router that prices assets isn't deployed there). <c>null</c> for the account-wide
+        /// global bucket (<see cref="Network"/> is also <c>null</c> there), since enforcement is a per-network
+        /// question - see <c>GET /wallet/{network}/{address}/limits</c> for a network-specific answer. Added
+        /// so a configured limit is never silently weaker than the API's own response implies (audit findings
+        /// M-01/R-026, M-02/R-027).
+        /// </summary>
+        public bool? LimitsEnforced { get; set; }
     }
 
     /// <summary>One supported currency and its current rate, as returned by <c>GET /wallet/limits/currencies</c>.</summary>

@@ -50,6 +50,9 @@ namespace BiatecOIDC.Controllers
         /// </summary>
         private const string AlgorandMainnetGenesisId = "mainnet-v1.0";
 
+        /// <summary>See <see cref="GetAddress"/>'s <c>slot</c> parameter remarks (audit finding M-04/R-029).</summary>
+        private const int MaxDerivationSlot = 10_000;
+
         private readonly IJwtIssuerService _jwtIssuerService;
         private readonly IWalletService _walletService;
         private readonly ISpendingLimitService _spendingLimitService;
@@ -200,6 +203,24 @@ namespace BiatecOIDC.Controllers
                 });
             }
 
+            // A "close"/"aclose" payment/asset-transfer sweeps the sender's *entire remaining* balance/asset
+            // holding to the named address - an amount not knowable from the transaction bytes alone (it
+            // depends on the account's live balance at execution time), so it can never be priced against the
+            // spending limit the way a normal pay/axfer's own amount is. Rather than silently pricing it at
+            // whatever "amt"/"aamt" happens to be (which is exactly how audit finding H-01/R-024 let a
+            // zero-amount close-remainder-to payment sweep an account with no limit check at all), it is gated
+            // on the same 'rekey' claim a rekey transaction needs - both permanently and irreversibly reassign
+            // control of value the spending limit cannot bound, so both deserve the same stricter, opt-in scope.
+            var containsCloseOut = infos.Any(i => i != null && i.IsCloseOut);
+            if (containsCloseOut && !string.Equals(principal!.FindFirstValue(WalletScopes.Rekey), "true", StringComparison.Ordinal))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+                {
+                    Title = "insufficient_scope",
+                    Detail = "This transaction group contains a close-remainder-to (or asset close-to) transaction, which sweeps the sender's entire remaining balance/holding and cannot be priced against the spending limit. This requires the 'rekey' scope/claim - the token presented does not have it."
+                });
+            }
+
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
@@ -219,7 +240,27 @@ namespace BiatecOIDC.Controllers
             // it on any other AVM network (testnet, Voi, Aramid, ...) would fail every transfer closed with
             // a confusing "Unable to determine the USD value..." error, not because anything is actually
             // wrong with the transfer itself.
-            var isAlgorandMainnet = string.Equals(resolvedNetwork.AvmChain?.GenesisId, AlgorandMainnetGenesisId, StringComparison.Ordinal);
+            var isAlgorandMainnet = IsSpendingLimitEnforced(resolvedNetwork);
+
+            // Testnet genuinely carries no value, so signing unconditionally there is fine. But Voi and
+            // Aramid mainnet are real-value chains where the limit would otherwise be silently skipped with
+            // no indication to the caller (audit finding M-02/R-027) - if this identity has configured any
+            // non-zero limit (global or per-address), fail closed here instead of signing with no limit
+            // check at all. An account with no configured limit is unaffected - there is nothing to silently
+            // skip enforcing.
+            if (!isAlgorandMainnet)
+            {
+                var hasConfiguredLimit = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => HasAnyConfiguredLimitAsync(email, provider, token, signer.Value.SeedAddress, signer.Value.Slot));
+                if (hasConfiguredLimit)
+                {
+                    return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+                    {
+                        Title = "limits_unenforceable_on_network",
+                        Detail = $"'{network}' is not Algorand mainnet, where spending limits are currently priced and enforced. This account has a configured daily/weekly/monthly limit, so signing on this network is refused rather than silently applying no limit. Use Algorand mainnet for a spending-limit-bounded account, or remove the configured limit if you intend to use '{network}' unbounded."
+                    });
+                }
+            }
 
             try
             {
@@ -227,7 +268,8 @@ namespace BiatecOIDC.Controllers
                     token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, signer.Value.SeedAddress, signer.Value.Slot, isAlgorandMainnet));
                 return Ok(new SignTransactionGroupResponse
                 {
-                    SignedTransactions = signed.Select(Convert.ToBase64String).ToList()
+                    SignedTransactions = signed.Select(Convert.ToBase64String).ToList(),
+                    Warnings = BuildUnpricedTransactionWarnings(infos)
                 });
             }
             catch (SpendingLimitExceededException ex)
@@ -429,7 +471,7 @@ namespace BiatecOIDC.Controllers
             {
                 var settings = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, resolvedAccessToken,
                     token => _spendingLimitService.GetLimitsAsync(email, provider, token, seedAddress: null, slot: 0));
-                return Ok(ToResponse(settings, address: null, network: null, seedAddress: null, slot: 0));
+                return Ok(ToResponse(settings, address: null, network: null, seedAddress: null, slot: 0, limitsEnforced: null));
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -482,7 +524,7 @@ namespace BiatecOIDC.Controllers
             }
 
             _logger.LogInformation("{Email} updated their spending limits (currency {Currency}).", email, settings.CurrencyCode);
-            return Ok(ToResponse(settings, address: null, network: null, seedAddress: null, slot: 0));
+            return Ok(ToResponse(settings, address: null, network: null, seedAddress: null, slot: 0, limitsEnforced: null));
         }
 
         /// <summary>Returns the caller's current daily/weekly/monthly spending limits for the bucket tied to <paramref name="address"/>.</summary>
@@ -503,7 +545,8 @@ namespace BiatecOIDC.Controllers
                 return authError;
             }
 
-            if (await _networkResolver.ResolveAsync(network) == null)
+            var resolvedNetwork = await _networkResolver.ResolveAsync(network);
+            if (resolvedNetwork == null)
             {
                 return BadRequest(new ProblemDetails { Title = "unknown_network", Detail = $"Unknown network '{network}'." });
             }
@@ -522,7 +565,7 @@ namespace BiatecOIDC.Controllers
             {
                 var settings = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, resolvedAccessToken,
                     token => _spendingLimitService.GetLimitsAsync(email, provider, token, signer.Value.SeedAddress, signer.Value.Slot));
-                return Ok(ToResponse(settings, address, network, signer.Value.SeedAddress, signer.Value.Slot));
+                return Ok(ToResponse(settings, address, network, signer.Value.SeedAddress, signer.Value.Slot, IsSpendingLimitEnforced(resolvedNetwork)));
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -550,7 +593,8 @@ namespace BiatecOIDC.Controllers
                 return authError;
             }
 
-            if (await _networkResolver.ResolveAsync(network) == null)
+            var resolvedNetwork = await _networkResolver.ResolveAsync(network);
+            if (resolvedNetwork == null)
             {
                 return BadRequest(new ProblemDetails { Title = "unknown_network", Detail = $"Unknown network '{network}'." });
             }
@@ -588,7 +632,7 @@ namespace BiatecOIDC.Controllers
             }
 
             _logger.LogInformation("{Email} updated their spending limits for {Address} on {Network} (currency {Currency}).", email, address, network, settings.CurrencyCode);
-            return Ok(ToResponse(settings, address, network, signer.Value.SeedAddress, signer.Value.Slot));
+            return Ok(ToResponse(settings, address, network, signer.Value.SeedAddress, signer.Value.Slot, IsSpendingLimitEnforced(resolvedNetwork)));
         }
 
         /// <summary>
@@ -599,10 +643,17 @@ namespace BiatecOIDC.Controllers
         /// same across every EVM chain - see <c>CLAUDE.md</c>'s "EVM (Ethereum-family) support" note).
         /// </summary>
         /// <param name="seedAddress">The seed's own identifying (slot-0) address.</param>
-        /// <param name="slot">ARC-76 derivation index within that seed. Defaults to <c>0</c>.</param>
+        /// <param name="slot">
+        /// ARC-76 derivation index within that seed. Defaults to <c>0</c>. Bounded to
+        /// <c>[0, <see cref="MaxDerivationSlot"/>]</c> - this endpoint requires only an identity-level
+        /// (<c>openid</c>) token and writes up to four entries to the caller's own cloud storage per distinct
+        /// slot, so an unbounded caller-supplied slot would let the lowest-privilege token grow that file
+        /// without limit (audit finding M-04/R-029).
+        /// </param>
         /// <response code="200">The derived addresses.</response>
-        /// <response code="400">No seed with that address exists in the caller's vault.</response>
+        /// <response code="400">No seed with that address exists in the caller's vault, or <paramref name="slot"/> is out of range.</response>
         /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
+        /// <response code="409">The address activation registry was modified concurrently by another request - retry.</response>
         [AllowAnonymous]
         [RequiresBearerToken]
         [HttpGet("address/{seedAddress}/{slot:int?}")]
@@ -615,46 +666,49 @@ namespace BiatecOIDC.Controllers
                 return authError;
             }
 
+            var resolvedSlot = slot ?? 0;
+            if (resolvedSlot < 0 || resolvedSlot > MaxDerivationSlot)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_slot", Detail = $"'slot' must be between 0 and {MaxDerivationSlot}." });
+            }
+
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
-            var resolvedSlot = slot ?? 0;
 
             try
             {
                 var address = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.DeriveAddressAsync(email, provider, seedAddress, resolvedSlot, token));
-
-                // A slot-0 AVM address is already its own seed's identifying address (recognized for free,
-                // without ever touching the activation registry - see ResolveSignerAsync). Only a non-zero
-                // slot needs an explicit entry so it becomes resolvable by address alone later (e.g. from
-                // POST /wallet/{network}/{address}/sign).
-                if (resolvedSlot != 0)
-                {
-                    await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                        token => _addressActivationService.ActivateAsync(email, provider, token, address, nameof(ChainFamily.Avm), seedAddress, resolvedSlot));
-                }
-
                 var evmAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.DeriveEvmAddressAsync(email, provider, seedAddress, resolvedSlot, token));
 
-                // Unlike Algorand slot 0, an EVM address is never a seed's own identifying address - it
-                // always needs an activation-registry entry to be resolvable by address alone later.
-                await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _addressActivationService.ActivateAsync(email, provider, token, evmAddress, nameof(ChainFamily.Evm), seedAddress, resolvedSlot));
-
                 // Bitcoin/Bitcoin Cash addresses are derived from the exact same key as the EVM address
-                // (both secp256k1, see ICloudAccountRepository.LoadBitcoinKeyAsync's remarks) - same
-                // "always needs an activation-registry entry" reasoning as EVM above.
+                // (both secp256k1, see ICloudAccountRepository.LoadBitcoinKeyAsync's remarks).
                 var bitcoinAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.DeriveBitcoinAddressAsync(email, provider, seedAddress, resolvedSlot, token));
-                await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _addressActivationService.ActivateAsync(email, provider, token, bitcoinAddress, nameof(ChainFamily.Btc), seedAddress, resolvedSlot));
-
                 var bitcoinCashAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.DeriveBitcoinCashAddressAsync(email, provider, seedAddress, resolvedSlot, token));
+
+                // A slot-0 AVM address is already its own seed's identifying address (recognized for free,
+                // without ever touching the activation registry - see ResolveSignerAsync) - only a non-zero
+                // slot needs an explicit entry. Every other family always needs one - unlike Algorand slot 0,
+                // none of them is ever a seed's own identifying address. All activations for this call are
+                // written in a single batch (ActivateManyAsync) rather than one round trip per family, both
+                // for efficiency and so a concurrent writer can only race the whole batch, not interleave
+                // with it (audit finding M-04/R-029).
+                var activations = new List<(string Address, string Family, string SeedAddress, int Slot)>();
+                if (resolvedSlot != 0)
+                {
+                    activations.Add((address, nameof(ChainFamily.Avm), seedAddress, resolvedSlot));
+                }
+
+                activations.Add((evmAddress, nameof(ChainFamily.Evm), seedAddress, resolvedSlot));
+                activations.Add((bitcoinAddress, nameof(ChainFamily.Btc), seedAddress, resolvedSlot));
+                activations.Add((bitcoinCashAddress, nameof(ChainFamily.Bch), seedAddress, resolvedSlot));
+
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _addressActivationService.ActivateAsync(email, provider, token, bitcoinCashAddress, nameof(ChainFamily.Bch), seedAddress, resolvedSlot));
+                    token => _addressActivationService.ActivateManyAsync(email, provider, token, activations));
 
                 return Ok(new DerivedAddressResponse
                 {
@@ -665,6 +719,10 @@ namespace BiatecOIDC.Controllers
                     SeedAddress = seedAddress,
                     Slot = resolvedSlot
                 });
+            }
+            catch (VaultConcurrencyConflictException ex)
+            {
+                return StatusCode(StatusCodes.Status409Conflict, new ProblemDetails { Title = "vault_concurrency_conflict", Detail = ex.Message });
             }
             catch (InvalidOperationException ex)
             {
@@ -797,18 +855,23 @@ namespace BiatecOIDC.Controllers
         /// just registers it immediately - the same thing <c>GET /wallet/address/{seedAddress}/{slot}</c>
         /// already does automatically, so calling this for a native address is rarely necessary.
         /// </summary>
-        /// <param name="network">Which chain the address belongs to - see <c>GET /chains</c>. EVM chains are only accepted for a native address (EVM has no rekey concept).</param>
+        /// <param name="network">
+        /// Which chain the address belongs to - see <c>GET /chains</c>. EVM chains are only accepted for a
+        /// native address (EVM has no rekey concept); Bitcoin/Bitcoin Cash are rejected outright (same
+        /// reasoning - see <see cref="ActivateAddress"/>'s remarks).
+        /// </param>
         /// <param name="seedAddress">Which seed's key signs for the address being activated - its own identifying (Algorand slot-0) address.</param>
         /// <param name="slot">ARC-76 derivation index within that seed.</param>
         /// <param name="request">The address to activate.</param>
         /// <response code="200">Activated.</response>
-        /// <response code="400"><paramref name="network"/> is unrecognized, <paramref name="seedAddress"/> names an unknown seed, or an EVM address doesn't match its seed's own derived address.</response>
+        /// <response code="400"><paramref name="network"/> is unrecognized or is Bitcoin/Bitcoin Cash, <paramref name="seedAddress"/> names an unknown seed, or an EVM address doesn't match its seed's own derived address.</response>
         /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider access token is available.</response>
         /// <response code="403">The token lacks the <c>sign</c> claim.</response>
         /// <response code="409">
         /// <c>request.Address</c> differs from the seed's derived address (an external/rekey scenario)
         /// but an on-chain check found it isn't currently rekeyed to that derived address - submit and
-        /// confirm the on-chain rekey transaction first.
+        /// confirm the on-chain rekey transaction first; or the address activation registry was modified
+        /// concurrently by another request - retry.
         /// </response>
         [AllowAnonymous]
         [RequiresBearerToken]
@@ -831,6 +894,21 @@ namespace BiatecOIDC.Controllers
             if (string.IsNullOrWhiteSpace(request.Address))
             {
                 return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Address is required." });
+            }
+
+            // Bitcoin/Bitcoin Cash have no rekey concept (same as EVM) and derive via
+            // DeriveBitcoinAddressAsync/DeriveBitcoinCashAddressAsync, not DeriveEvmAddressAsync - the branch
+            // below only ever calls one or the other, so a Bitcoin-family network previously fell into the
+            // EVM-derivation branch, could never match, and fell through into an AVM-only on-chain rekey
+            // check that dereferences a null AvmChain - surfaced as a confusing 503 "algod_unavailable"
+            // rather than a clear error (audit finding L-02). Reject explicitly instead.
+            if (resolvedNetwork.Family is ChainFamily.Btc or ChainFamily.Bch)
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Title = "unsupported_family",
+                    Detail = "Bitcoin-family addresses have no rekey concept and cannot be explicitly activated here - they are activated automatically when derived (GET /wallet/address/{seedAddress}/{slot})."
+                });
             }
 
             var address = request.Address;
@@ -896,6 +974,10 @@ namespace BiatecOIDC.Controllers
                     SeedAddress = seedAddress,
                     Slot = slot
                 });
+            }
+            catch (VaultConcurrencyConflictException ex)
+            {
+                return StatusCode(StatusCodes.Status409Conflict, new ProblemDetails { Title = "vault_concurrency_conflict", Detail = ex.Message });
             }
             catch (InvalidOperationException ex)
             {
@@ -1170,7 +1252,7 @@ namespace BiatecOIDC.Controllers
             return refreshed?.AccessToken;
         }
 
-        private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings, string? address, string? network, string? seedAddress, int slot) => new()
+        private static SpendingLimitResponse ToResponse(SpendingLimitSettings settings, string? address, string? network, string? seedAddress, int slot, bool? limitsEnforced) => new()
         {
             CurrencyCode = settings.CurrencyCode,
             DailyLimit = settings.DailyLimit,
@@ -1179,8 +1261,70 @@ namespace BiatecOIDC.Controllers
             Address = address,
             Network = network,
             SeedAddress = seedAddress,
-            Slot = slot
+            Slot = slot,
+            LimitsEnforced = limitsEnforced
         };
+
+        /// <summary>
+        /// Whether <see cref="SignTransactionGroup"/> actually prices and enforces the spending limit for
+        /// <paramref name="network"/> today - Bitcoin/Bitcoin Cash (see
+        /// <c>IWalletService.SignBitcoinTransactionGroupAsync</c>) and Algorand mainnet (the only AVM chain
+        /// the Biatec Router is deployed to) are enforced; every EVM chain (no native-currency valuation yet
+        /// - audit finding M-01/R-026) and every non-mainnet AVM chain (Voi, Aramid, testnet, ... - audit
+        /// finding M-02/R-027) are not. Used both to answer <c>GET</c>/<c>PUT /wallet/{network}/{address}/limits</c>
+        /// honestly and, in <see cref="SignTransactionGroup"/>, to refuse signing outright on an
+        /// unenforced AVM network when the account has a configured limit rather than silently applying none.
+        /// </summary>
+        private static bool IsSpendingLimitEnforced(ResolvedNetwork network) => network.Family switch
+        {
+            ChainFamily.Btc or ChainFamily.Bch => true,
+            ChainFamily.Avm => string.Equals(network.AvmChain?.GenesisId, AlgorandMainnetGenesisId, StringComparison.Ordinal),
+            _ => false
+        };
+
+        private static bool HasAnyNonZeroLimit(SpendingLimitSettings? settings) =>
+            settings != null && (settings.DailyLimit > 0 || settings.WeeklyLimit > 0 || settings.MonthlyLimit > 0);
+
+        /// <summary>
+        /// Warns the caller when a group contains one or more transactions
+        /// <see cref="AlgorandTransactionInspector"/> classifies as <see cref="AlgorandTransactionKind.Other"/>
+        /// (application calls, asset configuration, key registration, ...) - none of these are priced against
+        /// the spending limit, and an application call in particular can move arbitrary ALGO/ASA value via
+        /// inner transactions this endpoint has no visibility into. Signing still proceeds; this only makes
+        /// the gap visible instead of a signed group's spend history silently understating what actually
+        /// moved (audit finding M-03/R-028).
+        /// </summary>
+        private static List<string> BuildUnpricedTransactionWarnings(IReadOnlyList<AlgorandTransferInfo> infos)
+        {
+            var unpricedCount = infos.Count(i => i != null && i.Kind == AlgorandTransactionKind.Other);
+            if (unpricedCount == 0)
+            {
+                return new List<string>();
+            }
+
+            return new List<string>
+            {
+                $"{unpricedCount} transaction(s) in this group are not payments or asset transfers (e.g. application call, asset configuration, key registration) and were not priced against your spending limit - an application call in particular can move ALGO/ASA value via inner transactions this endpoint cannot see."
+            };
+        }
+
+        /// <summary>
+        /// Whether <paramref name="seedAddress"/>/<paramref name="slot"/>'s identity has any non-zero
+        /// daily/weekly/monthly limit configured, in either the account-wide global bucket or its own
+        /// per-address bucket - used by <see cref="SignTransactionGroup"/> to decide whether it must fail
+        /// closed on a network where the limit can't actually be priced/enforced (audit finding M-02/R-027).
+        /// </summary>
+        private async Task<bool> HasAnyConfiguredLimitAsync(string email, string provider, string? accessToken, string seedAddress, int slot)
+        {
+            var global = await _spendingLimitService.GetLimitsAsync(email, provider, accessToken, seedAddress: null, slot: 0);
+            if (HasAnyNonZeroLimit(global))
+            {
+                return true;
+            }
+
+            var perAddress = await _spendingLimitService.GetLimitsAsync(email, provider, accessToken, seedAddress, slot);
+            return HasAnyNonZeroLimit(perAddress);
+        }
 
         /// <summary>
         /// Resolves <paramref name="address"/> to the <c>(seedAddress, slot)</c> that signs for it - a

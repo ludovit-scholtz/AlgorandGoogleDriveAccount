@@ -68,11 +68,14 @@ namespace BiatecOIDC.BusinessLogic
         /// <summary>
         /// Signs a single unsigned Bitcoin or Bitcoin Cash transaction via the shared self-custody signing
         /// path (<see cref="BiatecSelfCustodyCore.BusinessLogic.IDriveService.SignBitcoinTransactionAsync"/>),
-        /// after pricing every non-change output (<see cref="BitcoinTransactionOutput.IsChange"/>) via
-        /// <see cref="IBitcoinValuationService"/> and checking the total against the caller's
-        /// daily/weekly/monthly limits - the same enforcement <see cref="SignTransactionGroupAsync"/> applies
-        /// for Algorand, just priced directly (the native coin *is* the asset, no router needed) instead of
-        /// via the Biatec Router.
+        /// after pricing every output that does not pay the signer's own derived address (independently
+        /// derived here, never trusting the caller's own <see cref="BitcoinTransactionOutput.IsChange"/> flag
+        /// - see that property's remarks) via <see cref="IBitcoinValuationService"/> and checking the total
+        /// against the caller's daily/weekly/monthly limits - the same enforcement
+        /// <see cref="SignTransactionGroupAsync"/> applies for Algorand, just priced directly (the native
+        /// coin *is* the asset, no router needed) instead of via the Biatec Router. Also rejects a
+        /// transaction whose implicit fee (<c>sum(Inputs) - sum(Outputs)</c>) is unreasonably large relative
+        /// to the amount spent.
         /// </summary>
         /// <param name="email">The wallet owner (from the caller's validated OIDC access token).</param>
         /// <param name="provider">The cloud storage provider the account is stored under.</param>
@@ -84,7 +87,7 @@ namespace BiatecOIDC.BusinessLogic
         /// <returns>The fully-signed transaction's raw bytes.</returns>
         /// <exception cref="BitcoinValuationException">The current BTC/BCH-USD spot price could not be determined.</exception>
         /// <exception cref="SpendingLimitExceededException">The transaction's total spend exceeds a configured global or address-specific daily/weekly/monthly limit.</exception>
-        /// <exception cref="FormatException">The transaction could not be built/signed.</exception>
+        /// <exception cref="FormatException">The transaction's implicit fee is unreasonably large, or it could not be built/signed.</exception>
         /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
         Task<byte[]> SignBitcoinTransactionGroupAsync(string email, string provider, BitcoinChainFamily family, BitcoinUnsignedTransaction transaction, string? accessToken, string? seedAddress = null, int slot = 0);
     }

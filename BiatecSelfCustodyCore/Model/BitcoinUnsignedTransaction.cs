@@ -40,9 +40,12 @@ namespace BiatecSelfCustodyCore.Model
 
         /// <summary>
         /// Whether this output returns change to the sender's own address rather than paying a recipient -
-        /// set by <c>BiatecMCP</c>'s <c>BitcoinTransactionBuilder</c> during coin selection. Excluded from
-        /// the spending-limit valuation (<c>WalletService.SignBitcoinTransactionGroupAsync</c>) - money
-        /// staying in the sender's own wallet was never actually spent.
+        /// set by <c>BiatecMCP</c>'s <c>BitcoinTransactionBuilder</c> during coin selection, for its own
+        /// bookkeeping only. <c>WalletService.SignBitcoinTransactionGroupAsync</c> deliberately does
+        /// <em>not</em> trust this caller-supplied flag for spending-limit valuation (a hostile caller could
+        /// otherwise mark its own payout as change to price a transfer at zero - audit finding H-02/R-025) -
+        /// it independently derives the signer's own address and treats an output as change only if
+        /// <see cref="Address"/> actually matches that address.
         /// </summary>
         public bool IsChange { get; set; }
     }

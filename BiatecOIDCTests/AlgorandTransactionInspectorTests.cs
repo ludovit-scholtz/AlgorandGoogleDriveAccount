@@ -357,6 +357,108 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public void Inspect_PaymentWithCloseRemainderTo_ReturnsIsCloseOutTrue()
+        {
+            // Audit finding H-01/R-024: a close-remainder-to payment sweeps the sender's entire remaining
+            // balance regardless of "amt", and must be flagged so WalletController refuses to sign it
+            // without the 'rekey' claim rather than pricing it at whatever "amt" happens to be.
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 0,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "mainnet-v1.0",
+                GenesisHash = TestGenesisHash,
+                CloseRemainderTo = NewTestAddress()
+            };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(pay));
+
+            Assert.That(info.IsCloseOut, Is.True);
+            Assert.That(info.Amount, Is.EqualTo(0UL));
+        }
+
+        [Test]
+        public void Inspect_PaymentWithoutCloseRemainderTo_ReturnsIsCloseOutFalse()
+        {
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 5,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash
+            };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(pay));
+
+            Assert.That(info.IsCloseOut, Is.False);
+        }
+
+        [Test]
+        public void Inspect_SignedTransactionWrappingCloseRemainderToPayment_UnwrapsAndReturnsIsCloseOutTrue()
+        {
+            var addr = NewTestAddress();
+            var pay = new PaymentTransaction
+            {
+                Sender = addr,
+                Receiver = addr,
+                Amount = 0,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "mainnet-v1.0",
+                GenesisHash = TestGenesisHash,
+                CloseRemainderTo = NewTestAddress()
+            };
+            var signedWrapper = new SignedTransaction { Tx = pay };
+
+            var info = AlgorandTransactionInspector.Inspect(Encoder.EncodeToMsgPackOrdered(signedWrapper));
+
+            Assert.That(info.IsCloseOut, Is.True);
+        }
+
+        [Test]
+        public void Inspect_AssetTransferWithAcloseFieldOnTheWire_ReturnsIsCloseOutTrue()
+        {
+            // The pinned Algorand4 SDK's AssetTransferTransaction has no settable AssetCloseTo property (an
+            // "aclose" transaction can still legally appear on the wire, e.g. from a non-SDK-built caller),
+            // so this constructs the raw msgpack map directly rather than via the typed SDK object, to prove
+            // Inspect reads "aclose" independent of what the local SDK version happens to model.
+            var addr = NewTestAddress();
+            var closeTo = NewTestAddress();
+            var map = new Dictionary<string, object>
+            {
+                ["type"] = "axfer",
+                ["snd"] = addr.Bytes,
+                ["arcv"] = addr.Bytes,
+                ["aamt"] = 0,
+                ["xaid"] = 55,
+                ["aclose"] = closeTo.Bytes,
+                ["fee"] = 1000,
+                ["fv"] = 1,
+                ["lv"] = 1000,
+                ["gen"] = "mainnet-v1.0",
+                ["gh"] = TestGenesisHash.Bytes
+            };
+            var bytes = MessagePack.MessagePackSerializer.Serialize(map, MessagePack.MessagePackSerializerOptions.Standard.WithResolver(MessagePack.Resolvers.ContractlessStandardResolver.Instance));
+
+            var info = AlgorandTransactionInspector.Inspect(bytes);
+
+            Assert.That(info.Kind, Is.EqualTo(AlgorandTransactionKind.AssetTransfer));
+            Assert.That(info.IsCloseOut, Is.True);
+            Assert.That(info.Amount, Is.EqualTo(0UL));
+        }
+
+        [Test]
         public void Inspect_EmptyBytes_ThrowsFormatException()
         {
             Assert.Throws<FormatException>(() => AlgorandTransactionInspector.Inspect(Array.Empty<byte>()));

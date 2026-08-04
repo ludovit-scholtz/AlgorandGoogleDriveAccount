@@ -8,6 +8,18 @@ namespace BiatecOIDC.BusinessLogic
     /// <inheritdoc cref="IWalletService"/>
     public class WalletService : IWalletService
     {
+        /// <summary>
+        /// Circuit-breaker ceiling on the implicit Bitcoin-family miner fee (<c>sum(Inputs) - sum(Outputs)</c>)
+        /// - not a real fee-rate estimate (this service has no visibility into current network fee rates), just
+        /// a backstop against a caller burning most/all of a UTXO set to fee (audit finding H-02/R-025). A
+        /// transaction is rejected if its implicit fee exceeds both this absolute value and
+        /// <see cref="MaxReasonableFeeFractionOfSpend"/> of the total input value.
+        /// </summary>
+        private const long MaxReasonableFeeSatoshis = 100_000; // ~0.001 BTC
+
+        /// <summary>See <see cref="MaxReasonableFeeSatoshis"/>.</summary>
+        private const decimal MaxReasonableFeeFractionOfSpend = 0.10m;
+
         private readonly IDriveService _driveService;
         private readonly ISpendingLimitService _spendingLimitService;
         private readonly IAssetValuationService _valuationService;
@@ -148,7 +160,32 @@ namespace BiatecOIDC.BusinessLogic
             // on the same identity even if the vault's primary seed changes mid-request.
             var resolvedAddress = await _accountRepository.ResolveSeedAddressAsync(email, provider, seedAddress, accessToken);
 
-            var spendSatoshis = transaction.Outputs.Where(o => !o.IsChange).Sum(o => o.AmountSatoshis);
+            // Never trust the caller's own BitcoinTransactionOutput.IsChange flag for valuation - a hostile
+            // caller can mark its own payout as change to price a transfer at zero (audit finding H-02/R-025).
+            // Derive the signer's own address for this family/slot (the same key SignBitcoinTransactionAsync
+            // will use) and treat an output as change only if it actually pays that address; everything else
+            // counts as spend, regardless of what the caller claimed.
+            var signerAddress = family == BitcoinChainFamily.Bitcoin
+                ? await _accountRepository.DeriveBitcoinAddressAsync(email, provider, resolvedAddress, slot, accessToken)
+                : await _accountRepository.DeriveBitcoinCashAddressAsync(email, provider, resolvedAddress, slot, accessToken);
+
+            var spendSatoshis = transaction.Outputs
+                .Where(o => !string.Equals(o.Address, signerAddress, StringComparison.Ordinal))
+                .Sum(o => o.AmountSatoshis);
+
+            // Bound the implicit miner fee (sum(Inputs) - sum(Outputs)) - otherwise a caller can burn an
+            // arbitrarily large fraction of the account's UTXO set to fee, priced at zero since it never
+            // appears as an output at all (the other half of H-02/R-025).
+            var totalInputSatoshis = transaction.Inputs.Sum(i => i.AmountSatoshis);
+            var totalOutputSatoshis = transaction.Outputs.Sum(o => o.AmountSatoshis);
+            var impliedFeeSatoshis = totalInputSatoshis - totalOutputSatoshis;
+            var feeCeiling = Math.Max(MaxReasonableFeeSatoshis, (long)(totalInputSatoshis * MaxReasonableFeeFractionOfSpend));
+            if (impliedFeeSatoshis > feeCeiling)
+            {
+                throw new FormatException(
+                    $"The implicit transaction fee ({impliedFeeSatoshis} satoshis) exceeds the maximum this wallet will sign ({feeCeiling} satoshis) without more inputs/outputs to justify it.");
+            }
+
             var totalUsd = spendSatoshis > 0 ? await _bitcoinValuationService.GetUsdValueAsync(family, spendSatoshis) : 0m;
 
             if (totalUsd > 0m)

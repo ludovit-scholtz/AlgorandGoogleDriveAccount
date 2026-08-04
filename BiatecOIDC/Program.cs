@@ -101,6 +101,22 @@ namespace BiatecOIDC
             builder.Services.Configure<MockCloudServiceConfiguration>(builder.Configuration.GetSection("CloudServices:Mock"));
             var mockCloudEnabled = mockCloudConfig.Enabled && mockCloudConfig.Accounts.Count > 0;
 
+            // Fail fast rather than merely defaulting off (security audit finding L-01/R-030): this provider
+            // signs the browser into a full cookie session, indistinguishable from a real sign-in, with no
+            // credential check at all and no external OAuth round trip - a complete authentication bypass.
+            // The picker/fast-track gating in JwtIssuerController is correct defense in depth, but a
+            // deployment where CloudServices:Mock:Enabled is accidentally true in a non-Development
+            // environment (e.g. an incident-debugging config change never reverted) should never boot with
+            // it live, the same "structurally unreachable in production, not just off by default" precedent
+            // AesKeyRingResolver.EnsureActiveKeyIsNotKnownPlaceholder set for R-019/R-023.
+            if (mockCloudConfig.Enabled && !builder.Environment.IsDevelopment())
+            {
+                throw new InvalidOperationException(
+                    "CloudServices:Mock:Enabled is true outside the Development environment. The mock identity/" +
+                    "storage provider is a complete authentication bypass (see BiatecOIDC/MOCK_TESTING.md) and " +
+                    "must never be enabled in a non-Development deployment. Set it to false, or unset it.");
+            }
+
             // Add CORS configuration
             var corsConfig = new CorsConfiguration();
             builder.Configuration.GetSection("Cors").Bind(corsConfig);

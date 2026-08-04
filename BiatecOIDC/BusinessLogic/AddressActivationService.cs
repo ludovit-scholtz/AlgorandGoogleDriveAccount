@@ -2,6 +2,7 @@ using System.Text.Json;
 using BiatecSelfCustodyCore.Helper;
 using BiatecSelfCustodyCore.Model;
 using BiatecSelfCustodyCore.Providers;
+using BiatecSelfCustodyCore.Repository;
 using Microsoft.Extensions.Options;
 
 namespace BiatecOIDC.BusinessLogic
@@ -46,51 +47,92 @@ namespace BiatecOIDC.BusinessLogic
         public async Task<AddressActivationEntry?> TryResolveAsync(string email, string provider, string? accessToken, string address, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
-            var document = await LoadDocumentAsync(email, provider, accessToken);
+            var storageProvider = _catalog.Resolve(provider);
+            var token = await ResolveAccessTokenAsync(storageProvider, accessToken);
+            var activeKey = AesKeyRingResolver.GetActiveKey(_aes.CurrentValue, "AesOptions");
+            var historicalKeys = AesKeyRingResolver.GetHistoricalKeys(_aes.CurrentValue, _logger);
+
+            var document = await LoadDocumentAsync(storageProvider, token, activeKey, historicalKeys, email);
             return document.Entries.FirstOrDefault(e => string.Equals(e.Address, address, StringComparison.Ordinal));
         }
 
         public async Task<AddressActivationEntry> ActivateAsync(string email, string provider, string? accessToken, string address, string family, string seedAddress, int slot, CancellationToken cancellationToken = default)
         {
+            var results = await ActivateManyAsync(email, provider, accessToken, new[] { (address, family, seedAddress, slot) }, cancellationToken);
+            return results[0];
+        }
+
+        public async Task<IReadOnlyList<AddressActivationEntry>> ActivateManyAsync(string email, string provider, string? accessToken, IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)> activations, CancellationToken cancellationToken = default)
+        {
             RequireEmail(email);
-            if (string.IsNullOrWhiteSpace(address))
+            if (activations.Count == 0)
             {
-                throw new ArgumentException("Address is required.", nameof(address));
+                return Array.Empty<AddressActivationEntry>();
             }
 
-            var document = await LoadDocumentAsync(email, provider, accessToken);
-            var entry = new AddressActivationEntry
+            foreach (var activation in activations)
             {
-                Address = address,
-                Family = family,
-                SeedAddress = seedAddress,
-                Slot = slot,
-                ActivatedUtc = DateTimeOffset.UtcNow
-            };
+                if (string.IsNullOrWhiteSpace(activation.Address))
+                {
+                    throw new ArgumentException("Address is required.", nameof(activations));
+                }
+            }
 
-            document.Entries.RemoveAll(e => string.Equals(e.Address, address, StringComparison.Ordinal));
-            document.Entries.Add(entry);
+            var storageProvider = _catalog.Resolve(provider);
+            var token = await ResolveAccessTokenAsync(storageProvider, accessToken);
+            var activeKey = AesKeyRingResolver.GetActiveKey(_aes.CurrentValue, "AesOptions");
+            var historicalKeys = AesKeyRingResolver.GetHistoricalKeys(_aes.CurrentValue, _logger);
 
-            await SaveDocumentAsync(email, provider, accessToken, document);
-            _logger.LogInformation("Activated address {Address} ({Family}) for {Email}, backed by seed {SeedAddress} slot {Slot}.", address, family, email, seedAddress, slot);
-            return entry;
+            var document = await LoadDocumentAsync(storageProvider, token, activeKey, historicalKeys, email);
+            var baselineRawBytes = await DownloadActiveRawBytesAsync(storageProvider, token, activeKey);
+
+            var now = DateTimeOffset.UtcNow;
+            var results = new List<AddressActivationEntry>(activations.Count);
+            foreach (var (address, family, seedAddress, slot) in activations)
+            {
+                var entry = new AddressActivationEntry
+                {
+                    Address = address,
+                    Family = family,
+                    SeedAddress = seedAddress,
+                    Slot = slot,
+                    ActivatedUtc = now
+                };
+
+                document.Entries.RemoveAll(e => string.Equals(e.Address, address, StringComparison.Ordinal));
+                document.Entries.Add(entry);
+                results.Add(entry);
+            }
+
+            await SaveDocumentWithConcurrencyCheckAsync(storageProvider, token, activeKey, email, document, baselineRawBytes);
+
+            foreach (var (address, family, seedAddress, slot) in activations)
+            {
+                _logger.LogInformation("Activated address {Address} ({Family}) for {Email}, backed by seed {SeedAddress} slot {Slot}.", address, family, email, seedAddress, slot);
+            }
+
+            return results;
         }
 
         public async Task<IReadOnlyList<AddressActivationEntry>> ListAsync(string email, string provider, string? accessToken, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
-            var document = await LoadDocumentAsync(email, provider, accessToken);
-            return document.Entries;
-        }
-
-        private async Task<AddressActivationDocument> LoadDocumentAsync(string email, string provider, string? accessToken)
-        {
             var storageProvider = _catalog.Resolve(provider);
             var token = await ResolveAccessTokenAsync(storageProvider, accessToken);
-
             var activeKey = AesKeyRingResolver.GetActiveKey(_aes.CurrentValue, "AesOptions");
             var historicalKeys = AesKeyRingResolver.GetHistoricalKeys(_aes.CurrentValue, _logger);
 
+            var document = await LoadDocumentAsync(storageProvider, token, activeKey, historicalKeys, email);
+            return document.Entries;
+        }
+
+        private async Task<AddressActivationDocument> LoadDocumentAsync(
+            ICloudStorageProvider storageProvider,
+            string token,
+            AesKeyRingEntry activeKey,
+            IReadOnlyList<AesKeyRingEntry> historicalKeys,
+            string email)
+        {
             byte[]? plaintext;
             try
             {
@@ -110,14 +152,54 @@ namespace BiatecOIDC.BusinessLogic
             return JsonSerializer.Deserialize<AddressActivationDocument>(plaintext, JsonOptions) ?? new AddressActivationDocument();
         }
 
-        private async Task SaveDocumentAsync(string email, string provider, string? accessToken, AddressActivationDocument document)
+        private static async Task SaveDocumentAsync(ICloudStorageProvider storageProvider, string token, AesKeyRingEntry activeKey, string email, AddressActivationDocument document)
         {
-            var storageProvider = _catalog.Resolve(provider);
-            var token = await ResolveAccessTokenAsync(storageProvider, accessToken);
-            var activeKey = AesKeyRingResolver.GetActiveKey(_aes.CurrentValue, "AesOptions");
-
             var plaintext = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
             await EncryptedKeyRingFileStore.SaveAsync(storageProvider, token, FileNameTemplate, activeKey, email, plaintext);
+        }
+
+        /// <summary>The raw (still-encrypted) bytes currently at the active generation's file name, or <c>null</c> if no file exists there yet.</summary>
+        private static Task<byte[]?> DownloadActiveRawBytesAsync(ICloudStorageProvider storageProvider, string token, AesKeyRingEntry activeKey) =>
+            storageProvider.TryDownloadAsync(BuildActiveFileName(activeKey), token);
+
+        private static string BuildActiveFileName(AesKeyRingEntry activeKey) =>
+            FileNameTemplate.Replace("%AESID%", AesEncryptionHelper.MakeAesId(AesKeyRingResolver.KeyBytes(activeKey), AesKeyRingResolver.IvBytes(activeKey)));
+
+        /// <summary>
+        /// Saves <paramref name="document"/> only if the active file's raw bytes still match
+        /// <paramref name="baselineRawBytes"/> - the exact same best-effort check-then-act re-verification
+        /// <c>CloudAccountRepository.SaveVaultWithConcurrencyCheckAsync</c> uses for the seed vault, applied
+        /// here so this file gets the same protection (audit finding M-04/R-029 - this file previously had
+        /// none, unlike the seed vault since R-021's fix). Throws
+        /// <see cref="VaultConcurrencyConflictException"/> rather than silently overwriting a concurrent
+        /// writer's change if the check fails.
+        /// </summary>
+        private static async Task SaveDocumentWithConcurrencyCheckAsync(
+            ICloudStorageProvider storageProvider,
+            string token,
+            AesKeyRingEntry activeKey,
+            string email,
+            AddressActivationDocument document,
+            byte[]? baselineRawBytes)
+        {
+            var currentRawBytes = await DownloadActiveRawBytesAsync(storageProvider, token, activeKey);
+            if (!RawBytesEqual(baselineRawBytes, currentRawBytes))
+            {
+                throw new VaultConcurrencyConflictException(
+                    "The account's address activation data was modified by another request while this one was in progress. Please retry.");
+            }
+
+            await SaveDocumentAsync(storageProvider, token, activeKey, email, document);
+        }
+
+        private static bool RawBytesEqual(byte[]? a, byte[]? b)
+        {
+            if (a is null || b is null)
+            {
+                return a is null && b is null;
+            }
+
+            return a.AsSpan().SequenceEqual(b);
         }
 
         private static async Task<string> ResolveAccessTokenAsync(ICloudStorageProvider storageProvider, string? accessToken)

@@ -41,7 +41,16 @@ namespace BiatecOIDC.Helper
     /// check, which skips that check for a multisig envelope since <see cref="Sender"/> there is the
     /// *multisig group's* address, not the individual cosigning participant's own address.
     /// </param>
-    public sealed record AlgorandTransferInfo(AlgorandTransactionKind Kind, ulong Amount, ulong AssetId, bool IsRekey, string Sender, bool IsMultisig);
+    /// <param name="IsCloseOut">
+    /// Whether this transaction carries a non-empty <c>close</c> (payment) or <c>aclose</c> (asset transfer)
+    /// field - i.e. it would sweep the sender's *entire remaining* ALGO balance, or entire remaining holding
+    /// of the transferred asset, to the named address, on top of (or instead of) <see cref="Amount"/>. The
+    /// swept amount is not knowable from the transaction bytes alone (it depends on the account's live
+    /// balance at execution time), so unlike a payment/asset-transfer's own <see cref="Amount"/> it can never
+    /// be priced - see <c>WalletController.SignTransactionGroup</c>, which rejects any such transaction
+    /// outright rather than pricing it at whatever <see cref="Amount"/> happens to be (audit finding H-01/R-024).
+    /// </param>
+    public sealed record AlgorandTransferInfo(AlgorandTransactionKind Kind, ulong Amount, ulong AssetId, bool IsRekey, string Sender, bool IsMultisig, bool IsCloseOut);
 
     /// <summary>
     /// Determines whether a raw Algorand transaction (msgpack-encoded, as accepted by
@@ -72,6 +81,8 @@ namespace BiatecOIDC.Helper
         private const string RekeyKey = "rekey";
         private const string SenderKey = "snd";
         private const string MultisigKey = "msig";
+        private const string PaymentCloseKey = "close";
+        private const string AssetTransferCloseKey = "aclose";
 
         private static readonly MessagePackSerializerOptions MapOptions =
             MessagePackSerializerOptions.Standard.WithResolver(ContractlessStandardResolver.Instance);
@@ -119,13 +130,24 @@ namespace BiatecOIDC.Helper
             var isRekey = map.TryGetValue(RekeyKey, out var rekeyObj) && rekeyObj is byte[] { Length: > 0 };
             var sender = ReadAddress(map, SenderKey);
 
+            // "close"/"aclose" sweep the sender's *entire remaining* balance/holding to the named address,
+            // independent of (and possibly in addition to) "amt"/"aamt" - see AlgorandTransferInfo.IsCloseOut's
+            // remarks. Read generically (any non-empty 32-byte address field), not conditioned on "type", for
+            // the same defense-in-depth reason "rekey" is read unconditionally: a future transaction type
+            // could add a similarly-shaped field this code doesn't yet know the name of, and a caller-supplied
+            // payload should never be trusted to only carry the fields its own "type" nominally implies.
+            var isCloseOut = HasNonEmptyAddress(map, PaymentCloseKey) || HasNonEmptyAddress(map, AssetTransferCloseKey);
+
             return type switch
             {
-                PaymentType => new AlgorandTransferInfo(AlgorandTransactionKind.Payment, ReadUInt64(map, PaymentAmountKey), 0, isRekey, sender, isMultisig),
-                AssetTransferType => new AlgorandTransferInfo(AlgorandTransactionKind.AssetTransfer, ReadUInt64(map, AssetTransferAmountKey), ReadUInt64(map, AssetTransferAssetIdKey), isRekey, sender, isMultisig),
-                _ => new AlgorandTransferInfo(AlgorandTransactionKind.Other, 0, 0, isRekey, sender, isMultisig)
+                PaymentType => new AlgorandTransferInfo(AlgorandTransactionKind.Payment, ReadUInt64(map, PaymentAmountKey), 0, isRekey, sender, isMultisig, isCloseOut),
+                AssetTransferType => new AlgorandTransferInfo(AlgorandTransactionKind.AssetTransfer, ReadUInt64(map, AssetTransferAmountKey), ReadUInt64(map, AssetTransferAssetIdKey), isRekey, sender, isMultisig, isCloseOut),
+                _ => new AlgorandTransferInfo(AlgorandTransactionKind.Other, 0, 0, isRekey, sender, isMultisig, isCloseOut)
             };
         }
+
+        private static bool HasNonEmptyAddress(Dictionary<object, object> map, string key) =>
+            map.TryGetValue(key, out var value) && value is byte[] { Length: > 0 };
 
         /// <summary>Reads a 32-byte address field and base32-encodes it, or <c>""</c> if the key is absent.</summary>
         private static string ReadAddress(Dictionary<object, object> map, string key)

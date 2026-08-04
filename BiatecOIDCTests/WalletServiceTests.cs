@@ -40,6 +40,16 @@ namespace BiatecOIDCTests
                 .Setup(r => r.ResolveSeedAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()))
                 .ReturnsAsync(ResolvedAddress);
 
+            // WalletService independently derives the signer's own Bitcoin/Bitcoin Cash address to decide
+            // which output is change, rather than trusting the caller's own IsChange flag (audit finding
+            // H-02/R-025) - BuildBitcoinTransaction's change output is always "bc1qsender".
+            _mockAccountRepository
+                .Setup(r => r.DeriveBitcoinAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<string?>()))
+                .ReturnsAsync("bc1qsender");
+            _mockAccountRepository
+                .Setup(r => r.DeriveBitcoinCashAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<string?>()))
+                .ReturnsAsync("bc1qsender");
+
             _mockDriveService
                 .Setup(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
                 .ReturnsAsync((string _, byte[] tx, string _, string? _, string? _, int _) => tx.Reverse().ToArray());
@@ -379,6 +389,64 @@ namespace BiatecOIDCTests
         {
             Assert.ThrowsAsync<ArgumentException>(
                 async () => await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, new BitcoinUnsignedTransaction(), null));
+        }
+
+        [Test]
+        public async Task SignBitcoinTransactionGroupAsync_CallerClaimsOwnPayoutIsChange_StillPricesItAsSpend()
+        {
+            // Audit finding H-02/R-025: the caller's own IsChange flag must never be trusted for valuation -
+            // this output pays a third-party address but is falsely marked IsChange = true; the service must
+            // independently derive the signer's own address ("bc1qsender", mocked in SetUp) and price this as
+            // a spend anyway, rather than the caller being able to zero out the valuation for free.
+            var tx = new BitcoinUnsignedTransaction
+            {
+                Inputs = { new BitcoinUtxoInput { TxId = new string('a', 64), Vout = 0, AmountSatoshis = 500_200 } },
+                Outputs = { new BitcoinTransactionOutput { Address = "bc1qattacker", AmountSatoshis = 500_000, IsChange = true } }
+            };
+            _mockBitcoinValuationService
+                .Setup(v => v.GetUsdValueAsync(BitcoinChainFamily.Bitcoin, 500_000, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(25_000m);
+
+            await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, tx, null);
+
+            _mockBitcoinValuationService.Verify(v => v.GetUsdValueAsync(BitcoinChainFamily.Bitcoin, 500_000, It.IsAny<CancellationToken>()), Times.Once);
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 25_000m, ResolvedAddress, 0, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task SignBitcoinTransactionGroupAsync_OutputActuallyPayingSignersOwnAddress_IsTreatedAsChangeRegardlessOfFlag()
+        {
+            // The flip side of the fix above: an output that genuinely pays the signer's own derived address
+            // ("bc1qsender") is excluded from valuation even if IsChange is left false - the server's own
+            // determination is authoritative either way, not just when it disagrees with the caller.
+            var tx = new BitcoinUnsignedTransaction
+            {
+                Inputs = { new BitcoinUtxoInput { TxId = new string('a', 64), Vout = 0, AmountSatoshis = 500_200 } },
+                Outputs = { new BitcoinTransactionOutput { Address = "bc1qsender", AmountSatoshis = 500_000, IsChange = false } }
+            };
+
+            await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, tx, null);
+
+            _mockBitcoinValuationService.Verify(v => v.GetUsdValueAsync(It.IsAny<BitcoinChainFamily>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public void SignBitcoinTransactionGroupAsync_ImpliedFeeFarExceedsSpend_ThrowsFormatExceptionAndNeverSigns()
+        {
+            // Audit finding H-02/R-025: sum(Inputs) - sum(Outputs) is the implicit miner fee - a caller
+            // supplying far more input value than any output accounts for would otherwise burn the
+            // difference to fee, priced at zero since it never appears as an output at all.
+            var tx = new BitcoinUnsignedTransaction
+            {
+                Inputs = { new BitcoinUtxoInput { TxId = new string('a', 64), Vout = 0, AmountSatoshis = 10_000_000 } },
+                Outputs = { new BitcoinTransactionOutput { Address = "bc1qreceiver", AmountSatoshis = 1_000 } }
+            };
+
+            Assert.ThrowsAsync<FormatException>(
+                async () => await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, tx, null));
+
+            _mockDriveService.Verify(d => d.SignBitcoinTransactionAsync(It.IsAny<string>(), It.IsAny<BitcoinChainFamily>(), It.IsAny<BitcoinUnsignedTransaction>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
     }
 }
