@@ -15,12 +15,17 @@ namespace BiatecMCP.MCP
     /// <summary>
     /// MCP tools exposed to AI assistants: read the caller's Algorand address(es), build unsigned
     /// transaction proposals, sign them via BiatecOIDC, and broadcast them - as three separate, chainable
-    /// steps (<c>create*</c> → <c>signTransaction</c> → <c>executeAlgorandTransaction</c>) rather than one
+    /// steps (<c>create*</c> → <c>signTransaction</c> → <c>executeTransaction</c>) rather than one
     /// monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     /// combined as part of a multisig proposal before it's ever broadcast. This class never touches key
     /// material - every signing operation is a bearer-token-forwarding HTTP call to BiatecOIDC's
-    /// <c>POST /wallet/sign</c>, which does the actual signing (and enforces the caller's spending limit and
-    /// <c>rekey</c>-claim requirement) on the caller's behalf. See <c>CLAUDE.md</c>'s BiatecMCP architecture
+    /// <c>POST /wallet/{network}/{address}/sign</c>, which does the actual signing (and enforces the caller's
+    /// spending limit and <c>rekey</c>-claim requirement) on the caller's behalf. The MCP server's own
+    /// <c>ServerInstructions</c> (see <c>Program.cs</c>) restate this build→sign→execute chain to every
+    /// connected client up front, and explicitly forbid writing custom code or calling a blockchain API
+    /// directly - added after an observed real failure where a weaker connected agent, having missed
+    /// <c>executeTransaction</c>, fell back to a hand-written Python script that submitted an already-signed
+    /// transaction straight to a third-party node instead. See <c>CLAUDE.md</c>'s BiatecMCP architecture
     /// notes for the full request flow.
     /// </summary>
     [McpServerToolType]
@@ -1112,7 +1117,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "signTransaction"),
-         Description("Signs one or more unsigned transactions via BiatecOIDC, as 'address' on 'network' - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash are all supported. For AVM, each transaction is from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope (base64-encoded msgpack). For EVM (no create* tool builds these yet), each transaction is base64-encoded UTF-8 JSON with fields chainId/nonce/to/value/data/gasLimit plus either gasPrice (legacy) or maxFeePerGas+maxPriorityFeePerGas (EIP-1559) - all numeric fields as decimal or 0x-prefixed hex strings. For Bitcoin/Bitcoin Cash, pass exactly one transaction - the UnsignedTransaction from createBitcoinTransaction. Requires the 'sign' scope. 'address' must be the same address the create* tool (or getCryptoAddress/listAlgorandAddresses) returned as the sender - use getAddressInfo/activateCryptoAddress first if it's not the signed-in account's own default address. Pass the result to executeTransaction (same 'network') to broadcast, or to mergeMultisigTransactions first if this was a multisig envelope. 'network' must be the exact same network code the transaction was built for - see listSupportedNetworks for the full list.")]
+         Description("Signs unsigned transaction(s) as 'address' on 'network'. This does NOT broadcast anything - signing alone has no effect on the blockchain. After this call succeeds, ALWAYS call executeTransaction next (same 'network') to actually broadcast the result - unless this was a createMultisigTransaction envelope, in which case call mergeMultisigTransactions first instead. Requires the 'sign' scope. Supports Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash. For AVM, each transaction is from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope (base64-encoded msgpack). For EVM (no create* tool builds these yet), each transaction is base64-encoded UTF-8 JSON with fields chainId/nonce/to/value/data/gasLimit plus either gasPrice (legacy) or maxFeePerGas+maxPriorityFeePerGas (EIP-1559) - all numeric fields as decimal or 0x-prefixed hex strings. For Bitcoin/Bitcoin Cash, pass exactly one transaction - the UnsignedTransaction from createBitcoinTransaction. 'address' must be the same address the create* tool (or getCryptoAddress/listAlgorandAddresses) returned as the sender - use getAddressInfo/activateCryptoAddress first if it's not the signed-in account's own default address. 'network' must be the exact same network code the transaction was built for - see listSupportedNetworks for the full list.")]
         public async Task<SignTransactionResponse> SignTransaction(
             [Description("Unsigned transaction(s) - base64-encoded msgpack for an AVM network, or base64-encoded UTF-8 JSON for an EVM one (see this tool's own description for the JSON shape).")] List<string> unsignedTransactions,
             [Description("Which network 'address' belongs to - the exact code from listSupportedNetworks (e.g. 'algorand-mainnet', 'bitcoin').")] string network,

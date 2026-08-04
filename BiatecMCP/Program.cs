@@ -172,7 +172,28 @@ namespace BiatecMCP
             builder.Services.AddScoped<IPublicBitcoinDataSource>(sp => sp.GetRequiredService<BlockchairDataSource>());
 
             // Configure MCP Server
-            builder.Services.AddMcpServer()
+            builder.Services.AddMcpServer(options =>
+                {
+                    // Surfaced to every connected client at session start (part of the MCP `initialize`
+                    // response) - unlike a single tool's own [Description], this is guaranteed to be in the
+                    // agent's context for the whole session, not just while it's looking at one tool. Exists
+                    // specifically to stop two real observed failure modes: (1) an agent stalling after
+                    // signTransaction and never finding executeTransaction (it kept re-calling the create*
+                    // tool instead), eventually giving up and shelling out to a local Python script that
+                    // hand-built an algod client and broadcast the signed transaction to a third-party node
+                    // - bypassing this server, and this account's own controls, entirely; (2) an agent
+                    // guessing at `network` values instead of calling listSupportedNetworks. Deliberately
+                    // short and imperative - a wall of text is exactly what got missed before.
+                    options.ServerInstructions =
+                        "Every wallet transfer is exactly 3 tool calls in order: 1) a create* tool (build), " +
+                        "2) signTransaction (sign), 3) executeTransaction (broadcast to the real blockchain). " +
+                        "executeTransaction is the ONLY broadcast step - always call it last, every time, even " +
+                        "if it is not the most recently mentioned tool. Never skip it, never substitute a " +
+                        "create* tool call for it, and never write your own code or call any blockchain API " +
+                        "directly - only these tools ever touch key material or submit transactions. " +
+                        "'network' must be an exact code from listSupportedNetworks (e.g. 'algorand-mainnet', " +
+                        "'algorand-testnet') - call it first if unsure, never guess.";
+                })
                 .WithHttpTransport(options =>
                 {
                     options.Stateless = true;
