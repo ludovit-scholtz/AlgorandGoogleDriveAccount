@@ -58,7 +58,280 @@ carried. All 377 existing automated tests (107 in `BiatecMCPTests`, 270 in `Biat
 remediation pass; no new regression tests were added for the new checks themselves (see individual entries for
 what a future audit should specifically verify).
 
+**2026-08-04 fourth audit note:** A fourth engagement
+([audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md),
+signature `claude-code-ai-review-4`, same reviewing party/method and the same non-independence caveat as the
+first three — see that report's §1.2) reviewed the ~23,700 lines added since the third audit (`69d410c..34459ac`):
+EVM transaction signing, Bitcoin/Bitcoin Cash support, the address-centric wallet API and address-activation
+registry, multisig cosigning tools, the strict network-code resolver, the Aramid bridge integration, and a
+test-only mock identity/storage provider. It prioritized the *value-moving* surface — transaction inspection
+and spending-limit enforcement across all four chain families now supported — over breadth (see that report's
+§1.5 for what was **not** covered).
+
+Its central conclusion: **the daily/weekly/monthly spending limit, the only control bounding what a
+legitimately-authorized but hostile or compromised relying party can take, does not hold across most of the
+newly-supported surface.** Two High findings (R-024, an Algorand `close-remainder-to` sweep priced at zero —
+proof-of-concept executed; R-025, a Bitcoin-family bypass via a caller-supplied `isChange` flag) and three
+Medium findings (R-026 EVM entirely unmetered, R-027 non-mainnet AVM chains skipped, R-028 application calls
+unpriced) are all instances of the same shape: a value-moving construct the valuation code never reads. Two
+further findings concern the address-activation registry (R-029) and a configuration-gated authentication
+bypass shipping in the production artifact (R-030). No finding permits key exfiltration or identity forgery,
+and the core self-custody guarantee was found intact — verdict "pass with findings".
+
+The audit also re-verified every item the third audit and the 2026-08-02 remediation pass touched, against
+the code rather than against the remediation pass's own description: R-020, R-018, R-019/R-023 and R-022 were
+all confirmed genuinely fixed; R-021's fix was confirmed for the seed vault but found **not** to extend to
+`AddressActivationService` (tracked as R-029, not by re-opening R-021 — the precedent set for R-011/R-018 by
+the second audit). R-013 is unchanged. Test baseline at time of audit: 700 tests passing (405 + 295), zero
+vulnerable dependencies.
+
 ## Open risks
+
+### R-024 — Spending limit completely bypassed by a `close-remainder-to` payment (Algorand mainnet)
+
+- **Description:** `AlgorandTransactionInspector.Inspect` values a payment by reading exactly one wire field,
+  `amt`. Algorand payments carry a second, independent value-moving field, `close` (`CloseRemainderTo`), which
+  transfers the sender's **entire remaining balance** to a named address; `amt` may be zero. The inspector never
+  reads it, so `WalletService` prices such a transaction at $0.00, the `if (totalUsd > 0m)` guard skips
+  `EnsureWithinLimitsAsync` entirely, no ledger entry is written, and the transaction is signed. Neither adjacent
+  control helps: the `sender_mismatch` check passes (the sender genuinely is the user's own address) and the
+  `rekey` claim gate does not fire (`close` is not `rekey`). The endpoint accepts caller-supplied base64 msgpack
+  directly, so "our own builder never sets `close`" is not a control. **Threat actor:** any relying party holding
+  a validly-issued `sign`-scoped token that turns hostile or is compromised — precisely the adversary the
+  spending limit exists to bound. The MCP surface deliberately extends signing to third-party AI agents, widening
+  this set.
+- **Likelihood (5-year misuse probability):** 45% — reasoning: exploitation requires no privileged network
+  position, no cryptographic weakness, and no unusual protocol knowledge — one extra field on a request the API
+  already accepts. A proof of concept was executed against this commit and confirmed both halves (priced at zero;
+  the `close` field survives the decode/sign/re-encode round trip, so the returned signature is usable on-chain).
+  Close-out sweeps are a standard, well-documented Algorand feature that any competent integrator or agent knows.
+  Held below 50% only because it requires the RP itself to be hostile or compromised rather than an outside
+  attacker, and Biatec's relying-party population is currently small and largely first-party; this number should
+  rise materially as third-party integrations grow.
+- **Impact:** Total loss of the ALGO balance of any address a hostile `sign`-scoped relying party can name, in a
+  single request, regardless of the user's configured limits — and the user has been explicitly told a limit
+  applies. Because the whole balance moves in one transaction, the rolling daily/weekly/monthly windows provide no
+  partial protection either.
+- **Affected component:** `BiatecOIDC/Helper/AlgorandTransactionInspector.cs:122-127` (and the key constants at
+  :67-71); `BiatecOIDC/BusinessLogic/WalletService.cs:69-95`.
+- **Current mitigations:** None effective. The `sign` claim itself is the only gate, and it is exactly the gate
+  the threat actor legitimately holds. The asset-transfer analogue (`aclose`/`AssetCloseTo`) is **not** currently
+  exploitable, but only because the pinned `Algorand4` 4.4.1 `AssetTransferTransaction` type does not model that
+  property, so the field is dropped when `DriveService` re-encodes — an accident of the SDK's object model, not a
+  control, which would regress silently on an SDK upgrade.
+- **Recommended further mitigation:** Read the `close` key in the inspector and **fail closed** rather than trying
+  to price it (the swept amount depends on the account's live balance and is not knowable from the transaction
+  alone): surface an `IsCloseOut` flag and reject any `pay` carrying `close` unless the token holds a dedicated
+  high-privilege claim, following the `rekey` claim's precedent for permanently-destructive operations. Apply the
+  same treatment to `aclose` for defense in depth. Add regression tests for both.
+- **Status:** Open.
+- **History:**
+  - 2026-08-04 — claude-code-ai-review-4: opened at 45%, corresponds to finding H-01 in
+    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    Also records that audit's process finding (M-05, not tracked as its own entry): none of the 700 tests in the
+    suite exercises any spending-limit bypass class — the inspector's 19 test cases all ask "does it correctly
+    price what it knows about", never "what can move value without it noticing", which is why four chain families
+    were added without the gap being caught. Remediation for this entry should include negative tests per chain
+    family.
+
+### R-025 — Bitcoin/Bitcoin Cash spending limit bypassed by a caller-supplied `IsChange` flag; unbounded implicit fee
+
+- **Description:** Bitcoin-family spend value is computed as the sum of outputs where `!o.IsChange`. `IsChange`
+  is a plain boolean on the wire DTO, deserialized straight from the caller's request body; nothing verifies that
+  an output marked as change actually pays an address the signer controls. `DriveService` builds each output from
+  the caller's `Address` with no comparison against the signer's own derived address (which it has already
+  computed, and correctly uses to reconstruct the *inputs'* scriptPubKeys). A hostile caller therefore marks its
+  own payout `"isChange": true` and the whole transfer prices at $0. Independently, the implicit miner fee is
+  `sum(Inputs) − sum(Outputs)` with no upper bound, so the entire UTXO set can be burned to fee against a
+  1-satoshi output — destructive without any collusion, and capturable by a colluding miner.
+- **Likelihood (5-year misuse probability):** 30% — reasoning: the exploit shape is identical in difficulty to
+  R-024 (set one field), so the difference is exposure, not difficulty. Rated lower because Bitcoin/Bitcoin Cash
+  support is new, has never been verified against a live node or mempool (the repository's own documented
+  caveat), and therefore currently holds little real balance. This estimate should be revised sharply upward the
+  moment BTC/BCH transfers are used with real funds.
+- **Impact:** Total loss of the BTC/BCH balance of any address a hostile `sign`-scoped relying party can name,
+  regardless of configured limits; plus unbounded destructive fee burn.
+- **Affected component:** `BiatecSelfCustodyCore/Model/BitcoinUnsignedTransaction.cs:41-47`;
+  `BiatecOIDC/BusinessLogic/WalletService.cs:151`; `BiatecSelfCustodyCore/BusinessLogic/DriveService.cs:186-190`.
+- **Current mitigations:** None for either half. Note the same file makes the *correct* trust decision one field
+  over — input scriptPubKeys are deliberately reconstructed from the signer's own address rather than trusted
+  from the wire — so the pattern to follow already exists in the same method.
+- **Recommended further mitigation:** Ignore the caller's `IsChange` at the enforcement boundary entirely; derive
+  the signer's own Bitcoin/Bitcoin Cash address and treat an output as change only if its `Address` matches, with
+  everything else counted as spend. Price the implicit fee as spend, or reject a fee exceeding a sane multiple of
+  the size-estimated fee. Consider removing `IsChange` from the wire DTO altogether — a field whose only consumer
+  is a security decision, and whose value the server can compute itself, should not be caller-supplied.
+- **Status:** Open.
+- **History:**
+  - 2026-08-04 — claude-code-ai-review-4: opened at 30%, corresponds to finding H-02 in
+    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+
+### R-026 — EVM signing has no spending-limit enforcement of any kind
+
+- **Description:** `WalletService.SignEvmTransactionGroupAsync` goes straight from argument validation to signing
+  — no valuation, no limit check, no ledger entry — so a `sign`-scoped token can move unlimited native value (and
+  execute unlimited ERC-20 `transfer` calldata) on Ethereum, Gnosis, Arbitrum and Base. The gap is documented in
+  `chains.html`'s capability matrix and in the method's own remarks, but it is **not** surfaced where the user
+  configures a limit: `PUT /wallet/limits` accepts and stores a limit with no indication it does not apply to
+  half the supported chains, and `GET /wallet/limits` reports it back unqualified. A user who sets a $100/day
+  limit reasonably believes it constrains their EVM addresses.
+- **Likelihood (5-year misuse probability):** 35% — reasoning: no exploitation technique is needed at all; the
+  control simply is not there, so any hostile `sign`-scoped RP transferring EVM value is "exploiting" it by
+  default. The EVM chains supported are the most liquid of any family here, which raises attractiveness. Held
+  below R-024 because this is a known, documented gap that an attentive integrator or user could in principle
+  discover before relying on it, rather than a silent failure of a control that appears to be working.
+- **Impact:** Unlimited loss of native-token balances on four EVM chains for a hostile `sign`-scoped relying
+  party; and, more broadly, a limits API that reports protection stronger than what is actually in force.
+- **Affected component:** `BiatecOIDC/BusinessLogic/WalletService.cs:113-133`;
+  `BiatecOIDC/Controllers/WalletController.cs:271-325`.
+- **Current mitigations:** Documentation only (`chains.html` capability matrix, method remarks). No runtime
+  control.
+- **Recommended further mitigation:** Implement EVM valuation (native-token price oracle plus calldata-aware
+  ERC-20 decoding). As an immediate, cheap interim step, have both limits endpoints return an explicit
+  `enforcedOn`/`notEnforcedOn` chain list so the API stops overstating the protection in force, and document the
+  gap in the integration guide's limits section rather than only in the capability matrix.
+- **Status:** Open.
+- **History:**
+  - 2026-08-04 — claude-code-ai-review-4: opened at 35%, corresponds to finding M-01 in
+    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+
+### R-027 — Spending limits silently skipped on every AVM chain except Algorand mainnet, including real-value chains
+
+- **Description:** `WalletController.SignTransactionGroup` computes `isAlgorandMainnet` from the resolved
+  network's genesis id and passes it as `applySpendingLimits`; when false, the entire pricing/limit block in
+  `WalletService` is skipped. The rationale is sound as far as it goes — the Biatec Router prices assets only on
+  Algorand mainnet, and applying it elsewhere previously failed every transfer closed with a confusing
+  valuation error (a real reported bug this change fixed). The problem is the fallback *direction*: Voi mainnet
+  and Aramid mainnet are production chains carrying real value and are in the supported network list, so on those
+  chains a configured limit is not merely unenforceable but silently ignored, with a 200 response
+  indistinguishable from an enforced one.
+- **Likelihood (5-year misuse probability):** 20% — reasoning: same "no technique required" character as R-026,
+  but with materially smaller balances and a much smaller relying-party population on Voi/Aramid than on Algorand
+  mainnet or the EVM chains. The behavior was introduced within the audited range (commit `c5964ba`), so it has
+  had little time in production.
+- **Impact:** A hostile `sign`-scoped relying party faces no spending limit on Voi or Aramid mainnet, and the user
+  has no way to discover this from the API.
+- **Affected component:** `BiatecOIDC/Controllers/WalletController.cs:222`;
+  `BiatecOIDC/BusinessLogic/WalletService.cs:67-96`.
+- **Current mitigations:** None at runtime; documented in `CLAUDE.md` and the integration guide's AVM signing
+  section as a deliberate, known gap.
+- **Recommended further mitigation:** Distinguish "no value at risk" (testnets — safe to skip) from "value at risk
+  but unpriceable" (Voi, Aramid — should not silently skip). For the latter, either reject with a clear
+  `limits_unenforceable_on_network` error when the account has a non-zero limit configured, or require a
+  per-account opt-in acknowledging the gap. At minimum, surface the affected chains in the limits response as
+  recommended for R-026.
+- **Status:** Open.
+- **History:**
+  - 2026-08-04 — claude-code-ai-review-4: opened at 20%, corresponds to finding M-02 in
+    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+
+### R-028 — Application calls and asset-config transactions are unpriced; inner transactions escape the spending limit
+
+- **Description:** Every Algorand transaction type other than `pay`/`axfer` maps to
+  `AlgorandTransactionKind.Other` and is priced at zero. That includes `appl` (application call), which on
+  Algorand can emit **inner transactions** moving arbitrary amounts of ALGO and any ASA out of the caller's
+  account — the mechanism behind every DeFi interaction on the chain. It also includes `acfg`, which can reassign
+  an asset's clawback/manager addresses, enabling a later drain that never passes through this endpoint at all.
+  A hostile relying party does not need R-024's protocol trick if it can deploy and call its own application.
+- **Likelihood (5-year misuse probability):** 40% — reasoning: this is the most *general* of the bypasses and
+  requires no protocol subtlety whatsoever — any contract call. Rated slightly below R-024 because the framing is
+  genuinely ambiguous: many users interacting with DeFi through Biatec would consider app calls to be intended,
+  wanted behavior rather than a bypass, and unlike R-024 there is no clean fix (the value moved by an app call is
+  not knowable without simulating it), so the "misuse" boundary is fuzzier.
+- **Impact:** The spending limit does not bound the most general value-moving transaction type on the chain; a
+  user's recorded spend history is also silently wrong (app-call spends are recorded as $0 or not at all).
+- **Affected component:** `BiatecOIDC/Helper/AlgorandTransactionInspector.cs:122-127`.
+- **Current mitigations:** None. The `Other` kind is documented as "not subject to spending-limit checks", so the
+  behavior is intentional, but it is not surfaced to the user.
+- **Recommended further mitigation:** In increasing order of effort: (a) mark `Kind == Other` transactions as
+  "unpriced" in the sign response and the spend ledger, so the user's history is not silently misleading;
+  (b) require a distinct claim/scope for `appl` transactions so a user can grant "payments only"; (c) use algod's
+  `/v2/transactions/simulate` to obtain the inner-transaction set and price that — the correct long-term answer
+  and a substantial piece of work.
+- **Status:** Open.
+- **History:**
+  - 2026-08-04 — claude-code-ai-review-4: opened at 40%, corresponds to finding M-03 in
+    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+
+### R-029 — Identity-only token can force unbounded writes to the user's cloud storage; activation registry has no concurrency control
+
+- **Description:** Two related defects on `GET /wallet/address/{seedAddress}/{slot}`. **(a)** The endpoint is
+  gated as read-only (`TryAuthenticate(requiredClaim: null, …)` — any validly-authenticated caller, no `sign`,
+  no `manage-limits`) yet performs up to four sequential load-decrypt-modify-encrypt-upload cycles against the
+  user's own Drive/OneDrive, one per chain family. `slot` is an unconstrained caller-supplied `int`, and each
+  distinct slot adds four registry entries, so a client holding nothing but an `openid` token can grow
+  `AddressActivations.%AESID%.dat` without bound. Because `ResolveSignerAsync` decrypts that whole file on every
+  sign/limits/info call, an inflated registry degrades and eventually breaks every wallet operation for that
+  user — a denial of service against the user's own wallet, from the lowest-privilege token the system issues,
+  with no rate limiting anywhere in the path. **(b)** `AddressActivationService.ActivateAsync` is a bare
+  read-modify-write with no equivalent of the `SaveVaultWithConcurrencyCheckAsync` mitigation added for R-021, so
+  concurrent activations — including the four issued back-to-back by a single `GetAddress` call — can silently
+  lose an entry, after which the affected address stops resolving until re-derived.
+- **Likelihood (5-year misuse probability):** 15% — reasoning: availability-only, self-scoped (the victim is the
+  account whose own client is misbehaving), no fund loss, and it requires a hostile or buggy client the user has
+  already authorized. The concurrency half (b) is more likely to occur *accidentally* than to be exploited
+  deliberately, and its consequence is a recoverable re-activation rather than harm.
+- **Impact:** (a) Loss of availability of the wallet API for a targeted user, plus consumption of that user's own
+  cloud storage quota and possible provider-side throttling. (b) Silent loss of activation entries, causing
+  signing to fail for an externally-rekeyed address until it is activated again.
+- **Affected component:** `BiatecOIDC/Controllers/WalletController.cs:606-677`;
+  `BiatecOIDC/BusinessLogic/AddressActivationService.cs:53-77`.
+- **Current mitigations:** None. R-021's concurrency fix covers the seed vault only and does not extend to this
+  file.
+- **Recommended further mitigation:** Bound `slot` to a sane range (the ARC-76 use case does not need 2³¹ slots);
+  cap the registry's entry count; add per-user rate limiting on the derive endpoint; consider requiring a
+  write-capable claim for an endpoint that writes. Apply the same baseline-bytes concurrency check
+  `SaveVaultWithConcurrencyCheckAsync` uses, or batch one `GetAddress` call's four activations into a single
+  load/save.
+- **Status:** Open.
+- **History:**
+  - 2026-08-04 — claude-code-ai-review-4: opened at 15%, corresponds to finding M-04 in
+    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    Opened as a new entry rather than by re-opening R-021, even though (b) is the same defect class in a
+    different file — following the precedent the second audit set for R-011/R-018.
+
+### R-030 — A configuration-gated authentication bypass ships in the production artifact (mock identity/storage provider)
+
+- **Description:** `JwtIssuerController.MockSignIn` is `[AllowAnonymous]`, takes no credential, and signs the
+  browser into a full cookie session as a configured synthetic identity, then hands off to the real
+  `AuthorizeCallback` — so the resulting OIDC code and access token are indistinguishable from a genuine
+  sign-in. `MockCloudStorageProvider.IsConfigured` returns `true` unconditionally, and the corresponding seed
+  vaults are created from **mnemonics stored in plaintext configuration** (`CloudServices:Mock:Accounts[].Mnemonic`).
+  The only gate is configuration: the provider is registered solely when `CloudServices:Mock:Enabled` is true and
+  at least one account is configured, and the picker hides the button unless `/authorize` named a configured
+  `scopeId`. That gating is well built, and this audit verified no committed configuration enables it
+  (`appsettings.json` ships `"Enabled": false` with an empty list; no `k8s/main/*` or `k8s/stage/*` manifest
+  mentions `Mock`). The residual risk is the shape itself: a complete authentication bypass exists in the shipped
+  production artifact, one environment variable away from being live, with total blast radius over the configured
+  identities. **Threat actor:** an operator misconfiguring stage/production, an attacker with ConfigMap/Secret
+  write access, or an engineer enabling it to debug an incident and forgetting to remove it.
+- **Likelihood (5-year misuse probability):** 8% — reasoning: correctly gated today, not enabled anywhere
+  committed, blast radius limited to synthetic test identities rather than real users' vaults, and enabling it
+  requires an action (a config change) that is itself visible in review. Non-zero because "debug/test bypass
+  accidentally enabled in production" has a poor industry track record over multi-year horizons, because stage
+  and production share a deployment pipeline and manifest structure, and because the same repository already
+  found it necessary to add a startup fail-fast for exactly the analogous "dangerous placeholder value left
+  configured" scenario (R-019/R-023).
+- **Impact:** If ever enabled in a production or stage deployment, anyone who can reach `/authorize` obtains full
+  wallet access — including `sign`-scoped tokens — to the configured mock identities' vaults. Does not grant
+  access to real users' vaults, since those are bound to real provider identities and separate storage.
+- **Affected component:** `BiatecOIDC/Controllers/JwtIssuerController.cs:804-836` (and the picker/fast-track paths
+  at :260-296, :695-711, :738-790); `BiatecSelfCustodyCore/Providers/MockCloudStorageProvider.cs`;
+  `BiatecSelfCustodyCore/Providers/MockCloudStorage.cs`; `BiatecOIDC/Program.cs:96-102,155-159,397-421`;
+  `BiatecOIDC/MOCK_TESTING.md`.
+- **Current mitigations:** Disabled by default and not enabled in any committed configuration; requires both an
+  `Enabled` flag and at least one configured account before the provider is registered at all; hidden from the
+  default provider picker unless the authorize request explicitly named a configured mock `scopeId`; documented
+  as internal-only and deliberately not linked from public integration docs.
+- **Recommended further mitigation:** Apply the R-019/R-023 precedent — fail fast at startup if
+  `CloudServices:Mock:Enabled` is true while `IHostEnvironment` is not `Development`, making the bypass
+  structurally unreachable in production rather than merely off by default. Alternatively compile the mock
+  provider and its controller actions out of Release builds.
+- **Status:** Open.
+- **History:**
+  - 2026-08-04 — claude-code-ai-review-4: opened at 8%, corresponds to finding L-01 in
+    [audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md](audit-report-2026-04-08-34459ac-claude-code-ai-review-4.md).
+    The mock provider is new since the third audit; this is the first audit to review it.
 
 ### R-013 — CI/CD pipeline has no in-workflow deployment gate; `k8s/main/conf` contents unverified
 
@@ -106,6 +379,13 @@ what a future audit should specifically verify).
     replaced by a stage-only auto-deploy plus a manually-gated production promotion, an unprompted architectural
     improvement made independently of any audit recommendation. Not closed outright since GitHub
     branch-protection settings remain unverified and a manual promotion step is still a human trust boundary.
+  - 2026-08-04 — claude-code-ai-review-4: likelihood left unchanged at 5%. Neither workflow file changed in the
+    `69d410c..34459ac` range, and GitHub branch-protection settings and `promote-production.yml`'s trigger
+    permissions remain unverifiable from repository content alone — the same standing manual follow-up this
+    entry has carried since the first audit. `k8s/main/conf-*` was re-inspected this pass and its remaining
+    committed key material is now unmistakable all-zero placeholder text with a startup fail-fast behind it
+    (see R-019/R-023), so the "contents unverified" half of this entry's original concern is materially
+    narrower than when it was opened.
 
 ## Closed risks
 
@@ -481,6 +761,13 @@ no corresponding registry entry.)_
     asserts on this behavior (no test previously asserted on the raw message content either, so no regression
     risk) — a future audit should confirm this by triggering an unexpected exception in each of the three tools
     and checking the response no longer contains `.NET`-internal exception text.
+  - 2026-08-04 — claude-code-ai-review-4: closure confirmed against the current, substantially larger tool
+    surface (20 tools in `BiatecMCP/MCP/BiatecMCP.cs`, up from the three this entry was opened against). Every
+    generic `catch (Exception ex)` block routes through `SanitizeForToolResponse(ex, nameof(...))`; the
+    remaining direct uses of `ex.Message` are confined to typed, caller-facing exceptions
+    (`WalletApiException`, argument/format validation) whose messages are authored text, not internal detail.
+    Status unchanged (Closed). The suggested trigger-an-unexpected-exception verification was still done by
+    reading, not by execution.
 
 ### R-019 — Committed `k8s/main/conf/appsettings.json` contains AES key/IV material of unconfirmed live status
 
@@ -582,6 +869,16 @@ no corresponding registry entry.)_
     integration test instantiating `CloudAccountRepository`/`ProviderAccessTokenProtector` under a
     `Production`/`Staging` `IHostEnvironment` with the placeholder configured — no such test was added by this
     pass), and should still pursue the outstanding out-of-band verification against the live `Secret`.
+  - 2026-08-04 — claude-code-ai-review-4: mitigation independently re-verified in code and configuration, and
+    **confirmed genuine**. `k8s/main/conf-oidc/appsettings.json` and `k8s/main/conf-mcp/appsettings.json` now
+    carry only the unmistakable all-zero placeholder, and `AesKeyRingResolver.EnsureActiveKeyIsNotKnownPlaceholder`
+    rejects both that value and the two historical real-looking ones. Confirmed the check is invoked for **both**
+    key rings — `CloudAccountRepository.cs:56` (`AesOptions`) and `ProviderAccessTokenProtector.cs:53`
+    (`ProviderTokenProtection`, see R-023) — and only inside the `!environment.IsDevelopment()` guard, so local
+    development is unaffected. Status and likelihood left unchanged at Mitigated/20%: recommendation (1),
+    out-of-band confirmation of whether the previously-committed value was ever live in production, remains
+    outstanding and is still the only thing standing between this entry and closure. The non-Development
+    fail-fast integration test the previous history line recommended still does not exist.
 
 ### R-020 — Vault-backup OAuth flow has no CSRF binding to the browser session completing consent
 
@@ -654,6 +951,13 @@ no corresponding registry entry.)_
     controller-level test asserting a mismatched/absent ambient session is refused before any redirect to the
     target provider, and should re-attempt the exact H-01 reproduction steps from the third audit's report to
     confirm the attack no longer succeeds.
+  - 2026-08-04 — claude-code-ai-review-4: fix re-verified in code and **confirmed genuine** — both `Authorize`
+    and `Callback` call `EnsureBrowserOwnsBackup`, which requires the ambient cookie session to belong to the
+    same account as the pending backup, which is indeed the property this attack needed and which a same-browser
+    anti-CSRF token would not have provided. Status and likelihood left unchanged at Mitigated/15%: the
+    verification was static only (the third audit's reproduction steps were not re-attempted dynamically — no
+    running deployment was in scope, see this audit's §1.2), and the recommended `VaultBackupControllerTests.cs`
+    still does not exist.
 
 ### R-021 — No optimistic-concurrency control on seed-vault writes; concurrent mutations can silently lose a seed creation or a primary-seed switch
 
@@ -713,6 +1017,15 @@ no corresponding registry entry.)_
     changed-underlying-file causes `VaultConcurrencyConflictException`/409) — a future audit should add one and
     should evaluate whether a native provider-side conditional write is worth the added complexity given the
     residual TOCTOU window this fix does not eliminate.
+  - 2026-08-04 — claude-code-ai-review-4: fix re-verified against the code (not against the remediation pass's
+    own description of itself) and **confirmed genuine** for the seed vault —
+    `SaveVaultWithConcurrencyCheckAsync` is present and used by `CreateSeedAsync`, `SwitchPrimarySeedAsync`,
+    `SeedTestVaultAsync`, and the first-seed branch of `LoadVaultEnsuringAtLeastOneSeedAsync`, surfacing
+    `409 vault_concurrency_conflict`. Status and likelihood left unchanged (still Mitigated, not Closed, for the
+    best-effort/TOCTOU reason already recorded). **However**, the identical defect exists unfixed in
+    `AddressActivationService.ActivateAsync` — a file added after this fix was written and not covered by it —
+    tracked as **R-029** rather than by re-opening this entry, following the R-011/R-018 precedent. The
+    conflict-path regression test the previous history line recommended still does not exist.
 
 ### R-022 — Known moderate-severity advisory (GHSA-59j7-ghrg-fj52) in pinned `Microsoft.IdentityModel.*`/`System.IdentityModel.Tokens.Jwt` 5.5.0 packages
 
@@ -751,6 +1064,13 @@ no corresponding registry entry.)_
     by `Google.Apis.Auth`/`Google.Apis.Auth.AspNetCore3` 1.75.0. Confirmed via `dotnet build Biatec.slnx`: the
     `NU1902` advisory warnings for `GHSA-59j7-ghrg-fj52` are no longer emitted anywhere in the solution, and all
     377 existing tests (107 + 270) still pass, evidencing no breaking API changes from the version bump.
+  - 2026-08-04 — claude-code-ai-review-4: closure independently confirmed. All four packages are pinned at
+    `8.21.0` across `BiatecOIDC.csproj`/`BiatecSelfCustodyCore.csproj`, and
+    `dotnet list Biatec.slnx package --vulnerable --include-transitive` reports **no** vulnerable packages,
+    direct or transitive — the first time this registry records an actual vulnerability-scanner result rather
+    than the absence of `NU1902` build warnings. Status unchanged (Closed). The recurring-CI-scan half of this
+    entry's recommended mitigation is still not implemented: there is no automated dependency-scan job in either
+    workflow, so the next advisory will again depend on an auditor noticing.
 
 ### R-023 — Committed `ProviderTokenProtection` key/IV of unconfirmed live status (paired with R-019)
 
@@ -801,6 +1121,13 @@ no corresponding registry entry.)_
     perform, which is why this is Mitigated rather than Closed; likelihood is left unchanged at 20% for the same
     reason. See R-019's 2026-08-02 history entry for the full mechanism (identical for both key rings) and the
     same outstanding future-audit verification recommendation (a non-Development fail-fast integration test).
+  - 2026-08-04 — claude-code-ai-review-4: mitigation independently re-verified and **confirmed genuine** for
+    this key ring specifically — `ProviderAccessTokenProtector.cs:53` calls
+    `AesKeyRingResolver.EnsureActiveKeyIsNotKnownPlaceholder(activeKey, "ProviderTokenProtection")` inside the
+    existing `!IsDevelopment()` guard, so a deployment missing this secret's override now fails startup rather
+    than silently protecting cached provider tokens under the publicly-committed key. Status and likelihood
+    unchanged at Mitigated/20% for the same reason as R-019: the out-of-band question of whether the previously
+    committed value was ever live in production remains unanswerable from repository content.
 
 ## Accepted / unmitigable risks
 
