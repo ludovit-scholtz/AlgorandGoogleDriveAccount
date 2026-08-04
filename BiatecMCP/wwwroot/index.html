@@ -974,6 +974,27 @@ Authentication: OAuth</pre>
     </div>
 
     <script>
+        // This page is served as-is from mcp.biatec.io AND stage.mcp.biatec.io (same static file, no
+        // server-side templating) - the setup instructions below are authored against the production
+        // hostname, so on stage they'd otherwise show a URL that doesn't route to this deployment at all.
+        // Rewrite every "mcp.biatec.io" text occurrence to the canonical host for whichever host actually
+        // served this page (stage.mcp.biatec.io on stage, unchanged on production/legacy aliases).
+        (function rewriteCanonicalHost() {
+            var canonicalHost = window.location.hostname.indexOf('stage.') === 0
+                ? 'stage.mcp.biatec.io'
+                : 'mcp.biatec.io';
+            if (canonicalHost === 'mcp.biatec.io') {
+                return;
+            }
+            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            var node;
+            while ((node = walker.nextNode())) {
+                if (node.nodeValue.indexOf('mcp.biatec.io') !== -1) {
+                    node.nodeValue = node.nodeValue.split('mcp.biatec.io').join(canonicalHost);
+                }
+            }
+        })();
+
         function showTab(tab) {
             document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
