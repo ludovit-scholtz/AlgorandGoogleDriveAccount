@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using BiatecOIDC.HealthChecks;
 using BiatecOIDC.Model;
 using BiatecOIDC.Swagger;
 using BiatecSelfCustodyCore.BusinessLogic;
@@ -253,6 +254,12 @@ namespace BiatecOIDC
             builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ =>
                 StackExchange.Redis.ConnectionMultiplexer.Connect(redisConfig.ConnectionString));
 
+            // GET /health - see HealthCheckResponseWriter for the JSON shape a status page/uptime monitor
+            // polls. Redis is this service's one hard dependency worth reporting (Google/Microsoft/router/
+            // exchange-rate calls are all per-request and already surface their own errors to the caller).
+            builder.Services.AddHealthChecks()
+                .AddCheck<RedisHealthCheck>("redis");
+
             var authenticationBuilder = builder.Services
                 .AddAuthentication(options =>
                 {
@@ -467,6 +474,11 @@ namespace BiatecOIDC
             app.UseRateLimiter();
 
             app.MapControllers();
+
+            app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+            {
+                ResponseWriter = HealthCheckResponseWriter.WriteAsync
+            }).AllowAnonymous();
 
             app.MapGet("/", async context =>
             {

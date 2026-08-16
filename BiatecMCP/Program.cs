@@ -1,4 +1,5 @@
 using BiatecMCP.BusinessLogic;
+using BiatecMCP.HealthChecks;
 using BiatecMCP.Model;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
@@ -125,6 +126,16 @@ namespace BiatecMCP
                 client.BaseAddress = new Uri(oidcConfig.Issuer.TrimEnd('/') + "/");
             });
 
+            // GET /health - see HealthCheckResponseWriter for the JSON shape a status page/uptime monitor
+            // polls. BiatecMCP has no Redis/database of its own (see CLAUDE.md's "MCP server" note), so
+            // BiatecOIDC's discovery document being reachable is the one dependency worth reporting here.
+            builder.Services.AddHttpClient(nameof(OidcIssuerHealthCheck), client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(5);
+            });
+            builder.Services.AddHealthChecks()
+                .AddCheck<OidcIssuerHealthCheck>("oidc-issuer");
+
             // DEX aggregator quote providers for createSwapTransaction - BiatecRouterQuoteProvider is the
             // only one that can also build a real unsigned swap transaction (see its remarks);
             // FolksRouterQuoteProvider/HaystackRouterQuoteProvider are quote-only. Registered individually
@@ -238,6 +249,11 @@ namespace BiatecMCP
             app.UseAuthorization();
 
             app.MapMcp("/tools").RequireAuthorization();
+
+            app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+            {
+                ResponseWriter = HealthCheckResponseWriter.WriteAsync
+            }).AllowAnonymous();
 
             // Map default route to index.html
             app.MapGet("/", async context =>

@@ -367,6 +367,14 @@ Both deployments reuse the same secrets (`google-account-main-app-secret` for ap
 ones. Config is split per-service: `k8s/main/conf-mcp/` / `biatec-mcp-conf` and `k8s/main/conf-oidc/` /
 `biatec-oidc-conf`.
 
+`k8s/main/deployment-mcp.yaml`/`deployment-oidc.yaml`'s own `readinessProbe`/`livenessProbe` still use a plain
+`tcpSocket` check on port 5443, not `GET /health` — that's deliberate, not an oversight: a k8s liveness/readiness
+probe restarting/pulling a pod out of rotation just because BiatecOIDC's Redis (or, for BiatecMCP, BiatecOIDC
+itself) is temporarily unreachable would compound an already-degraded dependency into an outage of the healthy
+service too. `GET /health` (see "Health checks" below) is meant for an external status page/uptime monitor to
+poll instead, where a human decides what a reported `Unhealthy` dependency means, not for the kubelet to act on
+unattended.
+
 ## Stage environment
 
 `k8s/stage/` mirrors `k8s/main/` for both services, at `stage.google.biatec.io` / `stage.mcp.biatec.io` /
@@ -1063,6 +1071,22 @@ setup stage needs.
   `InvalidOperationException`, same precedent as `JwtIssuerService.LoadOrCreateSigningKey`) outside `Development`
   if the dedicated key is missing/invalid — a misconfigured key means the wallet API can't function at all, so
   that's surfaced immediately rather than as a wall of unexplained 401s.
+- **Health checks**: both services expose an anonymous `GET /health`, built on the framework's own
+  `Microsoft.Extensions.Diagnostics.HealthChecks` (`AddHealthChecks()`/`MapHealthChecks`, no third-party NuGet
+  package) with a custom `HealthCheckResponseWriter` (`HealthChecks/` in each project) rendering the result as
+  JSON — `{status, service, totalDurationMs, checks: [{name, status, description, durationMs}]}` — the shape an
+  external status page/uptime monitor can poll directly, since the framework's own default response body is just
+  a bare status-name string with no per-check detail. Each service reports on its own one real
+  dependency: `BiatecOIDC`'s `RedisHealthCheck` (`BiatecOIDC/HealthChecks/`) pings Redis (the OIDC code/token
+  store) via the existing `IConnectionMultiplexer`; `BiatecMCP`'s `OidcIssuerHealthCheck`
+  (`BiatecMCP/HealthChecks/`) fetches BiatecOIDC's own `/.well-known/openid-configuration` over a short-timeout
+  (5s) typed `HttpClient`, since BiatecMCP holds no key material or session state of its own and every tool call
+  ultimately depends on BiatecOIDC being reachable (see the "MCP server" note above) — a separate,
+  independently-implemented pair of files in each project, per this repo's no-compile-time-coupling rule, same as
+  `AlgorandChainRegistry`/`NetworkResolver`. `MapHealthChecks(...).AllowAnonymous()` is explicit (matching
+  `ChainsController`'s `[AllowAnonymous]` precedent) even though no global authorization fallback policy is
+  configured in either app, so it would already be anonymous by default. See "Kubernetes / ingress routing"
+  above for why this is *not* wired into either deployment's own liveness/readiness probes.
 ## Conventions and constraints
 
 - Interfaces are prefixed `I` and registered as `Scoped` in each project's `Program.cs`. `GoogleCloudStorageProvider`,
