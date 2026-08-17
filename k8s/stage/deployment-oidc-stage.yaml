@@ -39,6 +39,15 @@ spec:
             - secretRef:
                 name: biatec-stage-app-secret
           env:
+            # Distinguishes stage from real production to BiatecOIDC's CloudServices:Mock:Enabled fail-fast
+            # guard (Program.cs) - without an explicit ASPNETCORE_ENVIRONMENT, ASP.NET Core defaults
+            # EnvironmentName to "Production" here exactly as it does on k8s/main's deployment, so the two
+            # would otherwise be indistinguishable to that check. Do NOT copy this onto
+            # k8s/main/deployment-oidc.yaml - that guard's whole point is that the mock identity/storage
+            # provider (a complete authentication bypass, see BiatecOIDC/MOCK_TESTING.md) can never boot in
+            # real production.
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Staging
             - name: ASPNETCORE_Kestrel__Certificates__Default__Path
               value: /https/cert.pfx
             - name: ASPNETCORE_Kestrel__Certificates__Default__Password

@@ -113,6 +113,16 @@ real entries. `appsettings.json` is committed to source control, so for anything
 throwaway/ephemeral test mnemonic, prefer overriding `CloudServices:Mock` via environment variables or a
 local, git-ignored config file instead of editing the committed file directly.
 
+**`CloudServices:Mock:Enabled: true` only boots in the `Development` or `Staging` ASP.NET Core
+environments** (`Program.cs`, right after this config is bound) - this provider signs the browser into a
+full cookie session with no credential check at all, so booting with it enabled anywhere else throws
+`InvalidOperationException` and refuses to start, rather than merely defaulting it off (security audit
+finding L-01/R-030). `k8s/stage/deployment-oidc-stage.yaml` sets `ASPNETCORE_ENVIRONMENT=Staging`
+specifically so stage can use this feature; `k8s/main/deployment-oidc.yaml` (real production) deliberately
+sets no such override, so it stays on ASP.NET Core's own default (`Production`) and this guard keeps
+refusing to boot there no matter what `CloudServices:Mock` is set to. Never add an
+`ASPNETCORE_ENVIRONMENT` override to the production manifest for this reason.
+
 ## Using it end to end
 
 1. Set `CloudServices:Mock:Enabled: true` and add at least one account (above). Restart the app - watch the

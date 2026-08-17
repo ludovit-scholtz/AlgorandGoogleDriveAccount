@@ -106,16 +106,26 @@ namespace BiatecOIDC
             // signs the browser into a full cookie session, indistinguishable from a real sign-in, with no
             // credential check at all and no external OAuth round trip - a complete authentication bypass.
             // The picker/fast-track gating in JwtIssuerController is correct defense in depth, but a
-            // deployment where CloudServices:Mock:Enabled is accidentally true in a non-Development
-            // environment (e.g. an incident-debugging config change never reverted) should never boot with
-            // it live, the same "structurally unreachable in production, not just off by default" precedent
-            // AesKeyRingResolver.EnsureActiveKeyIsNotKnownPlaceholder set for R-019/R-023.
-            if (mockCloudConfig.Enabled && !builder.Environment.IsDevelopment())
+            // deployment where CloudServices:Mock:Enabled is accidentally true in production should never
+            // boot with it live, the same "structurally unreachable in production, not just off by default"
+            // precedent AesKeyRingResolver.EnsureActiveKeyIsNotKnownPlaceholder set for R-019/R-023.
+            //
+            // Allowed in Development (dotnet run locally) AND Staging - deliberately not just "non-null
+            // ASPNETCORE_ENVIRONMENT", which would do nothing here, since Docker's own Release build carries
+            // no environment name at all and ASP.NET Core then defaults EnvironmentName to "Production" -
+            // exactly what stage runs as unless told otherwise. That default is why this guard originally
+            // blocked stage too: stage and real production are otherwise indistinguishable to this check.
+            // k8s/stage/deployment-oidc-stage.yaml sets ASPNETCORE_ENVIRONMENT=Staging specifically so
+            // IsStaging() can tell the two apart; k8s/main/deployment-oidc.yaml (real production) sets no
+            // such override, so it still resolves to "Production" and this guard still fails fast there -
+            // never add an ASPNETCORE_ENVIRONMENT override to the main/production manifest for this reason.
+            if (mockCloudConfig.Enabled && !builder.Environment.IsDevelopment() && !builder.Environment.IsStaging())
             {
                 throw new InvalidOperationException(
-                    "CloudServices:Mock:Enabled is true outside the Development environment. The mock identity/" +
-                    "storage provider is a complete authentication bypass (see BiatecOIDC/MOCK_TESTING.md) and " +
-                    "must never be enabled in a non-Development deployment. Set it to false, or unset it.");
+                    "CloudServices:Mock:Enabled is true outside the Development/Staging environment. The mock " +
+                    "identity/storage provider is a complete authentication bypass (see BiatecOIDC/MOCK_TESTING.md) " +
+                    "and must never be enabled in a production deployment. Set it to false, or unset it - or, if " +
+                    "this really is stage, set ASPNETCORE_ENVIRONMENT=Staging.");
             }
 
             // Add CORS configuration
