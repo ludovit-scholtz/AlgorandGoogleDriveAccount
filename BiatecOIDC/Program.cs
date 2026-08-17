@@ -251,8 +251,18 @@ namespace BiatecOIDC
 
             // Direct StackExchange.Redis connection multiplexer, used where atomic Redis primitives
             // (e.g. GETDEL for one-time-use OIDC codes/tokens) aren't exposed by IDistributedCache.
+            // AbortOnConnectFail = false (StackExchange.Redis's own recommended setting for this exact
+            // situation - see the library's own exception message) so a Redis outage/slow-start race at the
+            // moment this singleton is first resolved doesn't throw straight out of whichever request
+            // resolved it first (e.g. an unhandled 500 from GET /health via RedisHealthCheck, discovered
+            // when this was first wired up - see HealthChecks/RedisHealthCheck.cs). The multiplexer instead
+            // comes back immediately and keeps retrying the connection in the background; every caller
+            // (including RedisHealthCheck's own PingAsync) still fails cleanly with its own catchable
+            // exception on that background-not-yet-connected state, which RedisHealthCheck already handles.
+            var redisConfigOptions = StackExchange.Redis.ConfigurationOptions.Parse(redisConfig.ConnectionString);
+            redisConfigOptions.AbortOnConnectFail = false;
             builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ =>
-                StackExchange.Redis.ConnectionMultiplexer.Connect(redisConfig.ConnectionString));
+                StackExchange.Redis.ConnectionMultiplexer.Connect(redisConfigOptions));
 
             // GET /health - see HealthCheckResponseWriter for the JSON shape a status page/uptime monitor
             // polls. Redis is this service's one hard dependency worth reporting (Google/Microsoft/router/
