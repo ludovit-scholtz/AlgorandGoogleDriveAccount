@@ -146,27 +146,27 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void SignTransactionGroupAsync_UnknownPrimaryAddress_PropagatesInvalidOperationException()
+        public async Task SignTransactionGroupAsync_UnknownPrimaryAddress_PropagatesInvalidOperationException()
         {
             _mockAccountRepository
                 .Setup(r => r.ResolveSeedAddressAsync(TestEmail, TestProvider, "NOTAREALADDRESS", It.IsAny<string?>()))
                 .ThrowsAsync(new InvalidOperationException("No seed with address 'NOTAREALADDRESS' exists for this account."));
 
-            Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
                 await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { BuildPayment(1) }, null, "NOTAREALADDRESS"));
 
             _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
 
         [Test]
-        public void SignTransactionGroupAsync_ExceedsLimit_ThrowsAndNeverSignsOrRecords()
+        public async Task SignTransactionGroupAsync_ExceedsLimit_ThrowsAndNeverSignsOrRecords()
         {
             var tx = BuildPayment(2_000);
             _mockSpendingLimitService
                 .Setup(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 2_000m, ResolvedAddress, 0, It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new SpendingLimitExceededException("global-daily", 2_000m, 1_000m, "USD"));
 
-            Assert.ThrowsAsync<SpendingLimitExceededException>(
+            await Assert.ThrowsAsync<SpendingLimitExceededException>(
                 async () => await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, null));
 
             _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
@@ -184,14 +184,14 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void SignTransactionGroupAsync_AssetValuationFails_PropagatesAndNeverSigns()
+        public async Task SignTransactionGroupAsync_AssetValuationFails_PropagatesAndNeverSigns()
         {
             var tx = BuildPayment(1_000);
             _mockValuationService
                 .Setup(v => v.GetUsdValueAsync(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new AssetValuationException(0, new InvalidOperationException("no route")));
 
-            Assert.ThrowsAsync<AssetValuationException>(
+            await Assert.ThrowsAsync<AssetValuationException>(
                 async () => await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, null));
 
             _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
@@ -272,7 +272,7 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void SignTransactionGroupAsync_GroupTotalExceedsLimit_NoneAreSigned()
+        public async Task SignTransactionGroupAsync_GroupTotalExceedsLimit_NoneAreSigned()
         {
             var okTx = BuildPayment(500);
             var badTx = BuildPayment(5_000);
@@ -280,7 +280,7 @@ namespace BiatecOIDCTests
                 .Setup(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 5_500m, ResolvedAddress, 0, It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new SpendingLimitExceededException("global-daily", 5_500m, 1_000m, "USD"));
 
-            Assert.ThrowsAsync<SpendingLimitExceededException>(
+            await Assert.ThrowsAsync<SpendingLimitExceededException>(
                 async () => await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { okTx, badTx }, null));
 
             _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
@@ -301,23 +301,23 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void SignTransactionGroupAsync_EmptyGroup_Throws()
+        public async Task SignTransactionGroupAsync_EmptyGroup_Throws()
         {
-            Assert.ThrowsAsync<ArgumentException>(
+            await Assert.ThrowsAsync<ArgumentException>(
                 async () => await _service.SignTransactionGroupAsync(TestEmail, TestProvider, Array.Empty<byte[]>(), null));
         }
 
         [Test]
-        public void SignTransactionGroupAsync_UndecodableTransaction_ThrowsFormatException()
+        public async Task SignTransactionGroupAsync_UndecodableTransaction_ThrowsFormatException()
         {
-            Assert.ThrowsAsync<FormatException>(
+            await Assert.ThrowsAsync<FormatException>(
                 async () => await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { new byte[] { 0xFF, 0x00 } }, null));
         }
 
         [Test]
-        public void SignTransactionGroupAsync_EmptyEmail_Throws()
+        public async Task SignTransactionGroupAsync_EmptyEmail_Throws()
         {
-            Assert.ThrowsAsync<ArgumentException>(
+            await Assert.ThrowsAsync<ArgumentException>(
                 async () => await _service.SignTransactionGroupAsync(string.Empty, TestProvider, new[] { BuildPayment(1) }, null));
         }
 
@@ -367,7 +367,7 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void SignBitcoinTransactionGroupAsync_ExceedsLimit_ThrowsAndNeverSignsOrRecords()
+        public async Task SignBitcoinTransactionGroupAsync_ExceedsLimit_ThrowsAndNeverSignsOrRecords()
         {
             var tx = BuildBitcoinTransaction(spendSatoshis: 500_000);
             _mockBitcoinValuationService
@@ -377,7 +377,7 @@ namespace BiatecOIDCTests
                 .Setup(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 25_000m, ResolvedAddress, 0, It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new SpendingLimitExceededException("global-daily", 25_000m, 10_000m, "USD"));
 
-            Assert.ThrowsAsync<SpendingLimitExceededException>(
+            await Assert.ThrowsAsync<SpendingLimitExceededException>(
                 async () => await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, tx, null));
 
             _mockDriveService.Verify(d => d.SignBitcoinTransactionAsync(It.IsAny<string>(), It.IsAny<BitcoinChainFamily>(), It.IsAny<BitcoinUnsignedTransaction>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
@@ -385,9 +385,9 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void SignBitcoinTransactionGroupAsync_NoInputs_Throws()
+        public async Task SignBitcoinTransactionGroupAsync_NoInputs_Throws()
         {
-            Assert.ThrowsAsync<ArgumentException>(
+            await Assert.ThrowsAsync<ArgumentException>(
                 async () => await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, new BitcoinUnsignedTransaction(), null));
         }
 
@@ -432,7 +432,7 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void SignBitcoinTransactionGroupAsync_ImpliedFeeFarExceedsSpend_ThrowsFormatExceptionAndNeverSigns()
+        public async Task SignBitcoinTransactionGroupAsync_ImpliedFeeFarExceedsSpend_ThrowsFormatExceptionAndNeverSigns()
         {
             // Audit finding H-02/R-025: sum(Inputs) - sum(Outputs) is the implicit miner fee - a caller
             // supplying far more input value than any output accounts for would otherwise burn the
@@ -443,7 +443,7 @@ namespace BiatecOIDCTests
                 Outputs = { new BitcoinTransactionOutput { Address = "bc1qreceiver", AmountSatoshis = 1_000 } }
             };
 
-            Assert.ThrowsAsync<FormatException>(
+            await Assert.ThrowsAsync<FormatException>(
                 async () => await _service.SignBitcoinTransactionGroupAsync(TestEmail, TestProvider, BitcoinChainFamily.Bitcoin, tx, null));
 
             _mockDriveService.Verify(d => d.SignBitcoinTransactionAsync(It.IsAny<string>(), It.IsAny<BitcoinChainFamily>(), It.IsAny<BitcoinUnsignedTransaction>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);

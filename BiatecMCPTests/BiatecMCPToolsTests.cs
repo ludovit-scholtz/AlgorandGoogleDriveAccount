@@ -871,7 +871,7 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public void GetAlgodSettings_UnresolvableNetwork_ThrowsArgumentExceptionListingValidCodes()
+        public async Task GetAlgodSettings_UnresolvableNetwork_ThrowsArgumentExceptionListingValidCodes()
         {
             _networkResolver
                 .Setup(r => r.ResolveAsync("notanetwork", It.IsAny<CancellationToken>()))
@@ -880,7 +880,7 @@ namespace BiatecMCPTests
                 .Setup(r => r.ListNetworksAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new List<NetworkSummary> { new() { Code = "algorand-mainnet" }, new() { Code = "bitcoin" } });
 
-            var ex = Assert.ThrowsAsync<ArgumentException>(async () => await CreateTool().GetAlgodSettings("notanetwork"));
+            var ex = await Assert.ThrowsAsync<ArgumentException>(async () => await CreateTool().GetAlgodSettings("notanetwork"));
 
             Assert.That(ex!.Message, Does.Contain("algorand-mainnet"));
             Assert.That(ex.Message, Does.Contain("bitcoin"));

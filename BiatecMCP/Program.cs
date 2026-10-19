@@ -104,7 +104,8 @@ namespace BiatecMCP
                     {
                         Resource = mcpResourceConfig.CanonicalResourceUri,
                         AuthorizationServers = { oidcConfig.Issuer },
-                        BearerMethodsSupported = { "header" },
+                        // BearerMethodsSupported intentionally not set: the SDK (2.x) already defaults it to ["header"],
+                        // and a collection initializer here would append a duplicate "header" entry.
                         // Deliberately just "openid sign" - the minimal scope set the 3 tools here need.
                         // A client wanting a different wallet-API scope (e.g. a future tool needing
                         // manage-limits/rekey) requests it explicitly; BiatecOIDC's own consent screen is

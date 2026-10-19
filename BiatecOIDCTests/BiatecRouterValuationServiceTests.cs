@@ -62,13 +62,13 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void GetUsdValueAsync_RouterThrows_WrapsInAssetValuationException()
+        public async Task GetUsdValueAsync_RouterThrows_WrapsInAssetValuationException()
         {
             _mockRouterClient
                 .Setup(r => r.QuoteAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new HttpRequestException("router unreachable"));
 
-            var ex = Assert.ThrowsAsync<AssetValuationException>(async () => await _service.GetUsdValueAsync(assetId: 999, amountBaseUnits: 1));
+            var ex = await Assert.ThrowsAsync<AssetValuationException>(async () => await _service.GetUsdValueAsync(assetId: 999, amountBaseUnits: 1));
 
             Assert.That(ex!.AssetId, Is.EqualTo(999UL));
             Assert.That(ex.InnerException, Is.InstanceOf<HttpRequestException>());

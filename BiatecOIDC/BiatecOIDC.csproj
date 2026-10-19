@@ -12,20 +12,20 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Algorand4" Version="4.7.4.2026071920" />
+    <PackageReference Include="Algorand4" Version="4.7.4.2026080422" />
     <!-- Client for the Biatec Router API (router.api.biatec.io) - used only for its public, unauthenticated
          /quote endpoint (BiatecRouterValuationService) to price a spent asset in USD for spending-limit
          enforcement. Not used for its swap/route-transaction-building features. -->
-    <PackageReference Include="BiatecRouterConnector" Version="1.0.0.2026011820" />
-    <PackageReference Include="Google.Apis.Auth" Version="1.75.0" />
-    <PackageReference Include="Google.Apis.Auth.AspNetCore3" Version="1.75.0" />
+    <PackageReference Include="BiatecRouterConnector" Version="1.0.3.2026080111" />
+    <PackageReference Include="Google.Apis.Auth" Version="1.77.0" />
+    <PackageReference Include="Google.Apis.Auth.AspNetCore3" Version="1.77.0" />
     <!-- Direct reference for AlgorandTransactionInspector's generic msgpack map decode (peeking the
          "type" discriminator before picking the correctly-typed Transaction subclass) - otherwise only
          a transitive dependency of Algorand4. Version pinned to match what Algorand4 already resolves. -->
-    <PackageReference Include="MessagePack" Version="3.1.8" />
-    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.10" />
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
-    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.21.0" />
+    <PackageReference Include="MessagePack" Version="3.1.12" />
+    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.13" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.3.1" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.23.0" />
   </ItemGroup>
 
   <ItemGroup>

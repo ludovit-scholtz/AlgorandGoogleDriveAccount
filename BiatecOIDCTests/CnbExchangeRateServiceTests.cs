@@ -107,9 +107,9 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void ConvertFromUsdAsync_UnsupportedCurrency_Throws()
+        public async Task ConvertFromUsdAsync_UnsupportedCurrency_Throws()
         {
-            var ex = Assert.ThrowsAsync<UnsupportedCurrencyException>(async () => await _service.ConvertFromUsdAsync(1m, "XYZ"));
+            var ex = await Assert.ThrowsAsync<UnsupportedCurrencyException>(async () => await _service.ConvertFromUsdAsync(1m, "XYZ"));
             Assert.That(ex!.CurrencyCode, Is.EqualTo("XYZ"));
         }
 
@@ -135,11 +135,11 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void FeedMissingUsdRate_ThrowsInvalidOperationException()
+        public async Task FeedMissingUsdRate_ThrowsInvalidOperationException()
         {
             SetupFeedResponse("""{ "rates": [ { "country": "EMU", "currency": "euro", "amount": 1, "currencyCode": "EUR", "rate": 24.5 } ] }""");
 
-            Assert.ThrowsAsync<InvalidOperationException>(async () => await _service.GetSupportedCurrenciesAsync());
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await _service.GetSupportedCurrenciesAsync());
         }
 
         private sealed class InMemoryDistributedCache : IDistributedCache
