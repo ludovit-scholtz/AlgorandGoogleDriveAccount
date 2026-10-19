@@ -790,7 +790,7 @@ setup stage needs.
   key `ARC76Account.Ethereum.ARC76.GetEmailAccount` already produces for EVM (`ICloudAccountRepository.LoadBitcoinKeyAsync`
   wraps it as an `NBitcoin.Key` via `CloudAccountRepository.ToBitcoinKey` (which left-pads to 32 bytes, since
   `EthECKey.GetPrivateKeyAsBytes()` strips leading zeros (~1 in 256 keys) and `NBitcoin.Key` rejects short input; never call
-  `new Key(ethKey.GetPrivateKeyAsBytes())` directly, `BiatecSelfCustodyCore` now depends on `NBitcoin`/`NBitcoin.Altcoins`) - one
+  `new Key(ethKey.GetPrivateKeyAsBytes())` directly), `BiatecSelfCustodyCore` now depends on `NBitcoin`/`NBitcoin.Altcoins`) - one
   key per seed/slot, every chain family. `DeriveBitcoinAddressAsync` formats it as Bitcoin mainnet native
   SegWit P2WPKH (`bc1...`); `DeriveBitcoinCashAddressAsync` formats the same key as legacy P2PKH under
   `NBitcoin.Altcoins.BCash`'s network, which renders as CashAddr (`bitcoincash:q...`) by default. `GET /wallet/address/{seedAddress}/{slot?}`
