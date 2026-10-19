@@ -152,7 +152,7 @@ namespace BiatecMCPTests
             Assert.That(convertResult.MultisigAddress, Is.EqualTo(multisigAddress));
             Assert.That(convertResult.UnsignedTransactionEnvelopes, Has.Count.EqualTo(1));
 
-            // Parse the produced bytes with the Algorand4 SDK and check the signature object is correct:
+            // Parse the produced bytes with the Algorand5 SDK and check the signature object is correct:
             // an unsigned multisig envelope is a SignedTransaction whose MSig names every participant (in
             // order) with no signature contributed yet, wrapping the untouched inner payment.
             var envelope = SignedTransaction.FromBase64String(convertResult.UnsignedTransactionEnvelopes[0]);

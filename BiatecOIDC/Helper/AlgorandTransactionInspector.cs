@@ -61,7 +61,7 @@ namespace BiatecOIDC.Helper
     /// authorized key.
     /// </summary>
     /// <remarks>
-    /// The Algorand4 SDK's <c>Transaction</c> base class carries none of the type-specific fields (amount,
+    /// The Algorand5 SDK's <c>Transaction</c> base class carries none of the type-specific fields (amount,
     /// receiver, asset id) - those only exist on subclasses like <c>PaymentTransaction</c>/
     /// <c>AssetTransferTransaction</c>, and each subclass's own <c>type</c> property is a hardcoded
     /// constant of that C# type, not something decoded off the wire (confirmed empirically: decoding a

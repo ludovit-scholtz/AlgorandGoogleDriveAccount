@@ -1585,7 +1585,7 @@ namespace BiatecMCP.MCP
 
         /// <summary>
         /// Submits one or more already-signed transactions (base64 msgpack) to Algod, in order. The current
-        /// Algorand4 SDK only exposes a single-transaction submit call, so a multi-transaction group is
+        /// Algorand5 SDK only exposes a single-transaction submit call, so a multi-transaction group is
         /// submitted sequentially rather than as one atomic HTTP request; the returned <c>TxId</c> is the
         /// last transaction submitted.
         /// </summary>

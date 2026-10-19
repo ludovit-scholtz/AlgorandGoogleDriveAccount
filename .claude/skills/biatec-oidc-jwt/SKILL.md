@@ -227,7 +227,7 @@ way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `V
 
 `AlgorandTransactionInspector` (`BiatecOIDC/Helper/AlgorandTransactionInspector.cs`) decodes a transaction's raw
 msgpack to find its real type, amount, and asset id, and separately whether it's a rekey. This needs a generic
-(untyped) msgpack map decode first - the Algorand4 SDK's `Transaction` subclasses' `type` property is a
+(untyped) msgpack map decode first - the Algorand5 SDK's `Transaction` subclasses' `type` property is a
 hardcoded C# constant of that subclass, **not** something decoded off the wire (verified empirically: decoding
 a payment's bytes as `AssetTransferTransaction` silently reports `type="axfer"`). Handles both a bare
 `Transaction` and a `SignedTransaction` wrapper (multisig co-signing - the real fields are nested one level
@@ -241,7 +241,7 @@ type (wire key `"rekey"`, a 32-byte address; present whenever non-empty).
 Signs an unsigned EVM (Ethereum-family) transaction with the same seed `POST /wallet/{network}/{address}/sign`
 resolved a signer for - built the same way `SignTransactionAsync` signs Algorand transactions (resolve the
 seed, derive the key, sign, discard the key), just via `Nethereum.Model`/`Nethereum.Signer` instead of the
-Algorand4 SDK. `ICloudAccountRepository.LoadEvmAccountAsync` (mirrors `LoadAccountAsync`) derives the signing
+Algorand5 SDK. `ICloudAccountRepository.LoadEvmAccountAsync` (mirrors `LoadAccountAsync`) derives the signing
 key - a `Nethereum.Signer.EthECKey` - via `ARC76Account.Ethereum.ARC76.GetEmailAccount`, the same seed
 mnemonic `DeriveEvmAddressAsync` already uses (see `CLAUDE.md`'s "ARC-76 package provenance" note for why
 this is a namespace-qualified call, not a differently-named method).
