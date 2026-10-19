@@ -57,7 +57,7 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public void SignAsync_SpendingLimitExceeded_ThrowsWalletApiExceptionWithProblemDetails()
+        public async Task SignAsync_SpendingLimitExceeded_ThrowsWalletApiExceptionWithProblemDetails()
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.Forbidden)
             {
@@ -67,7 +67,7 @@ namespace BiatecMCPTests
             });
             var client = CreateClient(handler, out _);
 
-            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.SignAsync("token", "algorand", "SOME-ADDR", new[] { new byte[] { 1 } }));
+            var ex = await Assert.ThrowsAsync<WalletApiException>(async () => await client.SignAsync("token", "algorand", "SOME-ADDR", new[] { new byte[] { 1 } }));
 
             Assert.That(ex!.StatusCode, Is.EqualTo(403));
             Assert.That(ex.ErrorCode, Is.EqualTo("spending_limit_exceeded"));
@@ -75,7 +75,7 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public void SignAsync_InsufficientScope_ThrowsWalletApiExceptionWithCorrectErrorCode()
+        public async Task SignAsync_InsufficientScope_ThrowsWalletApiExceptionWithCorrectErrorCode()
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.Forbidden)
             {
@@ -85,13 +85,13 @@ namespace BiatecMCPTests
             });
             var client = CreateClient(handler, out _);
 
-            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.SignAsync("token", "algorand", "SOME-ADDR", new[] { new byte[] { 1 } }));
+            var ex = await Assert.ThrowsAsync<WalletApiException>(async () => await client.SignAsync("token", "algorand", "SOME-ADDR", new[] { new byte[] { 1 } }));
 
             Assert.That(ex!.ErrorCode, Is.EqualTo("insufficient_scope"));
         }
 
         [Test]
-        public void SignAsync_NonProblemDetailsErrorBody_StillThrowsWithStatusCodeDerivedErrorCode()
+        public async Task SignAsync_NonProblemDetailsErrorBody_StillThrowsWithStatusCodeDerivedErrorCode()
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)
             {
@@ -99,7 +99,7 @@ namespace BiatecMCPTests
             });
             var client = CreateClient(handler, out _);
 
-            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.SignAsync("token", "algorand", "SOME-ADDR", new[] { new byte[] { 1 } }));
+            var ex = await Assert.ThrowsAsync<WalletApiException>(async () => await client.SignAsync("token", "algorand", "SOME-ADDR", new[] { new byte[] { 1 } }));
 
             Assert.That(ex!.StatusCode, Is.EqualTo(502));
         }
@@ -136,7 +136,7 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public void GetAddressAsync_UnknownSeed_ThrowsWalletApiException()
+        public async Task GetAddressAsync_UnknownSeed_ThrowsWalletApiException()
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
             {
@@ -146,7 +146,7 @@ namespace BiatecMCPTests
             });
             var client = CreateClient(handler, out _);
 
-            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.GetAddressAsync("token", "X", 0));
+            var ex = await Assert.ThrowsAsync<WalletApiException>(async () => await client.GetAddressAsync("token", "X", 0));
 
             Assert.That(ex!.ErrorCode, Is.EqualTo("seed_not_found"));
         }
@@ -212,7 +212,7 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public void ActivateAddressAsync_RekeyNotConfirmed_ThrowsWalletApiException()
+        public async Task ActivateAddressAsync_RekeyNotConfirmed_ThrowsWalletApiException()
         {
             var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.Conflict)
             {
@@ -222,7 +222,7 @@ namespace BiatecMCPTests
             });
             var client = CreateClient(handler, out _);
 
-            var ex = Assert.ThrowsAsync<WalletApiException>(async () => await client.ActivateAddressAsync("token", "algorand", "SEED1", 0, "ADDR1"));
+            var ex = await Assert.ThrowsAsync<WalletApiException>(async () => await client.ActivateAddressAsync("token", "algorand", "SEED1", 0, "ADDR1"));
 
             Assert.That(ex!.ErrorCode, Is.EqualTo("rekey_not_confirmed"));
         }

@@ -14,6 +14,6 @@ namespace BiatecOIDC.BusinessLogic
         /// aggregated liquidity. Asset id <c>0</c> is native ALGO. Throws if the router has no route
         /// between the two assets or is unreachable.
         /// </summary>
-        Task<long> QuoteAsync(long fromAsset, long toAsset, long amount, CancellationToken cancellationToken = default);
+        Task<ulong> QuoteAsync(ulong fromAsset, ulong toAsset, ulong amount, CancellationToken cancellationToken = default);
     }
 }

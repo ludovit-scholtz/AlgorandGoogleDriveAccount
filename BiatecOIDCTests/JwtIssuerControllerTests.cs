@@ -344,7 +344,7 @@ namespace BiatecOIDCTests
             var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache());
 
             IActionResult? result = null;
-            Assert.DoesNotThrowAsync(async () => result = await controller.AuthorizeConsent("request-id"));
+            await Assert.DoesNotThrowAsync(async () => result = await controller.AuthorizeConsent("request-id"));
 
             Assert.That(result, Is.TypeOf<ContentResult>());
             var html = ((ContentResult)result!).Content!;
@@ -363,7 +363,7 @@ namespace BiatecOIDCTests
             var (controller, _) = CreateControllerSignedInAsMock(jwtIssuerService.Object, new InMemoryDistributedCache());
 
             IActionResult? result = null;
-            Assert.DoesNotThrowAsync(async () => result = await controller.AuthorizeCallback("request-id"));
+            await Assert.DoesNotThrowAsync(async () => result = await controller.AuthorizeCallback("request-id"));
 
             Assert.That(result, Is.TypeOf<RedirectToActionResult>());
             Assert.That(((RedirectToActionResult)result!).ActionName, Is.EqualTo(nameof(JwtIssuerController.AuthorizeConsent)));

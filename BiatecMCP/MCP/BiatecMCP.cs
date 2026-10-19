@@ -635,13 +635,22 @@ namespace BiatecMCP.MCP
         public async Task<CreateSwapTransactionResponse> CreateSwapTransaction(
             [Description("Asset id to swap from. 0 = native ALGO.")] long fromAssetId,
             [Description("Asset id to swap to. 0 = native ALGO.")] long toAssetId,
-            [Description("Amount to swap, in fromAssetId's base units.")] long amount,
+            [Description("Amount to swap, in fromAssetId's base units. Must be greater than 0.")] long amount,
             [Description("Minimum acceptable output amount, in toAssetId's base units. 0 = no minimum.")] long receiveMinimum = 0,
             [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address to swap from instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to swap from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
         {
             var response = new CreateSwapTransactionResponse();
+
+            // The router client takes unsigned ids/amounts; reject negatives up front with a clear message
+            // instead of letting a checked cast surface as a raw OverflowException.
+            if (fromAssetId < 0 || toAssetId < 0 || amount <= 0 || receiveMinimum < 0)
+            {
+                response.Error = "fromAssetId, toAssetId and receiveMinimum must not be negative, and amount must be greater than 0.";
+                response.ErrorType = "InvalidRequest";
+                return response;
+            }
 
             try
             {

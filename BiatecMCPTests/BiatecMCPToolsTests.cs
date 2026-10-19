@@ -871,7 +871,7 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public void GetAlgodSettings_UnresolvableNetwork_ThrowsArgumentExceptionListingValidCodes()
+        public async Task GetAlgodSettings_UnresolvableNetwork_ThrowsArgumentExceptionListingValidCodes()
         {
             _networkResolver
                 .Setup(r => r.ResolveAsync("notanetwork", It.IsAny<CancellationToken>()))
@@ -880,13 +880,26 @@ namespace BiatecMCPTests
                 .Setup(r => r.ListNetworksAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new List<NetworkSummary> { new() { Code = "algorand-mainnet" }, new() { Code = "bitcoin" } });
 
-            var ex = Assert.ThrowsAsync<ArgumentException>(async () => await CreateTool().GetAlgodSettings("notanetwork"));
+            var ex = await Assert.ThrowsAsync<ArgumentException>(async () => await CreateTool().GetAlgodSettings("notanetwork"));
 
             Assert.That(ex!.Message, Does.Contain("algorand-mainnet"));
             Assert.That(ex.Message, Does.Contain("bitcoin"));
         }
 
         // ───────────────────────── createSwapTransaction ─────────────────────────
+
+        [TestCase(-1L, 31566704L, 1_000_000L, 0L)]
+        [TestCase(0L, -1L, 1_000_000L, 0L)]
+        [TestCase(0L, 31566704L, 0L, 0L)]
+        [TestCase(0L, 31566704L, -5L, 0L)]
+        [TestCase(0L, 31566704L, 1_000_000L, -1L)]
+        public async Task CreateSwapTransaction_NegativeOrZeroInputs_ReturnsInvalidRequestWithoutQuoting(long from, long to, long amount, long receiveMinimum)
+        {
+            var result = await CreateTool().CreateSwapTransaction(from, to, amount, receiveMinimum);
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+            _biatecRouterQuoteProvider.Verify(p => p.GetQuoteAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
 
         [Test]
         public async Task CreateSwapTransaction_BiatecRouterQuotesBest_ReturnsErrorWhenAlsoUnauthenticated()

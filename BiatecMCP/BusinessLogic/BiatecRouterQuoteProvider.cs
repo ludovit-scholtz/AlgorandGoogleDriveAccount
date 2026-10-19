@@ -23,7 +23,7 @@ namespace BiatecMCP.BusinessLogic
 
         public async Task<DexQuote?> GetQuoteAsync(long fromAsset, long toAsset, long amount, CancellationToken cancellationToken = default)
         {
-            var output = await _client.Api.QuoteAsync(fromAsset, toAsset, amount, cancellationToken);
+            var output = checked((long)await _client.Api.QuoteAsync(checked((ulong)fromAsset), checked((ulong)toAsset), checked((ulong)amount), cancellationToken));
             return new DexQuote { ProviderName = ProviderName, OutputAmount = output };
         }
 
@@ -44,10 +44,10 @@ namespace BiatecMCP.BusinessLogic
             var input = new BiatecRouterConnector.Generated.RouteInputParameters
             {
                 Sender = sender,
-                FromAsset = fromAsset,
-                ToAsset = toAsset,
-                SwapAmount = swapAmount,
-                ReceiveMinimum = receiveMinimum,
+                FromAsset = checked((ulong)fromAsset),
+                ToAsset = checked((ulong)toAsset),
+                SwapAmount = checked((ulong)swapAmount),
+                ReceiveMinimum = checked((ulong)receiveMinimum),
                 RoutesCount = 1,
                 TransParams = transactionParameters
             };

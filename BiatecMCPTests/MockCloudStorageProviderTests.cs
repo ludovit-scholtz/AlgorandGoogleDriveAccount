@@ -142,10 +142,10 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public void DeleteAsync_InvalidToken_DoesNotThrow()
+        public async Task DeleteAsync_InvalidToken_DoesNotThrow()
         {
             // Best-effort per the ICloudStorageProvider contract - DeleteAsync must never throw.
-            Assert.DoesNotThrowAsync(async () => await _provider.DeleteAsync("file.dat", "not-a-mock-token"));
+            await Assert.DoesNotThrowAsync(async () => await _provider.DeleteAsync("file.dat", "not-a-mock-token"));
         }
 
         [Test]

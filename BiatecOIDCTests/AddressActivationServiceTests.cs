@@ -167,7 +167,7 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void ActivateAsync_ConcurrentWriteBetweenReadAndWrite_ThrowsVaultConcurrencyConflictExceptionAndDoesNotOverwrite()
+        public async Task ActivateAsync_ConcurrentWriteBetweenReadAndWrite_ThrowsVaultConcurrencyConflictExceptionAndDoesNotOverwrite()
         {
             // Audit finding M-04/R-029: this file previously had no equivalent of
             // CloudAccountRepository.SaveVaultWithConcurrencyCheckAsync at all - a concurrent writer could
@@ -183,7 +183,7 @@ namespace BiatecOIDCTests
                 .ReturnsAsync(new byte[] { 1, 2, 3 });
             _mockCatalog.Setup(c => c.Resolve(It.IsAny<string>())).Returns(mockProvider.Object);
 
-            Assert.ThrowsAsync<BiatecSelfCustodyCore.Repository.VaultConcurrencyConflictException>(async () =>
+            await Assert.ThrowsAsync<BiatecSelfCustodyCore.Repository.VaultConcurrencyConflictException>(async () =>
                 await _service.ActivateAsync(TestEmail, TestProvider, "token", "ADDR1", "Avm", "SEED1", 0));
 
             mockProvider.Verify(p => p.UploadAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>()), Times.Never);

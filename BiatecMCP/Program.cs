@@ -76,7 +76,7 @@ namespace BiatecMCP
             // AddMcp serves /.well-known/oauth-protected-resource and shapes the 401/WWW-Authenticate
             // challenge that tells an unauthenticated MCP client where to authenticate. See
             // CLAUDE.md's BiatecMCP architecture notes for the full request flow and the MCP C# SDK
-            // API surface this was verified against (ModelContextProtocol.AspNetCore 1.4.1).
+            // API surface this was verified against (ModelContextProtocol.AspNetCore 2.2.0).
             builder.Services
                 .AddAuthentication(options =>
                 {
@@ -103,13 +103,16 @@ namespace BiatecMCP
                     options.ResourceMetadata = new ProtectedResourceMetadata
                     {
                         Resource = mcpResourceConfig.CanonicalResourceUri,
-                        AuthorizationServers = { oidcConfig.Issuer },
-                        BearerMethodsSupported = { "header" },
-                        // Deliberately just "openid sign" - the minimal scope set the 3 tools here need.
+                        AuthorizationServers = new List<string> { oidcConfig.Issuer },
+                        // All three lists are assigned, not collection-initialized: the SDK (2.x) pre-populates BearerMethodsSupported
+                        // with "header", so an initializer would append a duplicate. Assigning is robust if it starts
+                        // pre-populating the others too. Pinned by McpAuthEndpointTests.
+                        BearerMethodsSupported = new List<string> { "header" },
+                        // Deliberately just "openid sign" - the minimal scope set the tools here need.
                         // A client wanting a different wallet-API scope (e.g. a future tool needing
                         // manage-limits/rekey) requests it explicitly; BiatecOIDC's own consent screen is
                         // what actually shows the user what's being granted either way.
-                        ScopesSupported = { "openid", "sign" }
+                        ScopesSupported = new List<string> { "openid", "sign" }
                     };
                 });
 

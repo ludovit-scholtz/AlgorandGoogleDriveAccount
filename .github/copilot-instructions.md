@@ -297,7 +297,9 @@ for the required GitHub secrets (shared by both workflows) and
 and short-lived. There is no automated test job in CI, so run tests locally before pushing.
 
 Root `.editorconfig` + `Directory.Build.props` (auto-imported by all 5 `.csproj`s) enable the built-in Roslyn
-analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. Run `dotnet format Biatec.slnx` to
+analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. `Directory.Build.props` also carries a repo-wide
+security override pinning `MessagePack` (Algorand4 transitively resolves a vulnerable 3.1.8) - both Dockerfiles copy it
+before `dotnet restore` for that reason; don't lower it to what Algorand4 resolves. Run `dotnet format Biatec.slnx` to
 fix flagged style/unused-using issues, and `dotnet format Biatec.slnx --verify-no-changes` before committing —
 both should be clean.
 
@@ -629,6 +631,9 @@ setup stage needs.
   fabricating that construction risks producing a subtly wrong transaction for a real money-moving operation.
   Wiring in real transaction building for the other two is an additive follow-up once verified against a
   testnet.
+  `createSwapTransaction` rejects negative ids/`receiveMinimum` and non-positive `amount` up front (`InvalidRequest`),
+  since `BiatecRouterConnector` takes `ulong` and the provider's checked `long`→`ulong` casts would otherwise surface a
+  raw `OverflowException` (swallowed as "no quote" by the aggregator).
 - **Multisig transactions**: `MultisigTransactionBuilder` (`BiatecMCP/Helper/`) lets a multisig transaction be
   proposed once and cosigned across independent sessions - `createMultisigTransaction` derives the multisig
   account's address from `(version, threshold, participantAddresses)` (each participant identified by their

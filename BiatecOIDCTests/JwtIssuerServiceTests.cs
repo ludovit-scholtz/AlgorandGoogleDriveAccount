@@ -1008,11 +1008,11 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void RemovePendingAuthorizeRequestAsync_IsNoOp_DoesNotThrow()
+        public async Task RemovePendingAuthorizeRequestAsync_IsNoOp_DoesNotThrow()
         {
             // The pending-authorize key is already consumed atomically by GetPendingAuthorizeRequestAsync's
             // GETDEL (StringGetDeleteAsync), so this method is now a true no-op.
-            Assert.DoesNotThrowAsync(async () => await Service.RemovePendingAuthorizeRequestAsync("test-id"));
+            await Assert.DoesNotThrowAsync(async () => await Service.RemovePendingAuthorizeRequestAsync("test-id"));
         }
     }
 

@@ -115,11 +115,11 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void SetLimitsAsync_UnsupportedCurrency_ThrowsAndDoesNotPersist()
+        public async Task SetLimitsAsync_UnsupportedCurrency_ThrowsAndDoesNotPersist()
         {
             _mockExchangeRateService.Setup(e => e.IsSupportedCurrencyAsync("XYZ", It.IsAny<CancellationToken>())).ReturnsAsync(false);
 
-            Assert.ThrowsAsync<UnsupportedCurrencyException>(async () =>
+            await Assert.ThrowsAsync<UnsupportedCurrencyException>(async () =>
                 await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { CurrencyCode = "XYZ" }));
         }
 
@@ -142,7 +142,7 @@ namespace BiatecOIDCTests
         {
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { CurrencyCode = "USD", DailyLimit = 100 });
 
-            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+            var ex = await Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 150m, TestAddress, 0));
 
             Assert.That(ex!.Window, Is.EqualTo("global-daily"));
@@ -174,7 +174,7 @@ namespace BiatecOIDCTests
             _fakeProvider.Files[fileName] = encrypted;
 
             // 80 already spent (via the legacy-keyed entry) + 30 more would be 110, over the 100 per-address limit.
-            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+            var ex = await Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 30m, seedAddress, slot));
             Assert.That(ex!.Window, Is.EqualTo("address-daily"));
         }
@@ -189,11 +189,11 @@ namespace BiatecOIDCTests
             });
 
             // 80 already spent + 30 more would be 110, over the 100 limit.
-            Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+            await Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 30m, TestAddress, 0));
 
             // But 80 + 15 = 95 stays under it.
-            Assert.DoesNotThrowAsync(async () =>
+            await Assert.DoesNotThrowAsync(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 15m, TestAddress, 0));
         }
 
@@ -208,7 +208,7 @@ namespace BiatecOIDCTests
 
             // Daily has no limit configured, so a huge existing spend today doesn't block a new one...
             // but it's within the same week, so the weekly limit (which IS configured) still applies.
-            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+            var ex = await Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 1m, TestAddress, 0));
             Assert.That(ex!.Window, Is.EqualTo("global-weekly"));
         }
@@ -225,7 +225,7 @@ namespace BiatecOIDCTests
             });
 
             // If the stale entry weren't pruned, even a tiny new spend would appear to exceed the monthly limit.
-            Assert.DoesNotThrowAsync(async () =>
+            await Assert.DoesNotThrowAsync(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 50m, TestAddress, 0));
         }
 
@@ -272,7 +272,7 @@ namespace BiatecOIDCTests
         {
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 });
 
-            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+            var ex = await Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 150m, TestAddress, 0));
             Assert.That(ex!.Window, Is.EqualTo("global-daily"));
         }
@@ -282,7 +282,7 @@ namespace BiatecOIDCTests
         {
             await _service.SetLimitsAsync(TestEmail, TestProvider, "token", new SpendingLimitSettings { DailyLimit = 100 }, TestAddress, 0);
 
-            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+            var ex = await Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 150m, TestAddress, 0));
             Assert.That(ex!.Window, Is.EqualTo("address-daily"));
         }
@@ -298,7 +298,7 @@ namespace BiatecOIDCTests
             });
 
             // The 90 was spent by a different address - TestAddress's own 100 limit is untouched by it.
-            Assert.DoesNotThrowAsync(async () =>
+            await Assert.DoesNotThrowAsync(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 50m, TestAddress, 0));
         }
 
@@ -313,7 +313,7 @@ namespace BiatecOIDCTests
             });
 
             // The global limit counts every address's spend together - 90 (other address) + 30 (this one) exceeds 100.
-            var ex = Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
+            var ex = await Assert.ThrowsAsync<SpendingLimitExceededException>(async () =>
                 await _service.EnsureWithinLimitsAsync(TestEmail, TestProvider, "token", 30m, TestAddress, 0));
             Assert.That(ex!.Window, Is.EqualTo("global-daily"));
         }
@@ -345,25 +345,25 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void GetLimitsAsync_EmptyEmail_Throws()
+        public async Task GetLimitsAsync_EmptyEmail_Throws()
         {
-            Assert.ThrowsAsync<ArgumentException>(async () => await _service.GetLimitsAsync(string.Empty, TestProvider, "token"));
+            await Assert.ThrowsAsync<ArgumentException>(async () => await _service.GetLimitsAsync(string.Empty, TestProvider, "token"));
         }
 
         [Test]
-        public void SetLimitsAsync_EmptyEmail_Throws()
+        public async Task SetLimitsAsync_EmptyEmail_Throws()
         {
-            Assert.ThrowsAsync<ArgumentException>(async () =>
+            await Assert.ThrowsAsync<ArgumentException>(async () =>
                 await _service.SetLimitsAsync(string.Empty, TestProvider, "token", new SpendingLimitSettings()));
         }
 
         [Test]
-        public void NoAccessTokenAndNoAmbientToken_ThrowsUnauthorized()
+        public async Task NoAccessTokenAndNoAmbientToken_ThrowsUnauthorized()
         {
             var providerWithNoAmbientToken = new FakeCloudStorageProvider(ambientAccessToken: null);
             _mockCatalog.Setup(c => c.Resolve(It.IsAny<string>())).Returns(providerWithNoAmbientToken);
 
-            Assert.ThrowsAsync<UnauthorizedAccessException>(async () =>
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(async () =>
                 await _service.GetLimitsAsync(TestEmail, TestProvider, accessToken: null));
         }
     }

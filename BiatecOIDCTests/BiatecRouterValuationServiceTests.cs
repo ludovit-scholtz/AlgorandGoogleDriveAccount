@@ -35,7 +35,7 @@ namespace BiatecOIDCTests
             var result = await _service.GetUsdValueAsync(assetId: 0, amountBaseUnits: 0);
 
             Assert.That(result, Is.EqualTo(0m));
-            _mockRouterClient.Verify(r => r.QuoteAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockRouterClient.Verify(r => r.QuoteAsync(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -45,7 +45,7 @@ namespace BiatecOIDCTests
             var result = await _service.GetUsdValueAsync(assetId: UsdcAssetId, amountBaseUnits: 5_000_000);
 
             Assert.That(result, Is.EqualTo(5m));
-            _mockRouterClient.Verify(r => r.QuoteAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockRouterClient.Verify(r => r.QuoteAsync(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -53,8 +53,8 @@ namespace BiatecOIDCTests
         {
             // 1 ALGO (asset id 0) quoted for 0.2 USDC (200,000 base units at 6 decimals).
             _mockRouterClient
-                .Setup(r => r.QuoteAsync(0, (long)UsdcAssetId, 1_000_000, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(200_000);
+                .Setup(r => r.QuoteAsync(0UL, UsdcAssetId, 1_000_000UL, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(200_000UL);
 
             var result = await _service.GetUsdValueAsync(assetId: 0, amountBaseUnits: 1_000_000);
 
@@ -62,13 +62,13 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public void GetUsdValueAsync_RouterThrows_WrapsInAssetValuationException()
+        public async Task GetUsdValueAsync_RouterThrows_WrapsInAssetValuationException()
         {
             _mockRouterClient
-                .Setup(r => r.QuoteAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+                .Setup(r => r.QuoteAsync(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new HttpRequestException("router unreachable"));
 
-            var ex = Assert.ThrowsAsync<AssetValuationException>(async () => await _service.GetUsdValueAsync(assetId: 999, amountBaseUnits: 1));
+            var ex = await Assert.ThrowsAsync<AssetValuationException>(async () => await _service.GetUsdValueAsync(assetId: 999, amountBaseUnits: 1));
 
             Assert.That(ex!.AssetId, Is.EqualTo(999UL));
             Assert.That(ex.InnerException, Is.InstanceOf<HttpRequestException>());
