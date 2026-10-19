@@ -17,8 +17,8 @@
 
   <!--
     Security override, defined once for every project (BiatecMCP does not reference BiatecSelfCustodyCore, so a pin
-    there alone would not reach it): Algorand4 transitively resolves MessagePack 3.1.8, which carries advisory
-    GHSA-qhrr-8q5h-9q3h. Do NOT align this down to what Algorand4 resolves. BiatecOIDC also uses MessagePack directly
+    there alone would not reach it): Algorand5 (like Algorand4 before it) transitively resolves MessagePack 3.1.8, which carries advisory
+    GHSA-qhrr-8q5h-9q3h. Do NOT align this down to what Algorand5 resolves. BiatecOIDC also uses MessagePack directly
     (AlgorandTransactionInspector's generic msgpack map decode).
   -->
   <ItemGroup>
