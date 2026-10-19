@@ -9,8 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Image tag to promote (must already exist in stage, e.g. 1.2026.07.28-main - check k8s/stage/deployment-*.yaml or Docker Hub for what's currently in stage)"
-        required: true
+        description: "Image tag to promote (e.g. 1.2026.07.28-main). Leave EMPTY (default) to promote whatever image tag is currently deployed to stage, as recorded in k8s/stage/deployment-*-stage.yaml"
+        required: false
+        default: ""
         type: string
       service:
         description: "Which service(s) to promote"
@@ -39,23 +40,38 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate version input looks like an existing tag
+      # An explicit `version` input wins and is used for both services. Otherwise each service's tag is
+      # read from its stage manifest - deploy-stage.yml commits the tag it just deployed there on every
+      # push to master, so those files are the source of truth for "what is currently in stage".
+      - name: Resolve image tag(s) to promote
+        id: resolve
         run: |
-          version="${{ inputs.version }}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}-.+$ ]]; then
-            echo "::error::'$version' doesn't look like a version produced by deploy-stage.yml (expected e.g. 1.2026.07.28-main). Double-check it before promoting."
-            exit 1
+          input="${{ inputs.version }}"
+          mcp_version="$input"
+          oidc_version="$input"
+          if [[ -z "$input" ]]; then
+            mcp_version=$(grep -oP "${IMAGE_MCP}:\K[^\s\"']+" k8s/stage/deployment-mcp-stage.yaml | head -n1)
+            oidc_version=$(grep -oP "${IMAGE_OIDC}:\K[^\s\"']+" k8s/stage/deployment-oidc-stage.yaml | head -n1)
+            echo "No version given - using the tags currently deployed to stage"
           fi
-          echo "Promoting version: $version (service: ${{ inputs.service }})"
+          pattern='^[0-9]+\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}-.+$'
+          for v in "$mcp_version" "$oidc_version"; do
+            if [[ ! "$v" =~ $pattern ]]; then
+              echo "::error::'$v' doesn't look like a version produced by deploy-stage.yml (expected e.g. 1.2026.07.28-main). Double-check it before promoting."
+              exit 1
+            fi
+          done
+          echo "mcp_version=$mcp_version" >> "$GITHUB_OUTPUT"
+          echo "oidc_version=$oidc_version" >> "$GITHUB_OUTPUT"
+          echo "Promoting mcp=$mcp_version oidc=$oidc_version (service: ${{ inputs.service }})"
 
       - name: Update production manifest(s) with the promoted image tag
         run: |
-          version="${{ inputs.version }}"
           if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "mcp" ]]; then
-            sed -i "s~${IMAGE_MCP}.*~${IMAGE_MCP}:${version}~g" k8s/main/deployment-mcp.yaml
+            sed -i "s~${IMAGE_MCP}.*~${IMAGE_MCP}:${{ steps.resolve.outputs.mcp_version }}~g" k8s/main/deployment-mcp.yaml
           fi
           if [[ "${{ inputs.service }}" == "both" || "${{ inputs.service }}" == "oidc" ]]; then
-            sed -i "s~${IMAGE_OIDC}.*~${IMAGE_OIDC}:${version}~g" k8s/main/deployment-oidc.yaml
+            sed -i "s~${IMAGE_OIDC}.*~${IMAGE_OIDC}:${{ steps.resolve.outputs.oidc_version }}~g" k8s/main/deployment-oidc.yaml
           fi
 
       - name: Commit updated production manifests
@@ -64,7 +80,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet -- k8s/main/deployment-mcp.yaml k8s/main/deployment-oidc.yaml; then
             git add k8s/main/deployment-mcp.yaml k8s/main/deployment-oidc.yaml
-            git commit -m "cicd promote ${{ inputs.version }} (${{ inputs.service }}) to production [skip ci]"
+            git commit -m "cicd promote mcp=${{ steps.resolve.outputs.mcp_version }} oidc=${{ steps.resolve.outputs.oidc_version }} (${{ inputs.service }}) to production [skip ci]"
             for i in 1 2 3 4 5; do
               git pull --rebase origin master && git push && break
               echo "Push attempt $i failed, retrying..."
