@@ -429,7 +429,7 @@ namespace BiatecOIDCTests
         [Test]
         public void Inspect_AssetTransferWithAcloseFieldOnTheWire_ReturnsIsCloseOutTrue()
         {
-            // The pinned Algorand5 SDK's AssetTransferTransaction has no settable AssetCloseTo property (an
+            // The pinned Algorand5 SDK's AssetTransferTransaction (re-verified on 5.0.2: only CloseRewards) has no AssetCloseTo property (an
             // "aclose" transaction can still legally appear on the wire, e.g. from a non-SDK-built caller),
             // so this constructs the raw msgpack map directly rather than via the typed SDK object, to prove
             // Inspect reads "aclose" independent of what the local SDK version happens to model.
