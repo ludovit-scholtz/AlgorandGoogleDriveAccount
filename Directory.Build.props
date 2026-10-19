@@ -34,8 +34,9 @@
       on Algorand5 itself: its 1.0.5/1.0.6 already do, but are uninstallable until ARC76Account.Core is published at the
       same version (scholtz/ARC76Account#7). BiatecRouterConnector 1.0.8+ already depends on Algorand5.
     -->
-    <!-- BiatecMCP does not reference BiatecSelfCustodyCore (nor ARC76Account.*), so nothing there pulls Algorand4 in. -->
-    <PackageReference Include="Algorand4" Version="4.7.4.2026080422" ExcludeAssets="all" Condition="'$(MSBuildProjectName)' != 'BiatecMCP'" />
+    <!-- Applied to every project on purpose, incl. BiatecMCP (which currently has no Algorand4 in its graph): a future
+         transitive Algorand4 must never be able to win there either, and the guard tests assert Algorand5 everywhere. -->
+    <PackageReference Include="Algorand4" Version="4.7.4.2026080422" ExcludeAssets="all" />
   </ItemGroup>
 
 </Project>
