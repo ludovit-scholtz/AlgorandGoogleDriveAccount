@@ -76,7 +76,7 @@ namespace BiatecMCP
             // AddMcp serves /.well-known/oauth-protected-resource and shapes the 401/WWW-Authenticate
             // challenge that tells an unauthenticated MCP client where to authenticate. See
             // CLAUDE.md's BiatecMCP architecture notes for the full request flow and the MCP C# SDK
-            // API surface this was verified against (ModelContextProtocol.AspNetCore 1.4.1).
+            // API surface this was verified against (ModelContextProtocol.AspNetCore 2.2.0).
             builder.Services
                 .AddAuthentication(options =>
                 {
