@@ -300,10 +300,11 @@ Root `.editorconfig` + `Directory.Build.props` (auto-imported by all 5 `.csproj`
 analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. `Directory.Build.props` also carries a repo-wide
 security override pinning `MessagePack` (Algorand5 transitively resolves a vulnerable 3.1.8) - both Dockerfiles copy it
 before `dotnet restore` for that reason; don't lower it to what Algorand5 resolves. The same file
-also carries an `Algorand4` `ExcludeAssets="all"` reference: `ARC76Account.Algorand`/`BiatecRouterConnector` still depend on
-Algorand4 transitively and both packages ship an `Algorand.dll`, so without it the Algorand4 binary silently wins over
-Algorand5 in the output (verify with the built `Algorand.dll`'s ProductVersion). Remove it once those packages move to
-Algorand5 (scholtz/ARC76Account#1, scholtz/BiatecRouterConnector#1). Run `dotnet format Biatec.slnx` to
+also carries an `Algorand4` `ExcludeAssets="all"` reference: `ARC76Account.Algorand` 1.0.4 still depends on
+Algorand4 transitively and both SDK packages ship an `Algorand.dll`, so without it the Algorand4 binary silently wins over
+Algorand5 in the output (verify with the built `Algorand.dll`'s ProductVersion). Remove it once `ARC76Account.Algorand`
+moves to Algorand5 - its 1.0.5/1.0.6 already do but are uninstallable until `ARC76Account.Core` is published at the same
+version (scholtz/ARC76Account#7). `BiatecRouterConnector` 1.0.8+ already depends on Algorand5. Run `dotnet format Biatec.slnx` to
 fix flagged style/unused-using issues, and `dotnet format Biatec.slnx --verify-no-changes` before committing —
 both should be clean.
 

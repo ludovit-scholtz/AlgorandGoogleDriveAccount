@@ -25,10 +25,11 @@
          see Program.cs. Deliberately no Google.Apis.*/Microsoft.Extensions.Caching.StackExchangeRedis/
          Swashbuckle.AspNetCore packages (or a BiatecSelfCustodyCore project reference) - this service no
          longer does its own identity/storage-provider sign-in, session pairing, or Swagger UI. -->
-    <!-- NOTE: Directory.Build.props also injects an Algorand4 reference with ExcludeAssets="all" so BiatecRouterConnector
-         (still depends on Algorand4) cannot put Algorand4's Algorand.dll in the output ahead of Algorand5. See that file. -->
+    <!-- NOTE: Directory.Build.props also injects an Algorand4 reference with ExcludeAssets="all" so a transitive
+         Algorand4 (via ARC76Account.Algorand 1.0.4 in BiatecSelfCustodyCore) cannot put Algorand4's Algorand.dll in the output
+         ahead of Algorand5. See that file. -->
     <PackageReference Include="Algorand5" Version="5.0.2.2026101113" />
-    <PackageReference Include="BiatecRouterConnector" Version="1.0.3.2026080111" />
+    <PackageReference Include="BiatecRouterConnector" Version="1.0.8.2026101919" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.13" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
     <PackageReference Include="NBitcoin" Version="10.0.17" />
