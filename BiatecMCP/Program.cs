@@ -108,7 +108,7 @@ namespace BiatecMCP
                         // with "header", so an initializer would append a duplicate. Assigning is robust if it starts
                         // pre-populating the others too. Pinned by McpAuthEndpointTests.
                         BearerMethodsSupported = new List<string> { "header" },
-                        // Deliberately just "openid sign" - the minimal scope set the 3 tools here need.
+                        // Deliberately just "openid sign" - the minimal scope set the tools here need.
                         // A client wanting a different wallet-API scope (e.g. a future tool needing
                         // manage-limits/rekey) requests it explicitly; BiatecOIDC's own consent screen is
                         // what actually shows the user what's being granted either way.
