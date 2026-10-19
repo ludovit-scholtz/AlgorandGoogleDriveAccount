@@ -19,11 +19,6 @@
     <PackageReference Include="BiatecRouterConnector" Version="1.0.3.2026080111" />
     <PackageReference Include="Google.Apis.Auth" Version="1.77.0" />
     <PackageReference Include="Google.Apis.Auth.AspNetCore3" Version="1.77.0" />
-    <!-- Direct reference for AlgorandTransactionInspector's generic msgpack map decode (peeking the
-         "type" discriminator before picking the correctly-typed Transaction subclass) - otherwise only
-         a transitive dependency of Algorand4. Version is a security override (GHSA-qhrr-8q5h-9q3h): Algorand4 resolves the
-         vulnerable 3.1.8, so do NOT align this down to it; keep in sync with the pins in BiatecSelfCustodyCore/BiatecMCP. -->
-    <PackageReference Include="MessagePack" Version="3.1.12" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.13" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.3.1" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.23.0" />

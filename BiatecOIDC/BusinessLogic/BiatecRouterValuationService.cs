@@ -41,14 +41,10 @@ namespace BiatecOIDC.BusinessLogic
                 return ToDecimalAmount(amountBaseUnits, usdReferenceDecimals);
             }
 
-            long quotedUsdBaseUnits;
+            ulong quotedUsdBaseUnits;
             try
             {
-                var fromAsset = checked((long)assetId);
-                var toAsset = checked((long)usdReferenceAssetId);
-                var amount = checked((long)amountBaseUnits);
-
-                quotedUsdBaseUnits = await _routerClient.QuoteAsync(fromAsset, toAsset, amount, cancellationToken);
+                quotedUsdBaseUnits = await _routerClient.QuoteAsync(assetId, usdReferenceAssetId, amountBaseUnits, cancellationToken);
             }
             catch (Exception ex) when (ex is not AssetValuationException)
             {
@@ -56,7 +52,7 @@ namespace BiatecOIDC.BusinessLogic
                 throw new AssetValuationException(assetId, ex);
             }
 
-            return ToDecimalAmount((ulong)quotedUsdBaseUnits, usdReferenceDecimals);
+            return ToDecimalAmount(quotedUsdBaseUnits, usdReferenceDecimals);
         }
 
         private static decimal ToDecimalAmount(ulong baseUnits, int decimals)

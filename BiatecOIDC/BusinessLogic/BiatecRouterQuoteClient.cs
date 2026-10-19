@@ -16,9 +16,9 @@ namespace BiatecOIDC.BusinessLogic
             _client = new BiatecRouterClient(httpClient);
         }
 
-        public async Task<long> QuoteAsync(long fromAsset, long toAsset, long amount, CancellationToken cancellationToken = default)
+        public Task<ulong> QuoteAsync(ulong fromAsset, ulong toAsset, ulong amount, CancellationToken cancellationToken = default)
         {
-            return checked((long)await _client.Api.QuoteAsync(checked((ulong)fromAsset), checked((ulong)toAsset), checked((ulong)amount), cancellationToken));
+            return _client.Api.QuoteAsync(fromAsset, toAsset, amount, cancellationToken);
         }
     }
 }

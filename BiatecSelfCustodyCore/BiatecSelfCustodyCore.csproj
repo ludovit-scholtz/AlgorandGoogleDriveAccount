@@ -22,18 +22,15 @@
     <PackageReference Include="Google.Apis.Drive.v3" Version="1.77.0.4276" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.13" />
-    <!-- Explicit overrides: Google.Apis.Auth(.AspNetCore3) 1.75.0 transitively pulls in the
+    <!-- Explicit overrides: Google.Apis.Auth(.AspNetCore3) has historically pulled in the older
          Microsoft.IdentityModel.* / System.IdentityModel.Tokens.Jwt 5.5.0 release train, which carries a
-         known moderate-severity advisory (GHSA-59j7-ghrg-fj52 - see audit finding M-02/R-022). Pinned here
-         to the same patched version BiatecOIDC.csproj already uses directly, so the vulnerable transitive
-         version is never actually resolved into the dependency graph. -->
+         known moderate-severity advisory (GHSA-59j7-ghrg-fj52 - see audit finding M-02/R-022). Pinned here so
+         the vulnerable transitive version is never resolved into the dependency graph (System.IdentityModel.Tokens.Jwt,
+         the fourth package in this set, is pinned below and in BiatecOIDC.csproj). Re-check whether a given Google.Apis.Auth
+         release still needs this before dropping any of them. -->
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.23.0" />
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.23.0" />
     <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.23.0" />
-    <!-- Security override: Algorand4 brings in the vulnerable MessagePack 3.1.8 transitively (GHSA-qhrr-8q5h-9q3h). Keep this
-         in sync with the identical pins in BiatecMCP.csproj (which does NOT reference this project, so needs its own) and
-         BiatecOIDC.csproj. Do not "align" any of them down to what Algorand4 resolves. -->
-    <PackageReference Include="MessagePack" Version="3.1.12" />
     <PackageReference Include="NBitcoin" Version="10.0.17" />
     <PackageReference Include="NBitcoin.Altcoins" Version="6.0.11" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.23.0" />
