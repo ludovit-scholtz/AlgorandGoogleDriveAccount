@@ -888,6 +888,19 @@ namespace BiatecMCPTests
 
         // ───────────────────────── createSwapTransaction ─────────────────────────
 
+        [TestCase(-1L, 31566704L, 1_000_000L, 0L)]
+        [TestCase(0L, -1L, 1_000_000L, 0L)]
+        [TestCase(0L, 31566704L, 0L, 0L)]
+        [TestCase(0L, 31566704L, -5L, 0L)]
+        [TestCase(0L, 31566704L, 1_000_000L, -1L)]
+        public async Task CreateSwapTransaction_NegativeOrZeroInputs_ReturnsInvalidRequestWithoutQuoting(long from, long to, long amount, long receiveMinimum)
+        {
+            var result = await CreateTool().CreateSwapTransaction(from, to, amount, receiveMinimum);
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+            _biatecRouterQuoteProvider.Verify(p => p.GetQuoteAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
         [Test]
         public async Task CreateSwapTransaction_BiatecRouterQuotesBest_ReturnsErrorWhenAlsoUnauthenticated()
         {

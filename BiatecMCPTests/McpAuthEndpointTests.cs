@@ -45,6 +45,13 @@ namespace BiatecMCPTests
             Assert.That(json.RootElement.GetProperty("resource").GetString(), Does.Contain("/tools"));
             var authServers = json.RootElement.GetProperty("authorization_servers").EnumerateArray().Select(e => e.GetString()).ToList();
             Assert.That(authServers, Has.Some.Contains("oidc.biatec.io"));
+
+            // Guards against the SDK's default and our own initializer both adding "header" (seen after the MCP 2.x bump).
+            var bearerMethods = json.RootElement.GetProperty("bearer_methods_supported").EnumerateArray().Select(e => e.GetString()).ToList();
+            Assert.That(bearerMethods, Is.EqualTo(new[] { "header" }));
+            Assert.That(authServers, Has.Count.EqualTo(1));
+            var scopes = json.RootElement.GetProperty("scopes_supported").EnumerateArray().Select(e => e.GetString()).ToList();
+            Assert.That(scopes, Is.EqualTo(new[] { "openid", "sign" }));
         }
 
         [Test]

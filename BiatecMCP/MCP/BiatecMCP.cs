@@ -643,6 +643,15 @@ namespace BiatecMCP.MCP
         {
             var response = new CreateSwapTransactionResponse();
 
+            // The router client takes unsigned ids/amounts; reject negatives up front with a clear message
+            // instead of letting a checked cast surface as a raw OverflowException.
+            if (fromAssetId < 0 || toAssetId < 0 || amount <= 0 || receiveMinimum < 0)
+            {
+                response.Error = "fromAssetId, toAssetId and receiveMinimum must not be negative, and amount must be greater than 0.";
+                response.ErrorType = "InvalidRequest";
+                return response;
+            }
+
             try
             {
                 var quotes = await _dexSwapAggregator.GetAllQuotesAsync(fromAssetId, toAssetId, amount);
