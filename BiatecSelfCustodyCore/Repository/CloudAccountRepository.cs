@@ -153,15 +153,24 @@ namespace BiatecSelfCustodyCore.Repository
         /// </summary>
         public static Key ToBitcoinKey(Nethereum.Signer.EthECKey ethKey)
         {
-            var bytes = ethKey.GetPrivateKeyAsBytes();
-            if (bytes.Length < 32)
+            var raw = ethKey.GetPrivateKeyAsBytes();
+            var normalized = new byte[32];
+            try
             {
-                var padded = new byte[32];
-                Buffer.BlockCopy(bytes, 0, padded, 32 - bytes.Length, bytes.Length);
-                bytes = padded;
-            }
+                if (raw.Length > 32)
+                {
+                    throw new InvalidOperationException("Unexpected secp256k1 private key length.");
+                }
 
-            return new Key(bytes);
+                Buffer.BlockCopy(raw, 0, normalized, 32 - raw.Length, raw.Length);
+                return new Key(normalized);
+            }
+            finally
+            {
+                // NBitcoin.Key copies the scalar, so don't leave our plaintext copies lying around for the GC.
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(raw);
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(normalized);
+            }
         }
 
         public async Task<string> DeriveBitcoinAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null)

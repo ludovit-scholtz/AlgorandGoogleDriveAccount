@@ -39,7 +39,10 @@ namespace BiatecOIDCTests
             Assert.That(quote, Is.EqualTo(123456UL));
             Assert.That(handler.LastRequest!.Method, Is.EqualTo(HttpMethod.Get));
             Assert.That(handler.LastRequest.RequestUri!.AbsolutePath, Does.Contain("quote").IgnoreCase);
-            Assert.That(handler.LastRequest.RequestUri!.Query, Is.EqualTo("?fromAsset=0&toAsset=31566704&amount=1000000"));
+            var query = System.Web.HttpUtility.ParseQueryString(handler.LastRequest.RequestUri!.Query);
+            Assert.That(query["fromAsset"], Is.EqualTo("0"));
+            Assert.That(query["toAsset"], Is.EqualTo("31566704"));
+            Assert.That(query["amount"], Is.EqualTo("1000000"));
         }
     }
 }

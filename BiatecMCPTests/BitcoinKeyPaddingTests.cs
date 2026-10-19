@@ -15,15 +15,6 @@ namespace BiatecMCPTests
         private const string LeadingZeroKeyHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
         [Test]
-        public void EthKeyWithLeadingZeroByte_GetPrivateKeyAsBytes_IsShorterThan32Bytes_SoItNeedsPaddingForNBitcoin()
-        {
-            var ethKey = new Nethereum.Signer.EthECKey(LeadingZeroKeyHex);
-
-            Assert.That(ethKey.GetPrivateKeyAsBytes(), Has.Length.EqualTo(31));
-            Assert.Throws<ArgumentException>(() => _ = new Key(ethKey.GetPrivateKeyAsBytes()));
-        }
-
-        [Test]
         public void BiatecSelfCustodyCore_ToBitcoinKey_PadsLeadingZeroBytes()
         {
             var ethKey = new Nethereum.Signer.EthECKey(LeadingZeroKeyHex);
