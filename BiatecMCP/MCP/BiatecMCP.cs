@@ -635,7 +635,7 @@ namespace BiatecMCP.MCP
         public async Task<CreateSwapTransactionResponse> CreateSwapTransaction(
             [Description("Asset id to swap from. 0 = native ALGO.")] long fromAssetId,
             [Description("Asset id to swap to. 0 = native ALGO.")] long toAssetId,
-            [Description("Amount to swap, in fromAssetId's base units.")] long amount,
+            [Description("Amount to swap, in fromAssetId's base units. Must be greater than 0.")] long amount,
             [Description("Minimum acceptable output amount, in toAssetId's base units. 0 = no minimum.")] long receiveMinimum = 0,
             [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address to swap from instead of the primary seed.")] string? seedAddress = null,
