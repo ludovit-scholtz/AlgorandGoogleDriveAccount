@@ -3,7 +3,7 @@ using NUnit.Framework;
 namespace BiatecMCPTests
 {
     /// <summary>
-    /// BiatecRouterConnector (1.0.8+, built against Algorand5) binds to Algorand's Algorand.dll. Its swap path is otherwise
+    /// BiatecRouterConnector binds to Algorand's Algorand.dll. Its swap path is otherwise
     /// only exercised against mocks, so this calls the one connector API that binds to an Algorand type for real - a
     /// MissingMethodException/TypeLoadException here means the connector and the SDK are no longer binary compatible.
     /// </summary>
