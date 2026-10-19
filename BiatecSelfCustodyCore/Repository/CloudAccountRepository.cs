@@ -167,7 +167,8 @@ namespace BiatecSelfCustodyCore.Repository
             }
             finally
             {
-                // NBitcoin.Key copies the scalar, so don't leave our plaintext copies lying around for the GC.
+                // Best effort: NBitcoin.Key copies the scalar, so don't leave our own plaintext copies lying around for the GC
+                // (the caller's EthECKey and the returned Key still hold it; GetPrivateKeyAsBytes returns a fresh array).
                 System.Security.Cryptography.CryptographicOperations.ZeroMemory(raw);
                 System.Security.Cryptography.CryptographicOperations.ZeroMemory(normalized);
             }
