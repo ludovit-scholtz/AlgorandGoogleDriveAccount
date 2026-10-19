@@ -150,12 +150,12 @@ dependency on `BiatecSelfCustodyCore`.
     (see "Bitcoin/Bitcoin Cash support" below); backs `getCryptoAddress`/`getCryptoBalance`'s Btc/Bch
     branches, `createBitcoinTransaction`, and `submitTransactionToBlockchain`'s Bitcoin-family branch
   - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in/asset-create
-    transactions (Algorand4 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material
+    transactions (Algorand5 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material
     ever touches this project
   - `Helper/MultisigTransactionBuilder.cs` — derives a multisig account's address from
     `(version, threshold, participantAddresses)`, builds the unsigned `SignedTransaction` "envelope" (a
     `Transaction` plus an empty-signature `MultisigSignature`) each cosigner independently signs, and merges
-    N independently-signed copies via the Algorand4 SDK's `SignedTransaction.MergeMultisigTransactionBytes` -
+    N independently-signed copies via the Algorand5 SDK's `SignedTransaction.MergeMultisigTransactionBytes` -
     see "Multisig transactions" under Architecture notes below
   - `Model/` — `AlgodConfiguration`, `CorsConfiguration`, `Configuration` (local `App:Host`),
     `OidcConfiguration` (`Oidc:Issuer`), `McpResourceConfiguration` (`Mcp:CanonicalResourceUri`),
@@ -298,8 +298,12 @@ and short-lived. There is no automated test job in CI, so run tests locally befo
 
 Root `.editorconfig` + `Directory.Build.props` (auto-imported by all 5 `.csproj`s) enable the built-in Roslyn
 analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. `Directory.Build.props` also carries a repo-wide
-security override pinning `MessagePack` (Algorand4 transitively resolves a vulnerable 3.1.8) - both Dockerfiles copy it
-before `dotnet restore` for that reason; don't lower it to what Algorand4 resolves. Run `dotnet format Biatec.slnx` to
+security override pinning `MessagePack` (Algorand5 transitively resolves a vulnerable 3.1.8) - both Dockerfiles copy it
+before `dotnet restore` for that reason; don't lower it to what Algorand5 resolves. The same file
+also carries an `Algorand4` `ExcludeAssets="all"` reference: `ARC76Account.Algorand`/`BiatecRouterConnector` still depend on
+Algorand4 transitively and both packages ship an `Algorand.dll`, so without it the Algorand4 binary silently wins over
+Algorand5 in the output (verify with the built `Algorand.dll`'s ProductVersion). Remove it once those packages move to
+Algorand5 (scholtz/ARC76Account#1, scholtz/BiatecRouterConnector#1). Run `dotnet format Biatec.slnx` to
 fix flagged style/unused-using issues, and `dotnet format Biatec.slnx --verify-no-changes` before committing —
 both should be clean.
 
@@ -410,7 +414,7 @@ setup stage needs.
   mnemonic, slot)` method - same method name in both, disambiguated only by namespace, so
   `CloudAccountRepository.cs` aliases them (`using AlgorandArc76 = ARC76Account.Algorand.ARC76;` /
   `using EthereumArc76 = ARC76Account.Ethereum.ARC76;`) rather than importing both namespaces unqualified.
-  `ARC76Account.Algorand.ARC76.GetEmailAccount` returns an Algorand4 SDK `Account` (identical to the
+  `ARC76Account.Algorand.ARC76.GetEmailAccount` returns an Algorand5 SDK `Account` (identical to the
   predecessor package's `GetEmailAccount`); `ARC76Account.Ethereum.ARC76.GetEmailAccount` returns a
   `Nethereum.Signer.EthECKey` (identical to the predecessor's `GetEVMEmailAccount`, just renamed since it's
   no longer sharing a type with the Algorand method). `ARC76Account.Ethereum` depends on `Nethereum.Signer`
@@ -562,7 +566,7 @@ setup stage needs.
   separate, chainable tools rather than one monolithic call: `createPaymentTransaction`/
   `createOptInTransaction`/`createAssetCreateTransaction`/`createSwapTransaction`/`createMultisigTransaction`
   build an *unsigned* transaction locally (`AlgorandTransactionBuilder`/`MultisigTransactionBuilder`,
-  Algorand4 SDK, no key material touched, no `sign` claim required - building a proposal is harmless);
+  Algorand5 SDK, no key material touched, no `sign` claim required - building a proposal is harmless);
   `signTransaction(unsignedTransactions, network, address)` forwards it to
   `POST /wallet/{network}/{address}/sign` — (BiatecOIDC resolves `address` to the signing seed/slot,
   enforces the `sign`/`rekey` claim and both spending-limit tiers there —
@@ -572,7 +576,7 @@ setup stage needs.
   private `SubmitSignedTransactionsAsync` helper, also requiring `sign` (see "Unified broadcast tool" below
   for its Bitcoin-family branch and why this is one tool, not two). `mergeMultisigTransactions` combines
   independently-signed copies of a `createMultisigTransaction` envelope (no BiatecOIDC/Algod call - pure
-  local combination via the Algorand4 SDK). `createBridgeTransaction` builds a real Aramid Finance bridge
+  local combination via the Algorand5 SDK). `createBridgeTransaction` builds a real Aramid Finance bridge
   transaction (see "Aramid bridge integration" below). `getAddressInfo(network, address)`,
   `listActiveAddresses()`, and `activateCryptoAddress(network, seedAddress, slot, address)` are thin
   wrappers over `GET /wallet/{network}/{address}/info`, `GET /wallet/active-addresses`, and
@@ -644,7 +648,7 @@ setup stage needs.
   `DriveService.SignTransactionAsync` already branches on `SignedTransaction.MSig != null` and signs a
   **fresh** copy each call (not mutating in place) - exactly right for "collect N independent copies, then
   merge" - so no BiatecOIDC-side change was needed for this. `mergeMultisigTransactions` combines the
-  collected copies via the Algorand4 SDK's `SignedTransaction.MergeMultisigTransactionBytes` once at least
+  collected copies via the Algorand5 SDK's `SignedTransaction.MergeMultisigTransactionBytes` once at least
   `threshold` of them are present, ready for `submitTransactionToBlockchain`. Two companion build-only tools
   cover the case where the transaction was *not* built by `createMultisigTransaction` itself:
   `getMultisigAddress` derives just the multisig account's address from `(version, threshold, ordered
@@ -663,7 +667,7 @@ setup stage needs.
   the public [genesis list](https://scholtz.github.io/AlgorandPublicData/genesis/genesis-list.json) (skipping
   any entry with a blank `genesisHash`, e.g. a local sandbox placeholder), then for each chain fetches that
   network's [`public-algod-providers.json`](https://scholtz.github.io/AlgorandPublicData/algod/mainnet-v1.0/public-algod-providers.json)
-  and calls each candidate node's own `/v2/transactions/params` (reusing the Algorand4 SDK's
+  and calls each candidate node's own `/v2/transactions/params` (reusing the Algorand5 SDK's
   `DefaultApi.TransactionParamsAsync()` - the response shape is identical, so no bespoke JSON parsing is
   needed) - the first provider whose reported genesis hash matches the genesis list's value wins as that
   chain's live node; a chain with no currently-live matching provider is dropped entirely, never counted as
@@ -877,7 +881,7 @@ setup stage needs.
   bridge configuration fresh on every call (per Aramid's own "do not cache indefinitely" guidance) by finding
   the most recent Algorand mainnet transaction on Aramid's config account
   (`ARAMICOCHLHSX3G5KCKK23M72ETI537GK5VGLOVHXAGPIELWYJKIMGKK6I`) whose note starts with `aramid-config/v1:j`
-  (via the Algorand4 SDK's `Algorand.Indexer.LookupApi` against a public Algonode indexer - no dedicated
+  (via the Algorand5 SDK's `Algorand.Indexer.LookupApi` against a public Algonode indexer - no dedicated
   Indexer infrastructure needed), then fetching that note's IPFS hash from a public gateway. `createBridgeTransaction`
   looks up the requested route in the fetched config's `Chains`/`Chains2Tokens`, resolves the fee schedule
   active at the current round, and hands the arithmetic to `AramidBridgeCalculator` (`BiatecMCP/Helper/`,

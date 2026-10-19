@@ -17,7 +17,7 @@ namespace BiatecMCPTests
     /// <see cref="EvmUnsignedTransaction.MaxPriorityFeePerGas"/> are) from the seed's derived
     /// <see cref="EthECKey"/>, mirroring the existing Algorand signing path
     /// (<see cref="DriveService.SignTransactionAsync"/>) but via <c>Nethereum.Model</c>/<c>Nethereum.Signer</c>
-    /// instead of the Algorand4 SDK. <see cref="ICloudAccountRepository"/> is mocked - real seed derivation
+    /// instead of the Algorand5 SDK. <see cref="ICloudAccountRepository"/> is mocked - real seed derivation
     /// is covered by <see cref="CloudAccountRepositoryTests"/>.
     /// </summary>
     [TestFixture]

@@ -8,7 +8,7 @@ namespace BiatecOIDC.BusinessLogic
     /// Real HTTP implementation of <see cref="IPublicAlgodDataSource"/> - fetches
     /// https://scholtz.github.io/AlgorandPublicData's genesis list and per-chain public-algod-provider
     /// lists, and checks a candidate node's liveness by calling its own <c>/v2/transactions/params</c>
-    /// (reusing the Algorand4 SDK's own model/deserialization, since the response shape is identical).
+    /// (reusing the Algorand5 SDK's own model/deserialization, since the response shape is identical).
     /// Not unit-tested at this level - see <see cref="IPublicAlgodDataSource"/>'s remarks; exercised via
     /// <see cref="AlgorandChainRegistry"/>'s tests against the mocked interface instead.
     /// </summary>

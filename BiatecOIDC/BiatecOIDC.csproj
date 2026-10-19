@@ -12,7 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Algorand4" Version="4.7.4.2026080422" />
+    <PackageReference Include="Algorand5" Version="5.0.2.2026101113" />
     <!-- Client for the Biatec Router API (router.api.biatec.io) - used only for its public, unauthenticated
          /quote endpoint (BiatecRouterValuationService) to price a spent asset in USD for spending-limit
          enforcement. Not used for its swap/route-transaction-building features. -->

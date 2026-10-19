@@ -17,12 +17,23 @@
 
   <!--
     Security override, defined once for every project (BiatecMCP does not reference BiatecSelfCustodyCore, so a pin
-    there alone would not reach it): Algorand4 transitively resolves MessagePack 3.1.8, which carries advisory
-    GHSA-qhrr-8q5h-9q3h. Do NOT align this down to what Algorand4 resolves. BiatecOIDC also uses MessagePack directly
+    there alone would not reach it): Algorand5 (like Algorand4 before it) transitively resolves MessagePack 3.1.8, which carries advisory
+    GHSA-qhrr-8q5h-9q3h. Do NOT align this down to what Algorand5 resolves. BiatecOIDC also uses MessagePack directly
     (AlgorandTransactionInspector's generic msgpack map decode).
   -->
   <ItemGroup>
     <PackageReference Include="MessagePack" Version="3.1.12" />
+
+    <!--
+      Algorand4 is superseded by Algorand5 (same "Algorand" assembly/namespace), but ARC76Account.Algorand and
+      BiatecRouterConnector still depend on Algorand4 transitively. Both ship an Algorand.dll, so without this the
+      Algorand4 binary silently wins over Algorand5 in the output. This direct reference (nearest-wins over the
+      transitive one) contributes no assets, so only Algorand5 is compiled/run against. Binary compatibility was checked
+      by scanning every Algorand.dll type/member reference in ARC76Account.* 1.0.4, BiatecRouterConnector 1.0.3 and the retired AlgorandARC76Account 1.1.0
+      against Algorand5 5.0.2 (none missing); re-check that if either package is bumped before it moves to Algorand5. Remove it once those two
+      packages depend on Algorand5 themselves.
+    -->
+    <PackageReference Include="Algorand4" Version="4.7.4.2026080422" ExcludeAssets="all" />
   </ItemGroup>
 
 </Project>
