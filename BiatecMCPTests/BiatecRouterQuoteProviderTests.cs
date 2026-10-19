@@ -7,8 +7,9 @@ namespace BiatecMCPTests
 {
     /// <summary>
     /// Drives the real BiatecRouterConnector (not a mock) through <see cref="BiatecRouterQuoteProvider"/> against a stubbed
-    /// HTTP handler, covering both calls createSwapTransaction relies on (/quote and the route-building call). Catches a
-    /// connector upgrade that changes either contract or its (de)serialization of Algorand SDK types.
+    /// HTTP handler, covering both calls createSwapTransaction relies on (/quote and the route-building call): request
+    /// shaping and response deserialization. The stubbed response bodies are hand-written, and router-side auth is not
+    /// modelled, so this guards against connector binding/contract drift, not against the live router's behaviour.
     /// </summary>
     [TestFixture]
     public class BiatecRouterQuoteProviderTests
@@ -40,7 +41,7 @@ namespace BiatecMCPTests
             Assert.That(quote, Is.Not.Null);
             Assert.That(quote!.OutputAmount, Is.EqualTo(123456));
             Assert.That(handler.LastRequest!.RequestUri!.AbsolutePath, Does.Contain("quote").IgnoreCase);
-            Assert.That(handler.LastRequest.RequestUri.Query, Does.Contain("31566704").And.Contain("1000000"));
+            Assert.That(handler.LastRequest.RequestUri.Query, Is.EqualTo("?fromAsset=0&toAsset=31566704&amount=1000000"));
         }
 
         [Test]

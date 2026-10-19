@@ -3,8 +3,8 @@ using NUnit.Framework;
 namespace BiatecMCPTests
 {
     /// <summary>
-    /// BiatecRouterConnector uses types from the Algorand SDK. Its swap path is otherwise
-    /// only exercised against mocks, so this calls the one connector API that binds to an Algorand type for real - a
+    /// ToRouterParams is the one BiatecRouterConnector API that takes an Algorand SDK type (everything else uses the connector's own
+    /// generated models), so it is the one place the connector binds to Algorand.dll directly. A
     /// MissingMethodException/TypeLoadException here means the connector and the SDK are no longer binary compatible.
     /// </summary>
     [TestFixture]

@@ -303,8 +303,7 @@ before `dotnet restore` for that reason; don't lower it to what Algorand5 resolv
 also carries an `Algorand4` `ExcludeAssets="all"` reference: `ARC76Account.Algorand` 1.0.4 still depends on
 Algorand4 transitively and both SDK packages ship an `Algorand.dll`, so without it the Algorand4 binary silently wins over
 Algorand5 in the output (verify with the built `Algorand.dll`'s ProductVersion). Remove it once `ARC76Account.Algorand`
-moves to Algorand5 - its 1.0.5/1.0.6 already do but are uninstallable until `ARC76Account.Core` is published at the same
-version (scholtz/ARC76Account#7). `BiatecRouterConnector` 1.0.8+ already depends on Algorand5. Run `dotnet format Biatec.slnx` to
+resolves Algorand5 (blocked upstream, see scholtz/ARC76Account#7). Run `dotnet format Biatec.slnx` to
 fix flagged style/unused-using issues, and `dotnet format Biatec.slnx --verify-no-changes` before committing —
 both should be clean.
 

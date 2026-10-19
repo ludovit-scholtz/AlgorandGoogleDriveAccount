@@ -126,7 +126,7 @@ namespace BiatecSelfCustodyCore.Repository
                 var context = await ResolveContextAsync(storageProvider, accessToken);
                 var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
-                return new Key(EthereumArc76.GetEmailAccount(email, seed.Mnemonic, slot).GetPrivateKeyAsBytes());
+                return ToBitcoinKey(EthereumArc76.GetEmailAccount(email, seed.Mnemonic, slot));
             }
             catch (UnauthorizedAccessException)
             {
@@ -145,6 +145,23 @@ namespace BiatecSelfCustodyCore.Repository
                 _logger.LogError(ex, "Error loading a Bitcoin-family signing key from {Provider} for email {Email}", storageProvider.Name, email);
                 throw new InvalidOperationException($"Error loading a Bitcoin-family signing key from {storageProvider.Name}.");
             }
+        }
+
+        /// <summary>
+        /// Wraps the shared secp256k1 key as an <see cref="NBitcoin.Key"/>. <c>EthECKey.GetPrivateKeyAsBytes()</c> strips leading
+        /// zero bytes (about 1 in 256 keys are shorter than 32 bytes), which <c>NBitcoin.Key</c> rejects, so left-pad to 32.
+        /// </summary>
+        public static Key ToBitcoinKey(Nethereum.Signer.EthECKey ethKey)
+        {
+            var bytes = ethKey.GetPrivateKeyAsBytes();
+            if (bytes.Length < 32)
+            {
+                var padded = new byte[32];
+                Buffer.BlockCopy(bytes, 0, padded, 32 - bytes.Length, bytes.Length);
+                bytes = padded;
+            }
+
+            return new Key(bytes);
         }
 
         public async Task<string> DeriveBitcoinAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null)
