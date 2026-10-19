@@ -300,10 +300,10 @@ Root `.editorconfig` + `Directory.Build.props` (auto-imported by all 5 `.csproj`
 analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. `Directory.Build.props` also carries a repo-wide
 security override pinning `MessagePack` (Algorand5 transitively resolves a vulnerable 3.1.8) - both Dockerfiles copy it
 before `dotnet restore` for that reason; don't lower it to what Algorand5 resolves. The same file
-also carries an `Algorand4` `ExcludeAssets="all"` reference: `ARC76Account.Algorand`/`BiatecRouterConnector` still depend on
-Algorand4 transitively and both packages ship an `Algorand.dll`, so without it the Algorand4 binary silently wins over
-Algorand5 in the output (verify with the built `Algorand.dll`'s ProductVersion). Remove it once those packages move to
-Algorand5 (scholtz/ARC76Account#1, scholtz/BiatecRouterConnector#1). Run `dotnet format Biatec.slnx` to
+also carries an `Algorand4` `ExcludeAssets="all"` reference: `ARC76Account.Algorand` 1.0.4 still depends on
+Algorand4 transitively and both SDK packages ship an `Algorand.dll`, so without it the Algorand4 binary silently wins over
+Algorand5 in the output (verify with the built `Algorand.dll`'s ProductVersion). Remove it once `ARC76Account.Algorand`
+resolves Algorand5 (blocked upstream, see scholtz/ARC76Account#7). Run `dotnet format Biatec.slnx` to
 fix flagged style/unused-using issues, and `dotnet format Biatec.slnx --verify-no-changes` before committing —
 both should be clean.
 
@@ -788,7 +788,9 @@ setup stage needs.
   `"Bitcoin"`/`"BTC"` and `"BitcoinCash"`/`"Bitcoin Cash"`/`"BCH"`). Unlike Ethereum, there's no separate
   BIP32/BIP44 derivation path - both Bitcoin-family addresses are derived from the **exact same** secp256k1
   key `ARC76Account.Ethereum.ARC76.GetEmailAccount` already produces for EVM (`ICloudAccountRepository.LoadBitcoinKeyAsync`
-  wraps it as an `NBitcoin.Key`, `BiatecSelfCustodyCore` now depends on `NBitcoin`/`NBitcoin.Altcoins`) - one
+  wraps it as an `NBitcoin.Key` via `CloudAccountRepository.ToBitcoinKey` (which left-pads to 32 bytes, since
+  `EthECKey.GetPrivateKeyAsBytes()` strips leading zeros (~1 in 256 keys) and `NBitcoin.Key` rejects short input; never call
+  `new Key(ethKey.GetPrivateKeyAsBytes())` directly), `BiatecSelfCustodyCore` now depends on `NBitcoin`/`NBitcoin.Altcoins`) - one
   key per seed/slot, every chain family. `DeriveBitcoinAddressAsync` formats it as Bitcoin mainnet native
   SegWit P2WPKH (`bc1...`); `DeriveBitcoinCashAddressAsync` formats the same key as legacy P2PKH under
   `NBitcoin.Altcoins.BCash`'s network, which renders as CashAddr (`bitcoincash:q...`) by default. `GET /wallet/address/{seedAddress}/{slot?}`

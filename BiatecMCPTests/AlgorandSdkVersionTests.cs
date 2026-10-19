@@ -4,8 +4,8 @@ using NUnit.Framework;
 namespace BiatecMCPTests
 {
     /// <summary>
-    /// Guards the Algorand5 upgrade: ARC76Account.Algorand and BiatecRouterConnector still depend on Algorand4
-    /// transitively, and both packages ship an Algorand.dll, so a build-config regression (see the Algorand4
+    /// Guards the Algorand5 upgrade: ARC76Account.Algorand 1.0.4 still depends on Algorand4
+    /// transitively, and the Algorand4 and Algorand5 packages both ship an Algorand.dll, so a build-config regression (see the Algorand4
     /// ExcludeAssets reference in Directory.Build.props) would silently run on the old SDK with every test green.
     /// </summary>
     [TestFixture]

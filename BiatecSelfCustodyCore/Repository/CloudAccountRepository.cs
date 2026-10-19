@@ -126,7 +126,7 @@ namespace BiatecSelfCustodyCore.Repository
                 var context = await ResolveContextAsync(storageProvider, accessToken);
                 var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
 
-                return new Key(EthereumArc76.GetEmailAccount(email, seed.Mnemonic, slot).GetPrivateKeyAsBytes());
+                return ToBitcoinKey(EthereumArc76.GetEmailAccount(email, seed.Mnemonic, slot));
             }
             catch (UnauthorizedAccessException)
             {
@@ -144,6 +144,33 @@ namespace BiatecSelfCustodyCore.Repository
             {
                 _logger.LogError(ex, "Error loading a Bitcoin-family signing key from {Provider} for email {Email}", storageProvider.Name, email);
                 throw new InvalidOperationException($"Error loading a Bitcoin-family signing key from {storageProvider.Name}.");
+            }
+        }
+
+        /// <summary>
+        /// Wraps the shared secp256k1 key as an <see cref="NBitcoin.Key"/>. <c>EthECKey.GetPrivateKeyAsBytes()</c> strips leading
+        /// zero bytes (about 1 in 256 keys are shorter than 32 bytes), which <c>NBitcoin.Key</c> rejects, so left-pad to 32.
+        /// </summary>
+        public static Key ToBitcoinKey(Nethereum.Signer.EthECKey ethKey)
+        {
+            var raw = ethKey.GetPrivateKeyAsBytes();
+            var normalized = new byte[32];
+            try
+            {
+                if (raw.Length > 32)
+                {
+                    throw new InvalidOperationException("Unexpected secp256k1 private key length.");
+                }
+
+                Buffer.BlockCopy(raw, 0, normalized, 32 - raw.Length, raw.Length);
+                return new Key(normalized);
+            }
+            finally
+            {
+                // Best effort: NBitcoin.Key copies the scalar, so don't leave our own plaintext copies lying around for the GC
+                // (the caller's EthECKey and the returned Key still hold it; GetPrivateKeyAsBytes returns a fresh array).
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(raw);
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(normalized);
             }
         }
 
