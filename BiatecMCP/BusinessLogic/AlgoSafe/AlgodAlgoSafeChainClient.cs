@@ -127,6 +127,8 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
     public sealed class AlgodAlgoSafeChainClientFactory : IAlgoSafeChainClientFactory
     {
         public IAlgoSafeChainClient Create(AlgorandChain chain) =>
-            new AlgodAlgoSafeChainClient(HttpClientConfigurator.ConfigureHttpClient(chain.AlgodApiAddress, chain.AlgodApiToken));
+            new AlgodAlgoSafeChainClient(string.IsNullOrWhiteSpace(chain.AlgodApiTokenHeader)
+                ? HttpClientConfigurator.ConfigureHttpClient(chain.AlgodApiAddress, chain.AlgodApiToken)
+                : HttpClientConfigurator.ConfigureHttpClient(chain.AlgodApiAddress, chain.AlgodApiToken, chain.AlgodApiTokenHeader));
     }
 }

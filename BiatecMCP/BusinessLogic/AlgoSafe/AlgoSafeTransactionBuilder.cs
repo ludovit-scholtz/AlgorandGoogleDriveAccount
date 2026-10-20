@@ -327,11 +327,14 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("SafePaused", $"Safe {appId} is paused; transaction proposals cannot be executed until it is unpaused.");
             }
 
+            // Execution is permissionless, so this is the last point to refuse: only content this server fully decoded and can show is built.
+            EnsureFullyReviewable(view, proposalId);
+
             var parameters = await _chain.GetTransactionParamsAsync(cancellationToken);
             return await WithBudgetsAsync(
                 budget => NewProxy(appId, parameters).ExecuteProposal_Transactions(proposalId, budget, AsAccount(sender), null, string.Empty, 1000),
                 parameters,
-                $"Execute proposal {proposalId} of safe {appId}: the safe sends {view.Transactions.Count} transaction(s) from its own account: {DescribeTransfers(view.Transactions)}{ExecutionWarnings(view)}",
+                $"Execute proposal {proposalId} of safe {appId}: the safe sends {view.Transactions.Count} transaction(s) from its own account: {DescribeTransfers(view.Transactions)}",
                 cancellationToken);
         }
 
@@ -372,33 +375,6 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             {
                 throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} spends from another account ({foreignSender.Sender}) rather than the safe's own; approving that is refused here - review and approve it in the AlgoSafe app instead.");
             }
-        }
-
-        /// <summary>Execution is permissionless once approved, so anything unusual about what will be sent is called out in the summary the agent relays.</summary>
-        private static string ExecutionWarnings(AlgoSafeProposalView view)
-        {
-            var warnings = new List<string>();
-            if ((ulong)view.Transactions.Count != view.Summary.TotalTransactions)
-            {
-                warnings.Add($"WARNING: only {view.Transactions.Count} of the proposal's {view.Summary.TotalTransactions} transactions could be read, so this list is incomplete");
-            }
-
-            if (view.Transactions.Any(t => t.ClosesAccount))
-            {
-                warnings.Add("WARNING: includes a close-out that sweeps the sender's entire remaining balance");
-            }
-
-            if (view.Transactions.Any(t => t.Kind.StartsWith("Unsupported", StringComparison.Ordinal)))
-            {
-                warnings.Add("WARNING: includes transaction kinds this server cannot decode (app call, rekey, key registration or asset configuration)");
-            }
-
-            if (view.Transactions.Any(t => t.Sender != AlgoSafeReader.SafeItself))
-            {
-                warnings.Add("WARNING: spends from an account other than the safe's own");
-            }
-
-            return warnings.Count == 0 ? string.Empty : " | " + string.Join("; ", warnings);
         }
 
         private static string DescribeTransfers(IReadOnlyList<AlgoSafeProposedTransactionView> transactions) =>

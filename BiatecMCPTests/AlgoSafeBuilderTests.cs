@@ -325,14 +325,15 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public async Task Execute_SummaryListsWhatIsSent_AndWarnsAboutCloseOuts()
+        public async Task Execute_SummaryListsWhatIsSent_AndRefusesContentItCannotShow()
         {
-            var chain = SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusReady, new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver, 777, close: true) });
-
-            var step = await BuilderFor(chain).BuildExecuteAsync(FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.AppId, 1);
-
+            var ok = SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusReady, new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver, 777) });
+            var step = await BuilderFor(ok).BuildExecuteAsync(FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.AppId, 1);
             Assert.That(step.Summary, Does.Contain("777 microAlgo to " + FakeAlgoSafeChain.Receiver.EncodeAsString()));
-            Assert.That(step.Summary, Does.Contain("WARNING: includes a close-out"));
+
+            var closeOut = SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusReady, new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver, 777, close: true) });
+            var ex = await Assert.ThrowsAsync<AlgoSafeException>(() => BuilderFor(closeOut).BuildExecuteAsync(FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.AppId, 1));
+            Assert.That(ex!.ErrorType, Is.EqualTo("UnsupportedProposal"));
         }
 
         [Test]
