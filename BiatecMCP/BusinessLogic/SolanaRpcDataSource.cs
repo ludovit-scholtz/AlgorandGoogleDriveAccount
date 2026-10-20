@@ -103,9 +103,14 @@ namespace BiatecMCP.BusinessLogic
                     : message);
             }
 
-            return response.Result is { ValueKind: JsonValueKind.String } signature && !string.IsNullOrEmpty(signature.GetString())
-                ? new SolanaSendResult(signature.GetString(), null)
-                : new SolanaSendResult(null, "The Solana RPC node returned no transaction signature.");
+            if (response.Result is { ValueKind: JsonValueKind.String } signature && !string.IsNullOrEmpty(signature.GetString()))
+            {
+                return new SolanaSendResult(signature.GetString(), null);
+            }
+
+            // A 200 with neither a signature nor an error (e.g. a proxy's empty JSON-RPC envelope) says nothing about whether the node
+            // accepted the transaction - same ambiguity as a timeout, so same treatment: unknown, with the signature to look up.
+            return new SolanaSendResult(null, "The Solana RPC node answered without a transaction signature, so it is UNKNOWN whether the transaction was accepted.", OutcomeUnknown: true, ExpectedSignature: SolanaAddressValidator.TryComputeSignature(signedTransaction));
         }
 
         /// <summary>

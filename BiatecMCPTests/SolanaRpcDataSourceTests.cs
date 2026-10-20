@@ -393,14 +393,28 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public async Task SendTransactionAsync_NoResultAndNoError_ReturnsError()
+        public async Task SendTransactionAsync_NoResultAndNoError_IsOutcomeUnknownNotADefiniteFailure()
         {
+            // A proxy's empty 200 envelope may have been sent after the node accepted the transaction.
             var handler = new StubHandler(_ => Json("{\"jsonrpc\":\"2.0\",\"id\":1}"));
 
-            var result = await Create(handler).SendTransactionAsync(new byte[] { 1 });
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
 
             Assert.That(result.Signature, Is.Null);
-            Assert.That(result.Error, Is.Not.Null);
+            Assert.That(result.OutcomeUnknown, Is.True);
+            Assert.That(result.ExpectedSignature, Is.EqualTo(SolanaAddressValidator.TryComputeSignature(SignedBytes())));
+        }
+
+        [TestCase("{\"jsonrpc\":\"2.0\",\"result\":42,\"id\":1}")]
+        [TestCase("{\"jsonrpc\":\"2.0\",\"result\":\"\",\"id\":1}")]
+        [TestCase("{\"jsonrpc\":\"2.0\",\"result\":null,\"id\":1}")]
+        public async Task SendTransactionAsync_UnusableResult_IsOutcomeUnknown(string body)
+        {
+            var handler = new StubHandler(_ => Json(body));
+
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
+
+            Assert.That(result.OutcomeUnknown, Is.True);
         }
     }
 

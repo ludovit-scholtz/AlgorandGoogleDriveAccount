@@ -236,7 +236,7 @@ namespace BiatecOIDC.Controllers
                 return BadRequest(new ProblemDetails
                 {
                     Title = "address_not_active",
-                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate an externally rekeyed address via POST /wallet/{network}/{address}/activate first."
+                    Detail = $"'{address}' is not a known address for this account on this network. An address only works on a network of its own chain family (e.g. an Algorand address cannot sign on an EVM, Bitcoin or Solana network, and vice versa). Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate an externally rekeyed address via POST /wallet/{network}/{address}/activate first."
                 });
             }
 
@@ -327,7 +327,7 @@ namespace BiatecOIDC.Controllers
                 return BadRequest(new ProblemDetails
                 {
                     Title = "address_not_active",
-                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate it via POST /wallet/{network}/{address}/activate first."
+                    Detail = $"'{address}' is not a known address for this account on this network. An address only works on a network of its own chain family (e.g. an Algorand address cannot sign on an EVM, Bitcoin or Solana network, and vice versa). Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate it via POST /wallet/{network}/{address}/activate first."
                 });
             }
 
@@ -400,7 +400,7 @@ namespace BiatecOIDC.Controllers
                 return BadRequest(new ProblemDetails
                 {
                     Title = "address_not_active",
-                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate it via POST /wallet/{network}/{address}/activate first."
+                    Detail = $"'{address}' is not a known address for this account on this network. An address only works on a network of its own chain family (e.g. an Algorand address cannot sign on an EVM, Bitcoin or Solana network, and vice versa). Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate it via POST /wallet/{network}/{address}/activate first."
                 });
             }
 
@@ -499,7 +499,7 @@ namespace BiatecOIDC.Controllers
                 return BadRequest(new ProblemDetails
                 {
                     Title = "address_not_active",
-                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate it via POST /wallet/{network}/{address}/activate first."
+                    Detail = $"'{address}' is not a known address for this account on this network. An address only works on a network of its own chain family (e.g. an Algorand address cannot sign on an EVM, Bitcoin or Solana network, and vice versa). Derive it via GET /wallet/address/{{seedAddress}}/{{slot}} (Solana addresses can't be explicitly activated - deriving is what registers them)."
                 });
             }
 
@@ -658,7 +658,7 @@ namespace BiatecOIDC.Controllers
             var signer = await ResolveSignerAsync(principal, email, provider, resolvedAccessToken, address, resolvedNetwork.Family);
             if (signer == null)
             {
-                return BadRequest(new ProblemDetails { Title = "address_not_active", Detail = $"'{address}' is not a known address for this account." });
+                return BadRequest(new ProblemDetails { Title = "address_not_active", Detail = $"'{address}' is not a known address for this account on this network. An address only works on a network of its own chain family (e.g. an Algorand address cannot sign on an EVM, Bitcoin or Solana network, and vice versa)." });
             }
 
             try
@@ -706,7 +706,7 @@ namespace BiatecOIDC.Controllers
             var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address, resolvedNetwork.Family);
             if (signer == null)
             {
-                return BadRequest(new ProblemDetails { Title = "address_not_active", Detail = $"'{address}' is not a known address for this account." });
+                return BadRequest(new ProblemDetails { Title = "address_not_active", Detail = $"'{address}' is not a known address for this account on this network. An address only works on a network of its own chain family (e.g. an Algorand address cannot sign on an EVM, Bitcoin or Solana network, and vice versa)." });
             }
 
             var settings = new SpendingLimitSettings
