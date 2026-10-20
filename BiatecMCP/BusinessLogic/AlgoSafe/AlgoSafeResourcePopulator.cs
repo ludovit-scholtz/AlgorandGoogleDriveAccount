@@ -35,6 +35,12 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             var feeMultiple = 1UL;
             var attempts = 0;
 
+            // The generated proxies hard-code a 1000 µA fee; a network with a higher minimum needs it raised before the first simulation.
+            foreach (var transaction in group)
+            {
+                transaction.Fee = Math.Max(transaction.Fee, minFee);
+            }
+
             while (attempts++ < MaxResourceAttempts + 12)
             {
                 AssignGroupId(group);
@@ -75,7 +81,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                     // Exact fee: the call itself plus one min fee per inner transaction it spawned - never more, never less.
                     var inner = CountInner(results[i].ExecTrace);
                     innerCount += inner;
-                    if (appCall is not ApplicationCreateTransaction)
+
+                    // Without a trace there is nothing to trim against: keep the fee that just simulated successfully.
+                    if (appCall is not ApplicationCreateTransaction && results[i].ExecTrace != null)
                     {
                         var exactFee = minFee * (ulong)(1 + inner);
                         if (appCall.Fee != exactFee)

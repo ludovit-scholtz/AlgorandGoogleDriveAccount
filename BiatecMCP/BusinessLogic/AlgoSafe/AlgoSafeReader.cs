@@ -191,6 +191,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 view.Transactions = await ReadProposedTransactionsAsync(appId, proposalId, proposal.NumPayloads, cancellationToken);
             }
 
+            view.ReviewBlocker = ReviewBlocker(view);
+            view.CanExecute &= view.ReviewBlocker == null;
+
             if (caller != null)
             {
                 var callerString = caller.EncodeAsString();
@@ -240,9 +243,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             var pending = await _chain.GetPendingTransactionAsync(transactionId.Trim(), cancellationToken)
                 ?? throw new AlgoSafeException("TransactionNotFound", $"Transaction {transactionId} is not known to the node: not broadcast yet, on a different network, or too old for the node to still remember (nodes only keep recent transactions - do NOT redeploy; look the application up by its id instead if you have it).");
 
-            var pendingTransaction = pending as Algorand.Algod.Model.Transactions.Transaction;
-            var confirmedRound = pendingTransaction?.ConfirmedRound ?? 0;
-            if (confirmedRound == 0 && !string.IsNullOrEmpty(pendingTransaction?.PoolError))
+            var pendingTransaction = pending as Algorand.Algod.Model.Transactions.Transaction
+                ?? throw new AlgoSafeException("UnexpectedNodeResponse", $"The node returned an unrecognised answer for transaction {transactionId}.");
+            var confirmedRound = pendingTransaction.ConfirmedRound ?? 0;
+            if (confirmedRound == 0 && !string.IsNullOrEmpty(pendingTransaction.PoolError))
             {
                 throw new AlgoSafeException("TransactionRejected", $"The node rejected transaction {transactionId}: {AlgoSafeText.Clean(pendingTransaction.PoolError)}. It will never confirm - rebuild it.");
             }
@@ -313,6 +317,38 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             return transactions;
         }
 
+        /// <summary>
+        /// Why an approval or execution of this proposal must not be built by this server (its content isn't fully visible here), or <c>null</c>
+        /// when every transaction was decoded and is a plain transfer from the safe itself.
+        /// </summary>
+        internal static string? ReviewBlocker(AlgoSafeProposalView view)
+        {
+            var summary = view.Summary;
+            if (summary.Type != "TransactionGroup")
+            {
+                return $"it is a governance or other non-transfer change ({summary.Type}), whose content this server cannot show";
+            }
+
+            if ((ulong)view.Transactions.Count != summary.TotalTransactions)
+            {
+                return $"it should contain {summary.TotalTransactions} transaction(s) but only {view.Transactions.Count} could be read";
+            }
+
+            var closeOut = view.Transactions.FirstOrDefault(t => t.ClosesAccount);
+            if (closeOut != null)
+            {
+                return $"it contains a close-out that sweeps the sender's ENTIRE remaining balance to {closeOut.CloseTo}";
+            }
+
+            if (view.Transactions.Any(t => t.Kind.StartsWith("Unsupported", StringComparison.Ordinal)))
+            {
+                return "it contains transaction kinds this server cannot decode (app call, key registration, asset configuration or rekey)";
+            }
+
+            var foreign = view.Transactions.FirstOrDefault(t => t.Sender != SafeItself);
+            return foreign == null ? null : $"it spends from another account ({foreign.Sender}) rather than the safe's own";
+        }
+
         /// <summary>What a proposed transaction's sender reads as when it is the safe's own account (the zero address on the wire).</summary>
         internal const string SafeItself = "(the safe itself)";
 
@@ -357,7 +393,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
                 default:
                     // App calls, key registration, asset config and rekey are valid proposal entries this server doesn't decode.
-                    return new AlgoSafeProposedTransactionView { Kind = $"Unsupported({entry.TxType})", Sender = SafeItself };
+                    return new AlgoSafeProposedTransactionView { Kind = $"Unsupported({entry.TxType})", Sender = "(not decoded)" };
             }
         }
 

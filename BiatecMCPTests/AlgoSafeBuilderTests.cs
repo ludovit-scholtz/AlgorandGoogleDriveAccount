@@ -278,6 +278,27 @@ namespace BiatecMCPTests
             Assert.That((await Fails(() => BuilderFor(chain).BuildExecuteAsync(FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.AppId, 1))).ErrorType, Is.EqualTo("SafePaused"));
         }
 
+        [Test]
+        public async Task Execute_OnAGroupWithoutLimits_WarnsThatBiatecLimitsDoNotApply()
+        {
+            var chain = SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusReady, new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver) });
+
+            var step = await BuilderFor(chain).BuildExecuteAsync(FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.AppId, 1);
+
+            Assert.That(step.Warning, Does.Contain("NO spending limit"));
+        }
+
+        [Test]
+        public async Task GetProposal_CanExecuteIsFalse_AndSaysWhy_ForContentTheServerCannotShow()
+        {
+            var chain = SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusReady, new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver, close: true) });
+
+            var view = await new AlgoSafeReader(chain).GetProposalAsync(FakeAlgoSafeChain.AppId, 1, null);
+
+            Assert.That(view.CanExecute, Is.False);
+            Assert.That(view.ReviewBlocker, Does.Contain("close-out"));
+        }
+
         // ───────── bootstrap ─────────
 
         [Test]

@@ -294,7 +294,7 @@ namespace BiatecMCP.MCP
                     TotalFeeMicroAlgo = step.TotalFeeMicroAlgo,
                     InnerTransactionCount = step.InnerTransactionCount,
                     NextStep = AlgoSafeNextStep,
-                    Warning = warning
+                    Warning = string.Join(" ", new[] { warning, step.Warning }.Where(w => !string.IsNullOrEmpty(w)))
                 };
             }
             catch (Exception ex)

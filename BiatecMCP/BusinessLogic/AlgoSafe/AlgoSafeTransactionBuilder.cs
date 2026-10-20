@@ -118,7 +118,6 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             var parameters = await _chain.GetTransactionParamsAsync(cancellationToken);
             var proxy = new AlgoSafeCallProxy(_chain.Algod, appId) { TransParamsOverride = parameters };
             var deposit = PaymentTransaction.GetPaymentTransactionFromNetworkTransactionParameters(sender, proxy.AppAddress, depositMicroAlgo, "AlgoSafe deposit", parameters);
-            var preTransactions = new List<Transaction> { deposit };
 
             List<Transaction> transactions;
             string summary;
@@ -137,7 +136,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 || plan.AllowedActions != AlgoSafeConstants.ActAll || plan.LimitAssetId != 0;
             if ((plan.Members == null || plan.Members.Count == 0) && !needsCustomGroup)
             {
-                transactions = await proxy.Bootstrap_Transactions(plan.GroupName.Trim(), AsAccount(sender), null, string.Empty, 1000, _tx_transactions: preTransactions);
+                transactions = await proxy.Bootstrap_Transactions(plan.GroupName.Trim(), AsAccount(sender), null, string.Empty, 1000, _tx_transactions: new List<Transaction> { deposit });
                 summary = $"Fund the safe with {FormatAlgo(depositMicroAlgo)} ALGO and bootstrap group '{plan.GroupName.Trim()}' (1-of-1, all rights, you as the only member).";
             }
             else
@@ -248,11 +247,13 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 return await FinishAsync(transactions, parameters, summary, cancellationToken);
             }
 
-            return await WithBudgetsAsync(
+            var executed = await WithBudgetsAsync(
                 budget => NewProxy(appId, parameters).BuildProposeTransactionGroupAsync(groupId, payload, expiryRound, true, budget, AsAccount(sender)),
                 parameters,
                 summary,
                 cancellationToken);
+            executed.Warning = NoLimitWarning(group);
+            return executed;
         }
 
         public async Task<AlgoSafeBuiltStep> BuildApproveAsync(Address sender, ulong appId, ulong proposalId, CancellationToken cancellationToken = default)
@@ -331,12 +332,21 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             EnsureFullyReviewable(view, proposalId);
 
             var parameters = await _chain.GetTransactionParamsAsync(cancellationToken);
-            return await WithBudgetsAsync(
+            var executed = await WithBudgetsAsync(
                 budget => NewProxy(appId, parameters).ExecuteProposal_Transactions(proposalId, budget, AsAccount(sender), null, string.Empty, 1000),
                 parameters,
                 $"Execute proposal {proposalId} of safe {appId}: the safe sends {view.Transactions.Count} transaction(s) from its own account: {DescribeTransfers(view.Transactions)}",
                 cancellationToken);
+            var proposalGroup = await _reader.ReadGroupAsync(appId, summary.GroupId, cancellationToken);
+            executed.Warning = proposalGroup == null ? string.Empty : NoLimitWarning(proposalGroup);
+            return executed;
         }
+
+        /// <summary>The safe's own transfers bypass Biatec's wallet spending limits; the group's limits are then the only cap.</summary>
+        private static string NoLimitWarning(AlgoSafeProxy.Structs.SignerGroup group) =>
+            group.DailyLimit == 0 && group.MonthlyLimit == 0
+                ? "This signer group has NO spending limit, and Biatec's own wallet spending limits do not apply to transfers a safe makes from its own account - confirm the amounts with the user before signing."
+                : string.Empty;
 
         // ───────────────────────── helpers ─────────────────────────
 
@@ -347,33 +357,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// </summary>
         internal static void EnsureFullyReviewable(AlgoSafeProposalView view, ulong proposalId)
         {
-            var summary = view.Summary;
-            if (summary.Type != "TransactionGroup")
+            var blocker = AlgoSafeReader.ReviewBlocker(view);
+            if (blocker != null)
             {
-                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} is a governance or other non-transfer change ({summary.Type}), whose content this server cannot show; approve it in the AlgoSafe app instead.");
-            }
-
-            if ((ulong)view.Transactions.Count != summary.TotalTransactions)
-            {
-                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} should contain {summary.TotalTransactions} transaction(s) but only {view.Transactions.Count} could be read; approving something not fully reviewed is refused.");
-            }
-
-            var closeOuts = view.Transactions.Where(t => t.ClosesAccount).ToList();
-            if (closeOuts.Count > 0)
-            {
-                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} contains {closeOuts.Count} close-out transaction(s) that sweep the sender's ENTIRE remaining balance to {closeOuts[0].CloseTo}; approving that is refused here - review and approve it in the AlgoSafe app instead.");
-            }
-
-            var undecoded = view.Transactions.Where(t => t.Kind.StartsWith("Unsupported", StringComparison.Ordinal)).ToList();
-            if (undecoded.Count > 0)
-            {
-                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} contains {undecoded.Count} transaction(s) this server cannot decode (e.g. app calls, key registration, asset configuration or rekeys); approving blind is refused - review and approve it in the AlgoSafe app instead.");
-            }
-
-            var foreignSender = view.Transactions.FirstOrDefault(t => t.Sender != AlgoSafeReader.SafeItself);
-            if (foreignSender != null)
-            {
-                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} spends from another account ({foreignSender.Sender}) rather than the safe's own; approving that is refused here - review and approve it in the AlgoSafe app instead.");
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} cannot be handled here: {blocker}. Review it and act on it in the AlgoSafe app instead.");
             }
         }
 

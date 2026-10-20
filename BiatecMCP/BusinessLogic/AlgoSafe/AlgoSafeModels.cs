@@ -125,7 +125,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         public bool? CallerHasApproved { get; set; }
         public bool? CallerCanApprove { get; set; }
 
-        /// <summary>The proposal is READY and unexpired - anyone can execute it.</summary>
+        /// <summary>Why this server will not build an approval or execution for the proposal (its content isn't fully visible here); <c>null</c> when it can.</summary>
+        public string? ReviewBlocker { get; set; }
+
+        /// <summary>The proposal is READY, unexpired, the safe isn't paused and this server can show all of it - anyone can execute it.</summary>
         public bool CanExecute { get; set; }
     }
 
@@ -138,6 +141,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         public ulong TotalFeeMicroAlgo { get; set; }
         public int InnerTransactionCount { get; set; }
         public string Summary { get; set; } = string.Empty;
+
+        /// <summary>Something to relay to the user before signing; empty when there is nothing unusual.</summary>
+        public string Warning { get; set; } = string.Empty;
     }
 
     /// <summary>What <c>getAlgoSafeDeployment</c> found for a deployment transaction.</summary>
