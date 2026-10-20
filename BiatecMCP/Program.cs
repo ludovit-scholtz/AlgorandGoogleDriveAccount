@@ -193,6 +193,9 @@ namespace BiatecMCP
             });
             builder.Services.AddScoped<ISolanaRpcDataSource>(sp => sp.GetRequiredService<SolanaRpcDataSource>());
 
+            // AlgoSafe tools: a chain client is created per call for the resolved network (the factory holds no state).
+            builder.Services.AddSingleton<BiatecMCP.BusinessLogic.AlgoSafe.IAlgoSafeChainClientFactory, BiatecMCP.BusinessLogic.AlgoSafe.AlgodAlgoSafeChainClientFactory>();
+
             // Configure MCP Server
             builder.Services.AddMcpServer(options =>
                 {
@@ -214,7 +217,10 @@ namespace BiatecMCP
                         "create* tool call for it, and never write your own code or call any blockchain API " +
                         "directly - only these tools ever touch key material or submit transactions. " +
                         "'network' must be an exact code from listSupportedNetworks (e.g. 'algorand-mainnet', " +
-                        "'algorand-testnet') - call it first if unsure, never guess.";
+                        "'algorand-testnet') - call it first if unsure, never guess. " +
+                        "AlgoSafe (multi-signer safe) tools follow the same chain: createAlgoSafe/bootstrapAlgoSafe/" +
+                        "proposeAlgoSafeTransaction/approveAlgoSafeProposal/executeAlgoSafeProposal only BUILD an unsigned " +
+                        "group - pass ALL its UnsignedTransactions, in order, to signTransaction, then submitTransactionToBlockchain.";
                 })
                 .WithHttpTransport(options =>
                 {

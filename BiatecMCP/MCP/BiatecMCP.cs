@@ -6,6 +6,7 @@ using System.Text.Json;
 using Algorand;
 using Algorand.Algod;
 using BiatecMCP.BusinessLogic;
+using BiatecMCP.BusinessLogic.AlgoSafe;
 using BiatecMCP.Helper;
 using BiatecMCP.Model;
 using ModelContextProtocol.Server;
@@ -29,7 +30,7 @@ namespace BiatecMCP.MCP
     /// notes for the full request flow.
     /// </summary>
     [McpServerToolType]
-    public class BiatecMCP
+    public partial class BiatecMCP
     {
         /// <summary>Wallet-scope claim name (see BiatecOIDC's <c>JwtIssuerService.WalletApiScopes</c>) required to sign or broadcast a transaction.</summary>
         private const string SignClaimType = "sign";
@@ -62,6 +63,7 @@ namespace BiatecMCP.MCP
         private readonly IPublicEvmRpcDataSource _evmRpcDataSource;
         private readonly IPublicBitcoinDataSource _bitcoinDataSource;
         private readonly ISolanaRpcDataSource _solanaRpcDataSource;
+        private readonly IAlgoSafeChainClientFactory _algoSafeChains;
         private readonly ILogger<BiatecMCP> _logger;
 
         public BiatecMCP(
@@ -74,6 +76,7 @@ namespace BiatecMCP.MCP
             IPublicEvmRpcDataSource evmRpcDataSource,
             IPublicBitcoinDataSource bitcoinDataSource,
             ISolanaRpcDataSource solanaRpcDataSource,
+            IAlgoSafeChainClientFactory algoSafeChains,
             ILogger<BiatecMCP> logger)
         {
             _walletClient = walletClient;
@@ -85,6 +88,7 @@ namespace BiatecMCP.MCP
             _evmRpcDataSource = evmRpcDataSource;
             _bitcoinDataSource = bitcoinDataSource;
             _solanaRpcDataSource = solanaRpcDataSource;
+            _algoSafeChains = algoSafeChains;
             _logger = logger;
         }
 

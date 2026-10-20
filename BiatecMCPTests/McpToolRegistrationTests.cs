@@ -31,7 +31,7 @@ namespace BiatecMCPTests
             }
 
             Assert.That(names, Is.Unique);
-            Assert.That(names, Has.Count.GreaterThanOrEqualTo(21));
+            Assert.That(names, Has.Count.GreaterThanOrEqualTo(30));
         }
 
         [Test]
