@@ -17,26 +17,12 @@
 
   <!--
     Security override, defined once for every project (BiatecMCP does not reference BiatecSelfCustodyCore, so a pin
-    there alone would not reach it): Algorand5 (like Algorand4 before it) transitively resolves MessagePack 3.1.8, which carries advisory
+    there alone would not reach it): Algorand5 transitively resolves MessagePack 3.1.8, which carries advisory
     GHSA-qhrr-8q5h-9q3h. Do NOT align this down to what Algorand5 resolves. BiatecOIDC also uses MessagePack directly
     (AlgorandTransactionInspector's generic msgpack map decode).
   -->
   <ItemGroup>
     <PackageReference Include="MessagePack" Version="3.1.12" />
-
-    <!--
-      Algorand4 is superseded by Algorand5 (same "Algorand" assembly/namespace), but ARC76Account.Algorand 1.0.4 (used by
-      BiatecSelfCustodyCore, hence BiatecOIDC and the test projects) still depends on Algorand4 transitively. Both ship an Algorand.dll, so without this the
-      Algorand4 binary silently wins over Algorand5 in the output. This direct reference (nearest-wins over the
-      transitive one) contributes no assets, so only Algorand5 is compiled/run against. Binary compatibility was checked
-      by scanning every Algorand.dll type/member reference in ARC76Account.* 1.0.4 against Algorand5 5.0.2 (none missing);
-      re-check that if the package is bumped before it moves to Algorand5. Remove it once ARC76Account.Algorand depends
-      on Algorand5 itself: its 1.0.5/1.0.6 already do, but are uninstallable until ARC76Account.Core is published at the
-      same version (scholtz/ARC76Account#7). BiatecRouterConnector 1.0.8+ already depends on Algorand5.
-    -->
-    <!-- Applied to every project on purpose, incl. BiatecMCP (which currently has no Algorand4 in its graph): a future
-         transitive Algorand4 must never be able to win there either, and the guard tests assert Algorand5 everywhere. -->
-    <PackageReference Include="Algorand4" Version="4.7.4.2026080422" ExcludeAssets="all" />
   </ItemGroup>
 
 </Project>

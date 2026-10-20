@@ -12,11 +12,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Algorand5" Version="5.0.2.2026101113" />
+    <PackageReference Include="Algorand5" Version="5.0.3.2026101923" />
     <!-- Client for the Biatec Router API (router.api.biatec.io) - used only for its public, unauthenticated
          /quote endpoint (BiatecRouterValuationService) to price a spent asset in USD for spending-limit
          enforcement. Not used for its swap/route-transaction-building features. -->
-    <PackageReference Include="BiatecRouterConnector" Version="1.0.8.2026101919" />
+    <PackageReference Include="BiatecRouterConnector" Version="1.0.15.2026101920" />
     <PackageReference Include="Google.Apis.Auth" Version="1.77.0" />
     <PackageReference Include="Google.Apis.Auth.AspNetCore3" Version="1.77.0" />
     <!-- MessagePack is used directly by AlgorandTransactionInspector (generic msgpack map decode); its version comes from the

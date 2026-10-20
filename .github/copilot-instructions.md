@@ -299,11 +299,9 @@ and short-lived. There is no automated test job in CI, so run tests locally befo
 Root `.editorconfig` + `Directory.Build.props` (auto-imported by all 5 `.csproj`s) enable the built-in Roslyn
 analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. `Directory.Build.props` also carries a repo-wide
 security override pinning `MessagePack` (Algorand5 transitively resolves a vulnerable 3.1.8) - both Dockerfiles copy it
-before `dotnet restore` for that reason; don't lower it to what Algorand5 resolves. The same file
-also carries an `Algorand4` `ExcludeAssets="all"` reference: `ARC76Account.Algorand` 1.0.4 still depends on
-Algorand4 transitively and both SDK packages ship an `Algorand.dll`, so without it the Algorand4 binary silently wins over
-Algorand5 in the output (verify with the built `Algorand.dll`'s ProductVersion). Remove it once `ARC76Account.Algorand`
-resolves Algorand5 (blocked upstream, see scholtz/ARC76Account#7). Run `dotnet format Biatec.slnx` to
+before `dotnet restore` for that reason; don't lower it to what Algorand5 resolves. `AlgorandSdkVersionTests` (both test projects) guards that
+the built `Algorand.dll` is Algorand5: the retired Algorand4 package ships an assembly with the same name, so a dependency
+that still pulls it in transitively would silently win (that was the case until `ARC76Account.*` 1.0.10). Run `dotnet format Biatec.slnx` to
 fix flagged style/unused-using issues, and `dotnet format Biatec.slnx --verify-no-changes` before committing —
 both should be clean.
 
