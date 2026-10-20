@@ -14,7 +14,7 @@ namespace BiatecMCP.BusinessLogic.Scan
         Task<string> GetAuthorizationHeaderAsync(AlgorandChain chain, CancellationToken cancellationToken = default);
 
         /// <summary>Forgets the cached token of a network (after Scan rejected it), so the next call mints a fresh one.</summary>
-        void Invalidate(AlgorandChain chain);
+        void Invalidate(AlgorandChain chain, string rejectedHeader);
     }
 
     /// <summary>
@@ -82,7 +82,15 @@ namespace BiatecMCP.BusinessLogic.Scan
             }
         }
 
-        public void Invalidate(AlgorandChain chain) => _cache.Remove("scan-arc14:" + chain.GenesisId);
+        public void Invalidate(AlgorandChain chain, string rejectedHeader)
+        {
+            // Only the token that was actually rejected is dropped: a concurrent request may already have replaced it with a fresh one.
+            var key = "scan-arc14:" + chain.GenesisId;
+            if (_cache.TryGetValue(key, out string? current) && current == rejectedHeader)
+            {
+                _cache.Remove(key);
+            }
+        }
 
         public void Dispose() => _mint.Dispose();
 

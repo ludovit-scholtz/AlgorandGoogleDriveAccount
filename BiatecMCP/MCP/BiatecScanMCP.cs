@@ -72,7 +72,7 @@ namespace BiatecMCP.MCP
             public double? Volume7dUsd { get; set; }
 
             /// <summary>The swap fee liquidity providers earn, in percent of volume (the protocol's cut already deducted).</summary>
-            public double LpFeePercent { get; set; }
+            public double? LpFeePercent { get; set; }
 
             /// <summary>Annualised LP fee yield from the trailing 24h / 7 days, in percent; <c>null</c> when it can't be computed (no TVL or fee data).</summary>
             public double? Apr24hPercent { get; set; }
@@ -187,9 +187,10 @@ namespace BiatecMCP.MCP
                 var response = new FindBestLiquidityPoolsResponse { Network = code, SortedBy = sortKey };
 
                 var aTask = ResolveSymbolAsync(code, chain, assetA);
-                var bTask = string.IsNullOrWhiteSpace(assetB) ? null : ResolveSymbolAsync(code, chain, assetB);
-                var aMatches = await aTask;
-                List<ScanAsset>? bMatches = bTask == null ? null : await bTask;
+                var bTask = string.IsNullOrWhiteSpace(assetB) ? Task.FromResult<List<ScanAsset>?>(null) : ResolveSymbolAsync(code, chain, assetB)!;
+                await Task.WhenAll(aTask, bTask); // both awaited, so a failure of one never leaves the other unobserved
+                var aMatches = aTask.Result;
+                var bMatches = bTask.Result;
                 response.ResolvedAssets.Add(new ResolvedScanAsset { Input = assetA, Matches = aMatches.Select(ToSummary).ToList() });
                 if (bMatches != null)
                 {
@@ -218,7 +219,7 @@ namespace BiatecMCP.MCP
                 {
                     if (bMatches != null)
                     {
-                        var pairs = aMatches.SelectMany(a => bMatches.Where(b => b.Index != a.Index).SelectMany(b => new[] { (a.Index, b.Index), (b.Index, a.Index) })).ToList();
+                        var pairs = aMatches.SelectMany(a => bMatches.Where(b => b.Index != a.Index).SelectMany(b => new[] { (a.Index, b.Index), (b.Index, a.Index) })).Distinct().ToList();
                         var perPair = await Task.WhenAll(pairs.Select(pair => _scan.GetPoolsForPairAsync(code, chain, pair.Item1, pair.Item2, protocolName, PoolsPerAsset)));
                         fetched = perPair.SelectMany(list => list).ToList();
                         truncated = perPair.Any(list => list.Count >= PoolsPerAsset);
@@ -296,19 +297,19 @@ namespace BiatecMCP.MCP
 
                 // With no protocol filter the API returns the combined row plus one per protocol; keep one row per asset.
                 var rows = stats.Where(s => protocolName == null ? s.Protocol == null : string.Equals(s.Protocol, protocolName, StringComparison.OrdinalIgnoreCase))
-                    .Where(s => s.TvlUsd >= minTvlUsd)
-                    .OrderByDescending(s => sortKey == "apr24h" ? s.Apr24h : s.Apr7d)
+                    .Where(s => (s.TvlUsd ?? 0) >= minTvlUsd)
+                    .OrderByDescending(s => (sortKey == "apr24h" ? s.Apr24h : s.Apr7d) ?? double.NegativeInfinity)
                     .Take(Math.Clamp(limit, 1, 50))
                     .Select(s => new ScanAssetApr
                     {
                         AssetId = s.AssetId,
                         Symbol = s.UnitName ?? string.Empty,
                         Name = s.AssetName ?? string.Empty,
-                        TvlUsd = s.TvlUsd,
-                        Volume24hUsd = s.Volume24hUsd,
-                        PoolCount = s.PoolCount,
-                        Apr24hPercent = s.Apr24h,
-                        Apr7dPercent = s.Apr7d
+                        TvlUsd = s.TvlUsd ?? 0,
+                        Volume24hUsd = s.Volume24hUsd ?? 0,
+                        PoolCount = s.PoolCount ?? 0,
+                        Apr24hPercent = s.Apr24h ?? 0,
+                        Apr7dPercent = s.Apr7d ?? 0
                     })
                     .ToList();
 
@@ -351,7 +352,7 @@ namespace BiatecMCP.MCP
             var found = ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
                 ? await _scan.GetAssetsByIdAsync(code, chain, new[] { id })
                 : await _scan.SearchAssetsAsync(code, chain, text, AssetSearchSize);
-            return found.Where(a => !a.Deleted).OrderByDescending(a => a.TvlUsd).ToList();
+            return found.Where(a => !a.Deleted).OrderByDescending(a => a.TvlUsd ?? 0).ToList();
         }
 
         /// <summary>
@@ -369,7 +370,7 @@ namespace BiatecMCP.MCP
 
             var exact = found.Where(a => string.Equals(a.Params?.UnitName, text, StringComparison.OrdinalIgnoreCase)).ToList();
             var pool = exact.Count > 0 ? exact : found;
-            return pool.Where(a => a.TvlUsd > 0 || a.PoolsCount > 0).Take(MaxCandidatesPerSymbol).ToList();
+            return pool.Where(a => (a.TvlUsd ?? 0) > 0 || (a.PoolsCount ?? 0) > 0).Take(MaxCandidatesPerSymbol).ToList();
         }
 
         private async Task<List<ScanPoolSummary>> ToPoolSummariesAsync(string code, AlgorandChain chain, List<ScanPool> pools, IEnumerable<ScanAsset> known)
@@ -399,7 +400,7 @@ namespace BiatecMCP.MCP
                 TvlUsd = PoolAprCalculator.TvlUsd(p),
                 Volume24hUsd = p.Volume24H,
                 Volume7dUsd = p.Volume7D,
-                LpFeePercent = (PoolAprCalculator.LpFeeRate(p) ?? 0) * 100,
+                LpFeePercent = PoolAprCalculator.LpFeeRate(p) * 100,
                 Apr24hPercent = PoolAprCalculator.Apr24h(p) * 100,
                 Apr7dPercent = PoolAprCalculator.Apr7d(p) * 100,
                 ScamRating = p.ScamRating
@@ -429,9 +430,9 @@ namespace BiatecMCP.MCP
             AssetId = asset.Index,
             Symbol = asset.Params?.UnitName ?? string.Empty,
             Name = asset.Params?.Name ?? string.Empty,
-            PriceUsd = asset.PriceUSD,
-            TvlUsd = asset.TvlUsd,
-            PoolsCount = asset.PoolsCount
+            PriceUsd = asset.PriceUSD ?? 0,
+            TvlUsd = asset.TvlUsd ?? 0,
+            PoolsCount = asset.PoolsCount ?? 0
         };
 
         private (string Message, string ErrorType) Describe(Exception ex, string toolName)

@@ -45,12 +45,12 @@ namespace BiatecMCP.BusinessLogic.Scan
     {
         public ulong Index { get; set; }
         public ScanAssetParams? Params { get; set; }
-        public double PriceUSD { get; set; }
+        public double? PriceUSD { get; set; }
 
         [JsonPropertyName("tvL_USD")]
-        public double TvlUsd { get; set; }
+        public double? TvlUsd { get; set; }
 
-        public int PoolsCount { get; set; }
+        public int? PoolsCount { get; set; }
         public bool Deleted { get; set; }
     }
 
@@ -64,19 +64,19 @@ namespace BiatecMCP.BusinessLogic.Scan
         public double? PriceUSD { get; set; }
 
         [JsonPropertyName("tvlusd")]
-        public double TvlUsd { get; set; }
+        public double? TvlUsd { get; set; }
 
         [JsonPropertyName("volume24hUSD")]
-        public double Volume24hUsd { get; set; }
+        public double? Volume24hUsd { get; set; }
 
         [JsonPropertyName("volume7dUSD")]
-        public double Volume7dUsd { get; set; }
+        public double? Volume7dUsd { get; set; }
 
         /// <summary>Annualised LP fee yield from the trailing 24h, already in percent (12 = 12%) - unlike the per-pool figures this server computes itself.</summary>
-        public double Apr24h { get; set; }
+        public double? Apr24h { get; set; }
 
-        public double Apr7d { get; set; }
-        public int PoolCount { get; set; }
+        public double? Apr7d { get; set; }
+        public int? PoolCount { get; set; }
     }
 
     /// <summary>Biatec Scan answered with an error (or couldn't be reached) - the message is safe to show the connected agent.</summary>

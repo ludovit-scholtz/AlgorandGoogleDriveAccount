@@ -128,7 +128,7 @@ namespace BiatecMCPTests
 
             Assert.That(result, Is.Empty);
             Assert.That(handler.Requests, Has.Count.EqualTo(2));
-            auth.Verify(a => a.Invalidate(Chain), Times.Once);
+            auth.Verify(a => a.Invalidate(Chain, It.IsAny<string>()), Times.Once);
         }
 
         [Test]

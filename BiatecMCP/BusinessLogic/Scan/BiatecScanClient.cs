@@ -103,16 +103,16 @@ namespace BiatecMCP.BusinessLogic.Scan
 
             try
             {
-                var response = await SendAsync(baseUrl, path, chain, cancellationToken);
+                var (response, header) = await SendAsync(baseUrl, path, chain, cancellationToken);
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 {
                     // The cached token may be stale (e.g. its validity window drifted from Scan's view of the chain): mint a fresh one, once.
                     response.Dispose();
-                    _auth.Invalidate(chain);
-                    response = await SendAsync(baseUrl, path, chain, cancellationToken);
+                    _auth.Invalidate(chain, header);
+                    (response, _) = await SendAsync(baseUrl, path, chain, cancellationToken);
                 }
 
-                using var _ = response;
+                using var finalResponse = response;
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 {
                     throw new ScanApiException("Biatec Scan rejected the request's authentication, even with a freshly signed token.");
@@ -140,7 +140,7 @@ namespace BiatecMCP.BusinessLogic.Scan
             }
         }
 
-        private async Task<HttpResponseMessage> SendAsync(string baseUrl, string path, AlgorandChain chain, CancellationToken cancellationToken)
+        private async Task<(HttpResponseMessage Response, string Header)> SendAsync(string baseUrl, string path, AlgorandChain chain, CancellationToken cancellationToken)
         {
             string authorization;
             try
@@ -154,7 +154,7 @@ namespace BiatecMCP.BusinessLogic.Scan
 
             using var request = new HttpRequestMessage(HttpMethod.Get, baseUrl.TrimEnd('/') + path);
             request.Headers.TryAddWithoutValidation("Authorization", authorization);
-            return await _http.SendAsync(request, cancellationToken);
+            return (await _http.SendAsync(request, cancellationToken), authorization);
         }
     }
 }

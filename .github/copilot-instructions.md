@@ -73,7 +73,8 @@ dependency on `BiatecSelfCustodyCore`.
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/tools").RequireAuthorization()`.
   - `MCP/BiatecMCP.cs` (+ `MCP/BiatecMCP.AlgoSafe.cs`, a `partial` of the same class holding the nine AlgoSafe tools -
-    see "AlgoSafe tools" under Architecture notes; the tool list below covers the other 21) — 30 MCP tools split into
+    see "AlgoSafe tools" under Architecture notes; the tool list below covers the other 21; `MCP/BiatecScanMCP.cs` adds three more,
+    see "Biatec Scan tools" - 33 MCP tools in all) — 30 of them split into
     three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast:
@@ -1008,7 +1009,7 @@ setup stage needs.
   That is deliberately *not* a wallet key - the same throwaway-identity approach Biatec Scan's own web app uses - so BiatecMCP still holds no
   wallet key material and these tools need neither BiatecOIDC nor the `sign` scope; do not swap it for a user's wallet identity or persist it.
   `IScanAuthTokenProvider` is therefore registered as a `Singleton` (one keypair per process, or the cached tokens would stop verifying) - a
-  deliberate exception to the "interfaces are `Scoped`" convention.
+  deliberate exception to the "interfaces are `Scoped`" convention (`IBiatecScanClient` is a plain `AddHttpClient<TInterface, TImpl>` typed client).
   The pool document carries no APR field, so `Helper/PoolAprCalculator` derives it exactly as Scan's UI does
   (`lpFee * (1 - protocolFeePortion) * volume / TVL * 365/window`, as percent in the tool output); `getBiatecScanTopAssetsByApr` instead relays
   the API's own per-asset `apr24h`/`apr7d`, which are **already percent** (unlike the fractions this server computes per pool). A symbol
