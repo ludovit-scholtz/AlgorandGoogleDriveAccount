@@ -53,6 +53,12 @@ namespace BiatecMCPTests
             Assert.That(tx.Signatures, Has.Count.EqualTo(1));
             Assert.That(_account.PublicKey.Verify(tx.CompileMessage(), tx.Signatures[0].Signature), Is.True);
 
+            // The spending limit counts SolanaUnsignedTransfer.BaseFeeLamports as the network fee: that is only true while the
+            // message has exactly one signature (5,000 lamports each) and no compute-budget / priority-fee instruction.
+            // If this ever changes, BaseFeeLamports (and BiatecMCP's advisory copy) must change with it.
+            Assert.That((ulong)tx.Signatures.Count * 5000UL, Is.EqualTo(SolanaUnsignedTransfer.BaseFeeLamports));
+            Assert.That(tx.Instructions, Has.Count.EqualTo(1));
+
             // Exactly one instruction: System Program transfer(sender -> receiver, lamports) - nothing else rides along.
             Assert.That(tx.Instructions, Has.Count.EqualTo(1));
             var instruction = tx.Instructions[0];

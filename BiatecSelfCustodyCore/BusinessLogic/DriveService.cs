@@ -232,7 +232,7 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             }
             catch (Exception exc) when (exc is not ArgumentException)
             {
-                _logger?.LogDebug(exc, "Failed to build/sign a Solana transaction.");
+                _logger?.LogWarning(exc, "Failed to build/sign a Solana transaction.");
                 throw new FormatException("Unable to build or sign Solana transaction.", exc);
             }
         }
