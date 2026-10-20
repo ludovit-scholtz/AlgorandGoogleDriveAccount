@@ -185,7 +185,7 @@ namespace BiatecMCP.MCP
         // ───────────────────────── build steps ─────────────────────────
 
         [McpServerTool(Name = "createAlgoSafe"),
-         Description("Step 1 of creating a new AlgoSafe: builds the unsigned deployment. A safe needs the shared AlgoSafeTxnValidator library on its network - pass validatorAppId = 0 to build the transactions that deploy that library first (once per network; then use getAlgoSafeDeployment on the broadcast result for its application id), or pass the validator's id to build the safe's own deployment. Does NOT sign or broadcast. After broadcasting, call getAlgoSafeDeployment for the new application id, then bootstrapAlgoSafe to fund it and create its first signer group (a safe cannot be used before that).")]
+         Description("Step 1 of creating a new AlgoSafe: builds the unsigned deployment. A safe needs the shared AlgoSafeTxnValidator library on its network - pass validatorAppId = 0 to build the transactions that deploy that library first (once per network - do not repeat this if you already deployed one, reuse its id; then use getAlgoSafeDeployment on the broadcast result for its application id), or pass the validator's id to build the safe's own deployment. Does NOT sign or broadcast. After broadcasting, call getAlgoSafeDeployment for the new application id, then bootstrapAlgoSafe to fund it and create its first signer group (a safe cannot be used before that).")]
         public Task<AlgoSafeStepResponse> CreateAlgoSafe(
             [Description("A name for the safe.")] string name,
             [Description("The network to deploy on - an exact code from listSupportedNetworks (an Algorand-family network).")] string network = "algorand-mainnet",
@@ -244,15 +244,16 @@ namespace BiatecMCP.MCP
                     executeNow));
 
         [McpServerTool(Name = "approveAlgoSafeProposal"),
-         Description("Builds the unsigned transaction that approves an AlgoSafe proposal as the signed-in account (which must be a member of the proposal's signer group and not have approved yet). Review the proposal first with getAlgoSafeProposal - the approval is bound to the exact content you saw, so it is refused if the proposer changed it meanwhile. Does NOT sign or broadcast. When the approvals reach the threshold the proposal is Ready: call executeAlgoSafeProposal.")]
+         Description("Builds the unsigned transaction that approves an AlgoSafe proposal as the signed-in account (which must be a member of the proposal's signer group and not have approved yet). Review the proposal first with getAlgoSafeProposal and pass its Summary.PayloadVersion as payloadVersion - the approval is bound to that exact version, so it is refused if the proposer changed the proposal meanwhile. Does NOT sign or broadcast. When the approvals reach the threshold the proposal is Ready: call executeAlgoSafeProposal.")]
         public Task<AlgoSafeStepResponse> ApproveAlgoSafeProposal(
             [Description("The safe's application id.")] ulong appId,
             [Description("The proposal id.")] ulong proposalId,
+            [Description("The PayloadVersion from getAlgoSafeProposal's Summary - the exact version you reviewed. The approval is refused if the proposer changed the proposal since.")] ulong payloadVersion,
             [Description("The network the safe lives on - an exact code from listSupportedNetworks. Use this SAME code for signTransaction and submitTransactionToBlockchain; never retry a failed broadcast with a different network.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to approve as instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to approve as. Defaults to 0.")] int slot = 0) =>
             BuildAlgoSafeStepAsync(network, seedAddress, slot, nameof(ApproveAlgoSafeProposal), (builder, sender) =>
-                builder.BuildApproveAsync(sender, appId, proposalId));
+                builder.BuildApproveAsync(sender, appId, proposalId, payloadVersion));
 
         [McpServerTool(Name = "executeAlgoSafeProposal"),
          Description("Builds the unsigned transaction that executes a Ready (threshold-approved, unexpired) AlgoSafe proposal: the safe sends the proposed transfers from its own account. Any account may execute; the signed-in account only pays the network fees. Does NOT sign or broadcast. The result's TotalFeeMicroAlgo already covers the inner transactions.")]

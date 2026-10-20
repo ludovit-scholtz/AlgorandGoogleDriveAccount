@@ -991,7 +991,8 @@ setup stage needs.
   generated ARC-56 client `Arc56.Generated.ludovit-scholtz.algo-safe`, address-only senders), and `AlgoSafeResourcePopulator`
   (the generated proxies add no references or inner-transaction fees: it simulates via algod with `AllowUnnamedResources`,
   adds the reported accounts/apps/assets/boxes as references, doubles an app call's fee while algod says "fee too small",
-  then sets it to exactly `minFee * (1 + inner transactions)` from the exec trace, so the last simulation proves the group runs;
+  then trims it to `minFee * (1 + inner transactions)` from the exec trace (if that trim is itself rejected - a trace that
+  under-counts - trimming stops and the fee creeps up one min fee at a time instead), so the last simulation proves the group runs;
   more than 4 accounts / 8 references fails with `TooManyReferences`). **The generated client mis-encodes arrays of dynamic
   tuples** (no offsets - the node rejects it with "invalid tail pointer"), so `proposeTransactionGroup` and `bootstrapGroup` go
   through `AlgoSafeCallProxy` with hand-written ARC-4 encoders (`AlgoSafePayloadCodec`); do not switch back to the generated

@@ -244,8 +244,12 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             if (!executeNow)
             {
-                var transactions = await NewProxy(appId, parameters).BuildProposeTransactionGroupAsync(groupId, payload, expiryRound, false, 0, AsAccount(sender));
-                var proposed = await FinishAsync(transactions, parameters, summary, cancellationToken);
+                var proposed = await WithBudgetsAsync(
+                    budget => NewProxy(appId, parameters).BuildProposeTransactionGroupAsync(groupId, payload, expiryRound, false, budget, AsAccount(sender)),
+                    parameters,
+                    summary,
+                    cancellationToken,
+                    ApprovalBudgets);
 
                 // Executing is one app call that must reference every receiver and asset (alongside the safe's own boxes), and a call can carry
                 // only 8 references: a proposal touching many distinct ones may be approvable yet impossible to execute.
@@ -265,10 +269,19 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             return executed;
         }
 
-        public async Task<AlgoSafeBuiltStep> BuildApproveAsync(Address sender, ulong appId, ulong proposalId, CancellationToken cancellationToken = default)
+        public async Task<AlgoSafeBuiltStep> BuildApproveAsync(Address sender, ulong appId, ulong proposalId, ulong expectedPayloadVersion, CancellationToken cancellationToken = default)
         {
             var view = await _reader.GetProposalAsync(appId, proposalId, sender, includeApprovers: false, cancellationToken: cancellationToken);
             var summary = view.Summary;
+
+            // The approval is bound to the payload version the signer reviewed - never to whatever is live now.
+            if (summary.PayloadVersion != expectedPayloadVersion)
+            {
+                throw new AlgoSafeException(
+                    "PayloadChanged",
+                    $"Proposal {proposalId} is now at payload version {summary.PayloadVersion}, but you reviewed version {expectedPayloadVersion}. It was changed after your review - call getAlgoSafeProposal again, review the new content, then approve with the new payloadVersion.");
+            }
+
             if (summary.Status is not ("Active" or "Ready"))
             {
                 throw new AlgoSafeException("NotApprovable", $"Proposal {proposalId} is {summary.Status} and can no longer be approved.");

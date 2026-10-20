@@ -234,7 +234,7 @@ namespace BiatecMCPTests
         {
             var chain = SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusActive, new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver, 1234) });
 
-            var step = await BuilderFor(chain).BuildApproveAsync(FakeAlgoSafeChain.Member2, FakeAlgoSafeChain.AppId, 1);
+            var step = await BuilderFor(chain).BuildApproveAsync(FakeAlgoSafeChain.Member2, FakeAlgoSafeChain.AppId, 1, 1);
 
             Assert.That(step.UnsignedTransactions, Has.Count.EqualTo(1));
             Assert.That(step.Summary, Does.Contain("1234 microAlgo to " + FakeAlgoSafeChain.Receiver.EncodeAsString()));
@@ -246,7 +246,7 @@ namespace BiatecMCPTests
             var good = new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver) };
             var member = FakeAlgoSafeChain.Member2;
 
-            async Task<string> Run(FakeAlgoSafeChain chain) => (await Fails(() => BuilderFor(chain).BuildApproveAsync(member, FakeAlgoSafeChain.AppId, 1))).ErrorType;
+            async Task<string> Run(FakeAlgoSafeChain chain) => (await Fails(() => BuilderFor(chain).BuildApproveAsync(member, FakeAlgoSafeChain.AppId, 1, 1))).ErrorType;
 
             Assert.That(await Run(SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusExecuted, null)), Is.EqualTo("NotApprovable"), "already executed (payload pruned)");
             Assert.That(await Run(SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusActive, good, expiryRound: 10)), Is.EqualTo("ProposalExpired"));
@@ -256,7 +256,17 @@ namespace BiatecMCPTests
             Assert.That(await Run(SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusActive, good, approvers: member)), Is.EqualTo("AlreadyApproved"));
             Assert.That(await Run(SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusActive, new[] { new AlgoSafePayloadEntry(32, new byte[] { 1 }) })), Is.EqualTo("UnsupportedProposal"), "undecoded kind");
 
-            Assert.That((await Fails(() => BuilderFor(SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusActive, good)).BuildApproveAsync(FakeAlgoSafeChain.Outsider, FakeAlgoSafeChain.AppId, 1))).ErrorType, Is.EqualTo("NotAMember"));
+            Assert.That((await Fails(() => BuilderFor(SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusActive, good)).BuildApproveAsync(FakeAlgoSafeChain.Outsider, FakeAlgoSafeChain.AppId, 1, 1))).ErrorType, Is.EqualTo("NotAMember"));
+        }
+
+        [Test]
+        public async Task Approve_IsBoundToTheReviewedPayloadVersion()
+        {
+            var chain = SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusActive, new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver) });
+
+            var ex = await Assert.ThrowsAsync<AlgoSafeException>(() => BuilderFor(chain).BuildApproveAsync(FakeAlgoSafeChain.Member2, FakeAlgoSafeChain.AppId, 1, expectedPayloadVersion: 0));
+
+            Assert.That(ex!.ErrorType, Is.EqualTo("PayloadChanged"));
         }
 
         // ───────── execute ─────────
@@ -309,7 +319,7 @@ namespace BiatecMCPTests
             FakeAlgoSafeChain Disabled(ulong status) => new FakeAlgoSafeChain().WithGroup(1, 2, 2, 0, AlgoSafeConstants.ActAll, FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.Member2)
                 .WithProposal(1, 1, status, pay);
 
-            var approve = await Assert.ThrowsAsync<AlgoSafeException>(() => BuilderFor(Disabled(AlgoSafeConstants.StatusActive)).BuildApproveAsync(FakeAlgoSafeChain.Member2, FakeAlgoSafeChain.AppId, 1));
+            var approve = await Assert.ThrowsAsync<AlgoSafeException>(() => BuilderFor(Disabled(AlgoSafeConstants.StatusActive)).BuildApproveAsync(FakeAlgoSafeChain.Member2, FakeAlgoSafeChain.AppId, 1, 1));
             var execute = await Assert.ThrowsAsync<AlgoSafeException>(() => BuilderFor(Disabled(AlgoSafeConstants.StatusReady)).BuildExecuteAsync(FakeAlgoSafeChain.Member2, FakeAlgoSafeChain.AppId, 1));
 
             Assert.That(approve!.ErrorType, Is.EqualTo("NotApprovable").Or.EqualTo("GroupDisabled"));
