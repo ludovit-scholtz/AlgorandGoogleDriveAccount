@@ -324,6 +324,38 @@ namespace BiatecMCPTests
             Assert.That(await Run(new AlgoSafeBootstrapPlan(new string('g', 100))), Is.EqualTo("InvalidRequest"), "name too long");
         }
 
+        [Test]
+        public async Task Execute_SummaryListsWhatIsSent_AndWarnsAboutCloseOuts()
+        {
+            var chain = SafeWithTwoOfTwoGroup().WithProposal(1, 1, AlgoSafeConstants.StatusReady, new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver, 777, close: true) });
+
+            var step = await BuilderFor(chain).BuildExecuteAsync(FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.AppId, 1);
+
+            Assert.That(step.Summary, Does.Contain("777 microAlgo to " + FakeAlgoSafeChain.Receiver.EncodeAsString()));
+            Assert.That(step.Summary, Does.Contain("WARNING: includes a close-out"));
+        }
+
+        [Test]
+        public async Task GetProposal_AbsurdProposalIds_AreNotFoundRatherThanOverflowing()
+        {
+            var reader = new AlgoSafeReader(SafeWithTwoOfTwoGroup());
+
+            var ex = await Assert.ThrowsAsync<AlgoSafeException>(() => reader.GetProposalAsync(FakeAlgoSafeChain.AppId, ulong.MaxValue, null));
+
+            Assert.That(ex!.ErrorType, Is.EqualTo("ProposalNotFound"));
+        }
+
+        [Test]
+        public async Task Bootstrap_ThresholdAboveOneWithoutMembers_IsRejectedNotDropped()
+        {
+            var builder = BuilderFor(new FakeAlgoSafeChain(bootstrapped: false));
+
+            var ex = await Assert.ThrowsAsync<AlgoSafeException>(() =>
+                builder.BuildBootstrapAsync(FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.AppId, 2_000_000, new AlgoSafeBootstrapPlan("Admins", Threshold: 3)));
+
+            Assert.That(ex!.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
         // ───────── reader ─────────
 
         [Test]

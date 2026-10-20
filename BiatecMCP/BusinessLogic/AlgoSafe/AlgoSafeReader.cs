@@ -144,6 +144,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         public async Task<AlgoSafeProposalView> GetProposalAsync(ulong appId, ulong proposalId, Address? caller, bool includeApprovers = true, CancellationToken cancellationToken = default)
         {
             var app = await RequireSupportedAsync(appId, cancellationToken);
+            if (proposalId == 0 || proposalId > AlgoSafeBoxNames.MaxProposalId)
+            {
+                throw new AlgoSafeException("ProposalNotFound", $"Proposal {proposalId} does not exist in safe {appId}.");
+            }
+
             var proposal = await ReadProposalAsync(appId, proposalId, cancellationToken)
                 ?? throw new AlgoSafeException("ProposalNotFound", $"Proposal {proposalId} does not exist in safe {appId} (it may have been pruned after execution or cancellation).");
             var currentRound = (await _chain.GetTransactionParamsAsync(cancellationToken)).LastRound;

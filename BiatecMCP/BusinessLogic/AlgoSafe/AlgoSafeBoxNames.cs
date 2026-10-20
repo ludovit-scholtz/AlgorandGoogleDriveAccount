@@ -16,6 +16,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         public static byte[] Proposal(ulong proposalId) => Compose(AlgoSafeConstants.ProposalBoxPrefix, UInt64(proposalId));
 
+        /// <summary>The largest proposal id whose payload-chunk box keys (<c>id * 7 + chunk</c>) still fit a uint64 - anything above is certainly not a real proposal.</summary>
+        public const ulong MaxProposalId = (ulong.MaxValue - 16) / AlgoSafeConstants.TxgKeyMultiplier;
+
         public static byte[] Approval(ulong proposalId, Address account) => Compose(AlgoSafeConstants.ApprovalBoxPrefix, UInt64(proposalId), account.Bytes);
 
         /// <summary>Payload chunk box: key = <c>proposalId * 7 + chunkIndex</c>.</summary>

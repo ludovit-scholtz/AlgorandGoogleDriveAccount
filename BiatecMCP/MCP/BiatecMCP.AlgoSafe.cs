@@ -52,6 +52,9 @@ namespace BiatecMCP.MCP
             public ulong TotalFeeMicroAlgo { get; set; }
             public int InnerTransactionCount { get; set; }
             public string NextStep { get; set; } = string.Empty;
+
+            /// <summary>Something the caller should relay to the user before signing (e.g. a safe created with no spending limit).</summary>
+            public string Warning { get; set; } = string.Empty;
             public string Error { get; set; } = string.Empty;
             public string ErrorType { get; set; } = string.Empty;
         }
@@ -215,7 +218,10 @@ namespace BiatecMCP.MCP
                         members?.Select(m => (m.Address, m.Label)).ToList(),
                         members is { Count: > 0 } ? threshold : 1,
                         DailyLimit: dailyLimitMicroAlgo,
-                        MonthlyLimit: monthlyLimitMicroAlgo)));
+                        MonthlyLimit: monthlyLimitMicroAlgo)),
+                dailyLimitMicroAlgo == 0 && monthlyLimitMicroAlgo == 0
+                    ? "This group has NO spending limit: anyone in it can move the safe's entire ALGO balance (within the group's approval threshold). Tell the user, and consider rebuilding with dailyLimitMicroAlgo/monthlyLimitMicroAlgo set."
+                    : string.Empty);
 
         [McpServerTool(Name = "proposeAlgoSafeTransaction"),
          Description("Builds the unsigned group that proposes ALGO/ASA transfers sent from an AlgoSafe's own account. You must be a member of the signer group. The proposal becomes executable once the group's threshold of members approved it (approveAlgoSafeProposal). With executeNow=true on a 1-of-N group the transfers are executed in the same group, no further step. Does NOT sign or broadcast. NOTE: transfers executed from a safe are made by the safe itself, so Biatec's wallet spending limits do not apply to them - the safe's own thresholds and group limits are the control. Next: approveAlgoSafeProposal (other members) then executeAlgoSafeProposal; get the ProposalId from listAlgoSafeProposals after broadcasting.")]
@@ -266,7 +272,8 @@ namespace BiatecMCP.MCP
             string? seedAddress,
             int slot,
             string toolName,
-            Func<AlgoSafeTransactionBuilder, Address, Task<AlgoSafeBuiltStep>> build)
+            Func<AlgoSafeTransactionBuilder, Address, Task<AlgoSafeBuiltStep>> build,
+            string warning = "")
         {
             try
             {
@@ -286,7 +293,8 @@ namespace BiatecMCP.MCP
                     Summary = step.Summary,
                     TotalFeeMicroAlgo = step.TotalFeeMicroAlgo,
                     InnerTransactionCount = step.InnerTransactionCount,
-                    NextStep = AlgoSafeNextStep
+                    NextStep = AlgoSafeNextStep,
+                    Warning = warning
                 };
             }
             catch (Exception ex)

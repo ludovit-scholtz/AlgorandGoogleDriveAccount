@@ -127,6 +127,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("InvalidRequest", $"The group name can be at most {MaxNameChars} bytes.");
             }
 
+            if ((plan.Members == null || plan.Members.Count == 0) && plan.Threshold != 1)
+            {
+                throw new AlgoSafeException("InvalidRequest", "A threshold other than 1 needs an explicit list of members.");
+            }
+
             // The contract's plain bootstrap always makes a 1-of-1 all-rights group; anything else (limits, narrower rights) needs bootstrapGroup.
             var needsCustomGroup = plan.DailyLimit != 0 || plan.MonthlyLimit != 0 || plan.CooldownRounds != 0
                 || plan.AllowedActions != AlgoSafeConstants.ActAll || plan.LimitAssetId != 0;
@@ -326,7 +331,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             return await WithBudgetsAsync(
                 budget => NewProxy(appId, parameters).ExecuteProposal_Transactions(proposalId, budget, AsAccount(sender), null, string.Empty, 1000),
                 parameters,
-                $"Execute proposal {proposalId} of safe {appId}: the safe sends {view.Transactions.Count} transaction(s) from its own account.",
+                $"Execute proposal {proposalId} of safe {appId}: the safe sends {view.Transactions.Count} transaction(s) from its own account: {DescribeTransfers(view.Transactions)}{ExecutionWarnings(view)}",
                 cancellationToken);
         }
 
@@ -345,7 +350,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} is a governance or other non-transfer change ({summary.Type}), whose content this server cannot show; approve it in the AlgoSafe app instead.");
             }
 
-            if (view.Transactions.Count != (int)summary.TotalTransactions)
+            if ((ulong)view.Transactions.Count != summary.TotalTransactions)
             {
                 throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} should contain {summary.TotalTransactions} transaction(s) but only {view.Transactions.Count} could be read; approving something not fully reviewed is refused.");
             }
@@ -367,6 +372,28 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             {
                 throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} spends from another account ({foreignSender.Sender}) rather than the safe's own; approving that is refused here - review and approve it in the AlgoSafe app instead.");
             }
+        }
+
+        /// <summary>Execution is permissionless once approved, so anything unusual about what will be sent is called out in the summary the agent relays.</summary>
+        private static string ExecutionWarnings(AlgoSafeProposalView view)
+        {
+            var warnings = new List<string>();
+            if (view.Transactions.Any(t => t.ClosesAccount))
+            {
+                warnings.Add("WARNING: includes a close-out that sweeps the sender's entire remaining balance");
+            }
+
+            if (view.Transactions.Any(t => t.Kind.StartsWith("Unsupported", StringComparison.Ordinal)))
+            {
+                warnings.Add("WARNING: includes transaction kinds this server cannot decode (app call, rekey, key registration or asset configuration)");
+            }
+
+            if (view.Transactions.Any(t => t.Sender != AlgoSafeReader.SafeItself))
+            {
+                warnings.Add("WARNING: spends from an account other than the safe's own");
+            }
+
+            return warnings.Count == 0 ? string.Empty : " | " + string.Join("; ", warnings);
         }
 
         private static string DescribeTransfers(IReadOnlyList<AlgoSafeProposedTransactionView> transactions) =>
