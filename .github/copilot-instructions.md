@@ -998,6 +998,21 @@ setup stage needs.
   through `AlgoSafeCallProxy` with hand-written ARC-4 encoders (`AlgoSafePayloadCodec`); do not switch back to the generated
   methods for those two until fixed upstream. A safe needs the immutable `AlgoSafeTxnValidator` library deployed per network
   (pinned by bytecode sha256; the contract re-checks it). `IAlgoSafeChainClient` is the test seam over algod.
+- **Biatec Scan tools**: `MCP/BiatecScanMCP.cs` (its own `[McpServerToolType]`, three read-only tools - `searchBiatecScanAssets`,
+  `findBestLiquidityPools`, `getBiatecScanTopAssetsByApr`) lets an assistant answer "which EUR/USDC pools pay the highest APR?" from
+  Biatec Scan (AVMTradeReporter, `api.{network}.scan.biatec.io`; base URLs per BiatecMCP network code under `BiatecScan:Networks`,
+  default algorand-mainnet/algorand-testnet/voi-mainnet). `BusinessLogic/Scan/BiatecScanClient.cs` is a typed `HttpClient` over its REST API.
+  The pool/stat endpoints require **ARC-14** auth (`Authorization: SigTx <base64>`, a zero-fee never-broadcast self-payment whose note is
+  `BiatecScan#ARC14`; its validity window is the token lifetime) - `Arc14ScanAuthTokenProvider` mints it with **one anonymous, random
+  keypair generated in memory per process** (never persisted, never funded, signs nothing but this proof), cached ~15 min per network.
+  That is deliberately *not* a wallet key - the same throwaway-identity approach Biatec Scan's own web app uses - so BiatecMCP still holds no
+  wallet key material and these tools need neither BiatecOIDC nor the `sign` scope; do not swap it for a user's wallet identity or persist it.
+  The pool document carries no APR field, so `Helper/PoolAprCalculator` derives it exactly as Scan's UI does
+  (`lpFee * (1 - protocolFeePortion) * volume / TVL * 365/window`, as percent in the tool output); `getBiatecScanTopAssetsByApr` instead relays
+  the API's own per-asset `apr24h`/`apr7d`, which are **already percent** (unlike the fractions this server computes per pool). A symbol
+  input expands to at most three exact-symbol tokens ranked by TVL (several tokens can share one, e.g. EUR), reported back in `ResolvedAssets`;
+  pools of either side order are matched, `minTvlUsd` (default 1000) hides tiny pools whose APR is meaningless, and pools Scan rates above 80
+  as scams are hidden unless `includeScam`.
 - **JWT issuer / OIDC provider**: `JwtIssuerService` + `JwtIssuerController` (`BiatecOIDC`) implement OIDC
   discovery (`/.well-known/openid-configuration`, `/.well-known/jwks.json`), `/authorize`, `/token`, `/userinfo`,
   `/introspect`, `/verify`. Supports both standard `response_type=code` and a legacy `returnUrl` direct

@@ -223,6 +223,20 @@ resolved by simulation); pass all its `UnsignedTransactions` in order to `signTr
 | `approveAlgoSafeProposal` | build | Approve a proposal as a group member |
 | `executeAlgoSafeProposal` | build | Execute a Ready proposal (anyone may; fees cover the inner transactions) |
 
+### Biatec Scan (DEX pools and APR) tools
+
+Read-only tools over [Biatec Scan](https://scan.biatec.io): find where liquidity providers earn the most. No wallet, signing or `sign`
+scope is involved.
+
+| Tool | Purpose |
+| --- | --- |
+| `findBestLiquidityPools` | Pools (Biatec, Pact, Tinyman) of one asset or between two, ranked by APR / TVL / volume - e.g. `assetA: "EUR", assetB: "USDC"` |
+| `searchBiatecScanAssets` | Look up asset ids by symbol, name or id (a symbol can match several tokens) |
+| `getBiatecScanTopAssetsByApr` | Assets ranked by the APR Scan reports for their pools |
+
+APR is the trailing liquidity-provider fee yield annualised - an estimate that ignores impermanent loss and incentives. Networks:
+`algorand-mainnet`, `algorand-testnet`, `voi-mainnet` (configurable under `BiatecScan:Networks`).
+
 ### Example prompts
 
 - *"what is my algorand address"* → `getCryptoAddress(network="algorand-mainnet")`

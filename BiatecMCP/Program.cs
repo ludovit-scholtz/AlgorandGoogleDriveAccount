@@ -23,6 +23,7 @@ namespace BiatecMCP
             builder.Services.Configure<OidcConfiguration>(builder.Configuration.GetSection("Oidc"));
             builder.Services.Configure<McpResourceConfiguration>(builder.Configuration.GetSection("Mcp"));
             builder.Services.Configure<SolanaConfiguration>(builder.Configuration.GetSection("Solana"));
+            builder.Services.Configure<ScanConfiguration>(builder.Configuration.GetSection("BiatecScan"));
 
             var oidcConfig = new OidcConfiguration();
             builder.Configuration.GetSection("Oidc").Bind(oidcConfig);
@@ -192,6 +193,14 @@ namespace BiatecMCP
                 client.Timeout = TimeSpan.FromSeconds(10);
             });
             builder.Services.AddScoped<ISolanaRpcDataSource>(sp => sp.GetRequiredService<SolanaRpcDataSource>());
+
+            // Biatec Scan (DEX explorer) read access for the pool/APR tools. The ARC-14 token provider holds one anonymous, in-memory API-access
+            // identity per process (a singleton, since it must be the same keypair for the cached tokens to stay valid) - not a wallet key.
+            builder.Services.AddSingleton<BiatecMCP.BusinessLogic.Scan.IScanAuthTokenProvider, BiatecMCP.BusinessLogic.Scan.Arc14ScanAuthTokenProvider>();
+            builder.Services.AddHttpClient<BiatecMCP.BusinessLogic.Scan.IBiatecScanClient, BiatecMCP.BusinessLogic.Scan.BiatecScanClient>(client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(15);
+            });
 
             // AlgoSafe tools: a chain client is created per call for the resolved network (the factory holds no state; like the other per-call algod clients here it opens a short-lived HttpClient per call).
             builder.Services.AddScoped<BiatecMCP.BusinessLogic.AlgoSafe.IAlgoSafeChainClientFactory, BiatecMCP.BusinessLogic.AlgoSafe.AlgodAlgoSafeChainClientFactory>();
