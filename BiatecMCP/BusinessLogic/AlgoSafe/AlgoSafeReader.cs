@@ -203,7 +203,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             // Only an open proposal can still be approved or executed; a finished one's payload boxes may legitimately be gone.
             var open = proposal.Status is AlgoSafeConstants.StatusActive or AlgoSafeConstants.StatusReady;
             view.ReviewBlocker = payloadProblem ?? (open ? ReviewBlocker(view) : null);
-            view.CanExecute &= view.ReviewBlocker == null;
+
+            // A disabled signer group can neither approve nor execute its proposals.
+            var proposalGroup = await ReadGroupAsync(appId, proposal.GroupId, cancellationToken);
+            var groupActive = proposalGroup != null && proposalGroup.Active != 0;
+            view.CanExecute &= view.ReviewBlocker == null && groupActive;
 
             if (caller != null)
             {
@@ -211,13 +215,13 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 var isMember = await ReadMemberAsync(appId, proposal.GroupId, caller, cancellationToken) != null;
                 var hasApproved = approvers.Contains(callerString)
                     || await _chain.GetBoxAsync(appId, AlgoSafeBoxNames.Approval(proposalId, caller), cancellationToken) != null;
-                var group = await ReadGroupAsync(appId, proposal.GroupId, cancellationToken);
-                var epochMatches = group != null && group.MembershipEpoch == proposal.EpochAtCreation;
+                var epochMatches = proposalGroup != null && proposalGroup.MembershipEpoch == proposal.EpochAtCreation;
                 view.CallerIsMember = isMember;
                 view.CallerHasApproved = hasApproved;
                 view.CallerCanApprove = isMember
                     && !hasApproved
                     && epochMatches
+                    && groupActive
                     && !summary.Expired
                     && (proposal.Status == AlgoSafeConstants.StatusActive || proposal.Status == AlgoSafeConstants.StatusReady);
             }

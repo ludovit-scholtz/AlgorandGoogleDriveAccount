@@ -41,8 +41,8 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 transaction.Fee = Math.Max(transaction.Fee, minFee);
             }
 
-            // If trimming a fee to the traced inner-transaction count makes the node say "fee too small" (a trace that under-counts), the
-            // pre-trim fee is restored and trimming stops - the last fee that simulated successfully is kept rather than fighting over it.
+            // If trimming a fee to the traced inner-transaction count makes the node say "fee too small" (a trace that under-counts), trimming
+            // stops and the fee is raised minimally until it runs, rather than fighting over it.
             var preTrimFees = new Dictionary<int, ulong>();
             var trimDisabled = false;
 
@@ -53,15 +53,17 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
                 if (!string.IsNullOrEmpty(result.FailureMessage))
                 {
-                    if (IsFeeTooSmall(result.FailureMessage) && preTrimFees.Count > 0)
+                    // After a trim the trace proved to under-count: stop trimming and creep the fee up one minimum fee at a time instead, so the
+                    // returned fee is the smallest that runs - never the (up to 256x) escalated one.
+                    if (IsFeeTooSmall(result.FailureMessage) && (preTrimFees.Count > 0 || trimDisabled))
                     {
-                        foreach (var (index, fee) in preTrimFees)
+                        trimDisabled = true;
+                        preTrimFees.Clear();
+                        foreach (var appCall in CallsWithRoomForInner(group))
                         {
-                            group[index].Fee = fee;
+                            appCall.Fee += minFee;
                         }
 
-                        preTrimFees.Clear();
-                        trimDisabled = true;
                         continue;
                     }
 

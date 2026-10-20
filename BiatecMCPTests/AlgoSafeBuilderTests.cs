@@ -71,11 +71,14 @@ namespace BiatecMCPTests
         private void Put(byte[] name, byte[] value) => _boxes[Convert.ToHexString(name)] = value;
 
         public FakeAlgoSafeChain WithGroup(ulong id, ulong threshold, ulong memberCount, ulong allowedActions = AlgoSafeConstants.ActAll, params Address[] members)
+            => WithGroup(id, threshold, memberCount, 1, allowedActions, members);
+
+        public FakeAlgoSafeChain WithGroup(ulong id, ulong threshold, ulong memberCount, ulong active, ulong allowedActions, params Address[] members)
         {
             Put(AlgoSafeBoxNames.Group(id), new AlgoSafeProxy.Structs.SignerGroup
             {
                 Name = "Admins", Threshold = threshold, MemberCount = memberCount, AdminPrivileges = AlgoSafeConstants.PrivAll,
-                AllowedActions = allowedActions, Active = 1, MembershipEpoch = 3
+                AllowedActions = allowedActions, Active = active, MembershipEpoch = 3
             }.ToByteArray());
             foreach (var member in members)
             {
@@ -297,6 +300,22 @@ namespace BiatecMCPTests
 
             Assert.That(view.CanExecute, Is.False);
             Assert.That(view.ReviewBlocker, Does.Contain("close-out"));
+        }
+
+        [Test]
+        public async Task Approve_AndExecute_RefuseWhenTheSignerGroupIsDisabled()
+        {
+            var pay = new[] { FakeAlgoSafeChain.Payment(FakeAlgoSafeChain.Receiver) };
+            FakeAlgoSafeChain Disabled(ulong status) => new FakeAlgoSafeChain().WithGroup(1, 2, 2, 0, AlgoSafeConstants.ActAll, FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.Member2)
+                .WithProposal(1, 1, status, pay);
+
+            var approve = await Assert.ThrowsAsync<AlgoSafeException>(() => BuilderFor(Disabled(AlgoSafeConstants.StatusActive)).BuildApproveAsync(FakeAlgoSafeChain.Member2, FakeAlgoSafeChain.AppId, 1));
+            var execute = await Assert.ThrowsAsync<AlgoSafeException>(() => BuilderFor(Disabled(AlgoSafeConstants.StatusReady)).BuildExecuteAsync(FakeAlgoSafeChain.Member2, FakeAlgoSafeChain.AppId, 1));
+
+            Assert.That(approve!.ErrorType, Is.EqualTo("NotApprovable").Or.EqualTo("GroupDisabled"));
+            Assert.That(execute!.ErrorType, Is.EqualTo("GroupDisabled"));
+            var view = await new AlgoSafeReader(Disabled(AlgoSafeConstants.StatusReady)).GetProposalAsync(FakeAlgoSafeChain.AppId, 1, FakeAlgoSafeChain.Member1);
+            Assert.That(view.CanExecute, Is.False);
         }
 
         // ───────── bootstrap ─────────

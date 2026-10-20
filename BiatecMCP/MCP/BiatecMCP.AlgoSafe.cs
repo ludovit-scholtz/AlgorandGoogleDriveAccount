@@ -150,7 +150,7 @@ namespace BiatecMCP.MCP
                     var callerText = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                     caller = string.IsNullOrWhiteSpace(callerText) ? null : new Address(callerText);
                 }
-                catch (Exception ex) when (seedAddress == null && ex is WalletApiException or UnauthorizedAccessException)
+                catch (Exception ex) when (seedAddress == null && slot == 0 && ex is WalletApiException or UnauthorizedAccessException)
                 {
                     // fall through with no caller (an explicitly requested seed that can't be resolved is a real error and surfaces instead)
                 }

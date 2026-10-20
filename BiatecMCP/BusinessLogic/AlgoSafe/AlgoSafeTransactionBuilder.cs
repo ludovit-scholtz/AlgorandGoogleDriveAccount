@@ -251,7 +251,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
                 // Executing is one app call that must reference every receiver and asset (alongside the safe's own boxes), and a call can carry
                 // only 8 references: a proposal touching many distinct ones may be approvable yet impossible to execute.
-                var distinctReferences = transfers.Select(t => t.Receiver).Distinct().Count() + transfers.Where(t => t.AssetId != 0).Select(t => t.AssetId).Distinct().Count();
+                var distinctReferences = transfers.Select(t => t.Receiver.Trim()).Distinct().Count() + transfers.Where(t => t.AssetId != 0).Select(t => t.AssetId).Distinct().Count();
                 proposed.Warning = distinctReferences > MaxComfortableReferences
                     ? $"This proposal touches {distinctReferences} distinct receivers/assets; a single execution call can reference only a few, so it may be impossible to execute. Prefer proposals with at most {MaxComfortableReferences} distinct receivers and assets combined."
                     : string.Empty;
@@ -298,16 +298,24 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("NotApprovable", $"Proposal {proposalId} can't be approved: the group's membership changed since it was created (cancel it and propose again).");
             }
 
+            var approvalGroup = await _reader.ReadGroupAsync(appId, summary.GroupId, cancellationToken);
+            if (approvalGroup == null || approvalGroup.Active == 0)
+            {
+                throw new AlgoSafeException("GroupDisabled", $"Signer group {summary.GroupId} is disabled, so proposal {proposalId} can no longer be approved.");
+            }
+
             var parameters = await _chain.GetTransactionParamsAsync(cancellationToken);
 
             // Bound to the payload version just read: if the proposer changes the payload before this is mined, the contract refuses
             // ("payload changed since review") instead of counting an approval for content the signer never saw.
-            return await WithBudgetsAsync(
+            var approval = await WithBudgetsAsync(
                 budget => NewProxy(appId, parameters).ApproveProposal_Transactions(proposalId, summary.PayloadVersion, budget, AsAccount(sender), null, string.Empty, 1000),
                 parameters,
                 $"Approve proposal {proposalId} of safe {appId} (payload version {summary.PayloadVersion}; {summary.ApprovalsCount + 1}/{summary.Threshold} approvals after this). It sends: {DescribeTransfers(view.Transactions)}",
                 cancellationToken,
                 ApprovalBudgets);
+            approval.Warning = NoLimitWarning(approvalGroup, view.Transactions.Select(t => t.AssetId));
+            return approval;
         }
 
         public async Task<AlgoSafeBuiltStep> BuildExecuteAsync(Address sender, ulong appId, ulong proposalId, CancellationToken cancellationToken = default)
@@ -342,14 +350,19 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             // Execution is permissionless, so this is the last point to refuse: only content this server fully decoded and can show is built.
             EnsureFullyReviewable(view, proposalId);
 
+            var proposalGroup = await _reader.ReadGroupAsync(appId, summary.GroupId, cancellationToken);
+            if (proposalGroup == null || proposalGroup.Active == 0)
+            {
+                throw new AlgoSafeException("GroupDisabled", $"Signer group {summary.GroupId} is disabled, so proposal {proposalId} cannot be executed.");
+            }
+
             var parameters = await _chain.GetTransactionParamsAsync(cancellationToken);
             var executed = await WithBudgetsAsync(
                 budget => NewProxy(appId, parameters).ExecuteProposal_Transactions(proposalId, budget, AsAccount(sender), null, string.Empty, 1000),
                 parameters,
                 $"Execute proposal {proposalId} of safe {appId}: the safe sends {view.Transactions.Count} transaction(s) from its own account: {DescribeTransfers(view.Transactions)}",
                 cancellationToken);
-            var proposalGroup = await _reader.ReadGroupAsync(appId, summary.GroupId, cancellationToken);
-            executed.Warning = proposalGroup == null ? string.Empty : NoLimitWarning(proposalGroup, view.Transactions.Select(t => t.AssetId));
+            executed.Warning = NoLimitWarning(proposalGroup, view.Transactions.Select(t => t.AssetId));
             return executed;
         }
 
