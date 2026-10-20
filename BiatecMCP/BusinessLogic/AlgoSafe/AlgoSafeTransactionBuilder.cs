@@ -96,8 +96,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// </summary>
         public async Task<AlgoSafeBuiltStep> BuildBootstrapAsync(Address sender, ulong appId, ulong depositMicroAlgo, AlgoSafeBootstrapPlan plan, CancellationToken cancellationToken = default)
         {
-            await _reader.RequireSupportedAsync(appId, cancellationToken);
-            var state = await _reader.ReadSafeStateAsync(appId, cancellationToken);
+            var state = await _reader.ReadSafeStateAsync(appId, cancellationToken); // also requires a supported contract
             if (state.Bootstrapped)
             {
                 throw new AlgoSafeException("AlreadyBootstrapped", $"Safe {appId} is already bootstrapped.");
@@ -195,8 +194,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("InvalidRequest", $"expiryRounds must be between {AlgoSafeConstants.MinProposalLifetimeRounds} and {AlgoSafeConstants.MaxProposalLifetimeRounds} (about {AlgoSafeConstants.MaxProposalLifetimeRounds * 28 / 10 / 86400} days at ~2.8s/round).");
             }
 
-            await _reader.RequireSupportedAsync(appId, cancellationToken);
-            var state = await _reader.ReadSafeStateAsync(appId, cancellationToken);
+            var state = await _reader.ReadSafeStateAsync(appId, cancellationToken); // also requires a supported contract
             if (!state.Bootstrapped)
             {
                 throw new AlgoSafeException("NotBootstrapped", $"Safe {appId} has not been bootstrapped yet - call bootstrapAlgoSafe first.");
@@ -517,7 +515,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         {
             try
             {
-                return new Address(text);
+                return new Address(text.Trim());
             }
             catch (Exception)
             {

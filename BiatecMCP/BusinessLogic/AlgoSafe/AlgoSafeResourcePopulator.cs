@@ -43,7 +43,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             // If trimming a fee to the traced inner-transaction count makes the node say "fee too small" (a trace that under-counts), trimming
             // stops and the fee is raised minimally until it runs, rather than fighting over it.
-            var preTrimFees = new Dictionary<int, ulong>();
+            var trimmedSinceLastSimulation = false;
             var trimDisabled = false;
 
             while (attempts++ < MaxResourceAttempts + 12)
@@ -55,10 +55,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 {
                     // After a trim the trace proved to under-count: stop trimming and creep the fee up one minimum fee at a time instead, so the
                     // returned fee is the smallest that runs - never the (up to 256x) escalated one.
-                    if (IsFeeTooSmall(result.FailureMessage) && (preTrimFees.Count > 0 || trimDisabled))
+                    if (IsFeeTooSmall(result.FailureMessage) && (trimmedSinceLastSimulation || trimDisabled))
                     {
                         trimDisabled = true;
-                        preTrimFees.Clear();
+                        trimmedSinceLastSimulation = false;
                         foreach (var appCall in CallsWithRoomForInner(group))
                         {
                             appCall.Fee += minFee;
@@ -86,6 +86,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 }
 
                 var changed = false;
+                trimmedSinceLastSimulation = false;
                 var results = result.TxnResults?.ToList() ?? new List<SimulateTransactionResult>();
                 innerCount = 0;
                 for (var i = 0; i < group.Count && i < results.Count; i++)
@@ -107,7 +108,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                         var exactFee = minFee * (ulong)(1 + inner);
                         if (appCall.Fee != exactFee)
                         {
-                            preTrimFees[i] = appCall.Fee;
+                            trimmedSinceLastSimulation = true;
                             appCall.Fee = exactFee;
                             changed = true;
                         }

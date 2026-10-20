@@ -15,6 +15,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// <summary>How many of the newest proposals <see cref="ListProposalsAsync"/> will look at before giving up on finding matches.</summary>
         private const int MaxProposalsScanned = 200;
 
+        /// <summary>How many proposal boxes are read at once while scanning.</summary>
+        private const int ScanBatchSize = 8;
+
         private readonly IAlgoSafeChainClient _chain;
 
         public AlgoSafeReader(IAlgoSafeChainClient chain)
@@ -99,13 +102,15 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                     continue; // a dissolved custodian group leaves a gap in the id sequence
                 }
 
+                // A group's members are independent box reads: issue them together (a group holds only a handful).
+                var groupMembers = memberNames.Where(m => m.GroupId == groupId).Select(m => m.Account).ToList();
+                var memberBoxes = await Task.WhenAll(groupMembers.Select(account => ReadMemberAsync(appId, groupId, account, cancellationToken)));
                 var members = new List<AlgoSafeMemberView>();
-                foreach (var (_, _, account) in memberNames.Where(m => m.GroupId == groupId))
+                for (var i = 0; i < groupMembers.Count; i++)
                 {
-                    var member = await ReadMemberAsync(appId, groupId, account, cancellationToken);
-                    if (member != null)
+                    if (memberBoxes[i] != null)
                     {
-                        members.Add(new AlgoSafeMemberView { Address = account.EncodeAsString(), Label = AlgoSafeText.Clean(member.Label), AccountType = member.AccountType });
+                        members.Add(new AlgoSafeMemberView { Address = groupMembers[i].EncodeAsString(), Label = AlgoSafeText.Clean(memberBoxes[i]!.Label), AccountType = memberBoxes[i]!.AccountType });
                     }
                 }
 
@@ -125,19 +130,27 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             var results = new List<AlgoSafeProposalSummaryView>();
             var scanned = 0;
-            for (var id = nextProposalId; id > 1 && results.Count < limit && scanned < MaxProposalsScanned; id--, scanned++)
+            var nextId = nextProposalId; // ids below this are still unscanned (the newest proposal is nextId - 1)
+            while (nextId > 1 && results.Count < limit && scanned < MaxProposalsScanned)
             {
-                var proposal = await ReadProposalAsync(appId, id - 1, cancellationToken);
-                if (proposal == null || !wanted.Contains(proposal.Status))
+                // Proposal boxes are independent: read a small batch together (newest first), then apply them in order.
+                var batchSize = (int)Math.Min(Math.Min((ulong)ScanBatchSize, nextId - 1), (ulong)(MaxProposalsScanned - scanned));
+                var ids = Enumerable.Range(0, batchSize).Select(offset => nextId - 1 - (ulong)offset).ToList();
+                var batch = await Task.WhenAll(ids.Select(id => ReadProposalAsync(appId, id, cancellationToken)));
+                for (var i = 0; i < ids.Count && results.Count < limit; i++)
                 {
-                    continue;
+                    scanned++;
+                    if (batch[i] != null && wanted.Contains(batch[i]!.Status))
+                    {
+                        results.Add(ToSummary(ids[i], batch[i]!, currentRound));
+                    }
                 }
 
-                results.Add(ToSummary(id - 1, proposal, currentRound));
+                nextId -= (ulong)batchSize;
             }
 
             // Stopped by the scan cap (not by running out of proposals or filling the page): older proposals may match too.
-            var truncated = results.Count < limit && scanned >= MaxProposalsScanned && nextProposalId - (ulong)scanned > 1;
+            var truncated = results.Count < limit && scanned >= MaxProposalsScanned && nextId > 1;
             return (results, truncated);
         }
 
