@@ -378,6 +378,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         private static string ExecutionWarnings(AlgoSafeProposalView view)
         {
             var warnings = new List<string>();
+            if ((ulong)view.Transactions.Count != view.Summary.TotalTransactions)
+            {
+                warnings.Add($"WARNING: only {view.Transactions.Count} of the proposal's {view.Summary.TotalTransactions} transactions could be read, so this list is incomplete");
+            }
+
             if (view.Transactions.Any(t => t.ClosesAccount))
             {
                 warnings.Add("WARNING: includes a close-out that sweeps the sender's entire remaining balance");
@@ -465,6 +470,16 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             if (plan.Threshold < 1 || plan.Threshold > (ulong)members.Count)
             {
                 throw new AlgoSafeException("InvalidRequest", $"threshold must be between 1 and the number of members ({members.Count}).");
+            }
+
+            if (plan.AllowedActions == 0)
+            {
+                throw new AlgoSafeException("InvalidRequest", "allowedActions must allow at least one kind of transaction.");
+            }
+
+            if (plan.DailyLimit != 0 && plan.MonthlyLimit != 0 && plan.DailyLimit > plan.MonthlyLimit)
+            {
+                throw new AlgoSafeException("InvalidRequest", "The daily limit cannot exceed the monthly limit.");
             }
 
             if (plan.AllowedActions > AlgoSafeConstants.ActAll)

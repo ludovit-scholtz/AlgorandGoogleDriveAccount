@@ -72,7 +72,9 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/tools").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — 30 MCP tools split into three chainable steps (nine of them the AlgoSafe tools, see "AlgoSafe tools" below) (build → sign → execute) rather than
+  - `MCP/BiatecMCP.cs` (+ `MCP/BiatecMCP.AlgoSafe.cs`, a `partial` of the same class holding the nine AlgoSafe tools -
+    see "AlgoSafe tools" under Architecture notes; the tool list below covers the other 21) — 30 MCP tools split into
+    three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast:
     `listAlgorandAddresses`, `getBridgeConfiguration`, `listSupportedNetworks`, `getCryptoAddress`,

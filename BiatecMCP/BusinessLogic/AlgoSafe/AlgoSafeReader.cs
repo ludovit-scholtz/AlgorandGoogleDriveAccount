@@ -240,7 +240,13 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             var pending = await _chain.GetPendingTransactionAsync(transactionId.Trim(), cancellationToken)
                 ?? throw new AlgoSafeException("TransactionNotFound", $"Transaction {transactionId} is not known to the node: not broadcast yet, on a different network, or too old for the node to still remember (nodes only keep recent transactions - do NOT redeploy; look the application up by its id instead if you have it).");
 
-            var confirmedRound = (pending as Algorand.Algod.Model.Transactions.Transaction)?.ConfirmedRound ?? 0;
+            var pendingTransaction = pending as Algorand.Algod.Model.Transactions.Transaction;
+            var confirmedRound = pendingTransaction?.ConfirmedRound ?? 0;
+            if (confirmedRound == 0 && !string.IsNullOrEmpty(pendingTransaction?.PoolError))
+            {
+                throw new AlgoSafeException("TransactionRejected", $"The node rejected transaction {transactionId}: {AlgoSafeText.Clean(pendingTransaction.PoolError)}. It will never confirm - rebuild it.");
+            }
+
             if (confirmedRound == 0)
             {
                 return new AlgoSafeDeploymentView { Confirmed = false, Kind = "Pending" };
@@ -290,9 +296,17 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                     continue; // a chunk slot may be skipped
                 }
 
-                foreach (var entry in AlgoSafePayloadCodec.DecodeEnvelopeArray(bytes))
+                try
                 {
-                    transactions.Add(DescribeEntry(entry));
+                    foreach (var entry in AlgoSafePayloadCodec.DecodeEnvelopeArray(bytes))
+                    {
+                        transactions.Add(DescribeEntry(entry));
+                    }
+                }
+                catch (Exception ex) when (ex is FormatException or ArgumentException or IndexOutOfRangeException or OverflowException)
+                {
+                    // Proposals are written by group members: a malformed chunk is reported as such, never as a crash.
+                    throw new AlgoSafeException("UnreadablePayload", $"Proposal {proposalId}'s payload (part {chunk}) is malformed and cannot be shown; it should not be approved here.");
                 }
             }
 
