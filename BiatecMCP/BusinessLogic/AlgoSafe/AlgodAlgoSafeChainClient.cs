@@ -64,7 +64,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             {
                 response = await Algod.GetApplicationBoxesAsync(cancellationToken, appId, BoxListingCap);
             }
-            catch (ApiException ex) when (ex.StatusCode == 400)
+            catch (ApiException ex) when (ex.StatusCode == 400 && IsBoxLimitError(ex.Message + ex.Response))
             {
                 // algod answers 400 (rather than a truncated list) when more boxes exist than the requested maximum.
                 throw new AlgoSafeException("TooManyBoxes", $"Application {appId} has more than {BoxListingCap} boxes - too many to enumerate safely.");
@@ -78,6 +78,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             return names;
         }
+
+        private static bool IsBoxLimitError(string text) =>
+            text.Contains("max", StringComparison.OrdinalIgnoreCase) || text.Contains("limit", StringComparison.OrdinalIgnoreCase) || text.Contains("exceed", StringComparison.OrdinalIgnoreCase);
 
         public async Task<SimulateTransactionGroupResult> SimulateAsync(IReadOnlyList<Transaction> group, CancellationToken cancellationToken = default)
         {

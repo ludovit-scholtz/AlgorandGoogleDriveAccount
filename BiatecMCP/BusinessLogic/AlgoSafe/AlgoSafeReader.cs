@@ -153,22 +153,24 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             // the caller's own approval is checked directly below, which is all approving or executing needs.
             var approvers = new List<string>();
             var approversComplete = true;
-            try
+            if (!includeApprovers)
             {
-                if (!includeApprovers)
-                {
-                    throw new AlgoSafeException("TooManyBoxes", "not listed");
-                }
-
-                approvers = (await _chain.ListBoxNamesAsync(appId, cancellationToken))
-                    .Select(n => AlgoSafeBoxNames.TryParseApproval(n, out var pid, out var account) && pid == proposalId ? account.EncodeAsString() : null)
-                    .Where(a => a != null)
-                    .Select(a => a!)
-                    .ToList();
+                approversComplete = false; // not listed on purpose; the caller's own approval is still checked exactly below
             }
-            catch (AlgoSafeException ex) when (ex.ErrorType == "TooManyBoxes")
+            else
             {
-                approversComplete = false;
+                try
+                {
+                    approvers = (await _chain.ListBoxNamesAsync(appId, cancellationToken))
+                        .Select(n => AlgoSafeBoxNames.TryParseApproval(n, out var pid, out var account) && pid == proposalId ? account.EncodeAsString() : null)
+                        .Where(a => a != null)
+                        .Select(a => a!)
+                        .ToList();
+                }
+                catch (AlgoSafeException ex) when (ex.ErrorType == "TooManyBoxes")
+                {
+                    approversComplete = false;
+                }
             }
 
             var view = new AlgoSafeProposalView

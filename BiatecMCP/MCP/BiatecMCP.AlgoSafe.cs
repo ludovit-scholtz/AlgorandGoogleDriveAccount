@@ -140,8 +140,18 @@ namespace BiatecMCP.MCP
             try
             {
                 using var chain = await CreateAlgoSafeChainAsync(network);
-                var callerText = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
-                Address? caller = string.IsNullOrWhiteSpace(callerText) ? null : new Address(callerText);
+                // The proposal can be read without knowing who is asking; the caller flags are just left out if the address can't be resolved.
+                Address? caller = null;
+                try
+                {
+                    var callerText = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
+                    caller = string.IsNullOrWhiteSpace(callerText) ? null : new Address(callerText);
+                }
+                catch (Exception ex) when (ex is WalletApiException or UnauthorizedAccessException or ArgumentException)
+                {
+                    // fall through with no caller
+                }
+
                 return new GetAlgoSafeProposalResponse { Proposal = await new AlgoSafeReader(chain).GetProposalAsync(appId, proposalId, caller) };
             }
             catch (Exception ex)
@@ -292,7 +302,7 @@ namespace BiatecMCP.MCP
             var resolved = await _networkResolver.ResolveAsync(network);
             if (resolved is not { Family: ChainFamily.Avm, AvmChain: not null })
             {
-                throw new ArgumentException(await BuildUnknownNetworkErrorAsync(network));
+                throw new AlgoSafeException("InvalidRequest", await BuildUnknownNetworkErrorAsync(network));
             }
 
             return _algoSafeChains.Create(resolved.AvmChain);
@@ -304,8 +314,7 @@ namespace BiatecMCP.MCP
             AlgoSafeException e => (e.Message, e.ErrorType),
             WalletApiException e => (e.Message, e.ErrorCode),
             UnauthorizedAccessException e => (e.Message, "Unauthorized"),
-            ArgumentException e => (e.Message, "InvalidRequest"),
-            _ => (SanitizeForToolResponse(ex, toolName), ex.GetType().ToString())
+            _ => (SanitizeForToolResponse(ex, toolName), "UnexpectedError")
         };
     }
 }

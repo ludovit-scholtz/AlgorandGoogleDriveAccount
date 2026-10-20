@@ -31,6 +31,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// <summary>Simulation budgets tried in turn for an execution: more opcode budget is requested (one pooled inner call per ~700) only if the cheaper one runs out.</summary>
         private static readonly ulong[] ExecutionBudgets = [AlgoSafeConstants.ExecutionEnsureBudget, 20_000, 60_000];
 
+        /// <summary>An approval usually fits the base budget (0 = no pooled budget call); only the one that reaches the threshold may do more.</summary>
+        private static readonly ulong[] ApprovalBudgets = [0, AlgoSafeConstants.ExecutionEnsureBudget, 20_000, 60_000];
+
         /// <summary>Box references per call are scarce (max 8 in total), and every member is one box.</summary>
         internal const int MaxBootstrapMembers = 6;
 
@@ -236,6 +239,16 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         {
             var view = await _reader.GetProposalAsync(appId, proposalId, sender, includeApprovers: false, cancellationToken: cancellationToken);
             var summary = view.Summary;
+            if (summary.Status is not ("Active" or "Ready"))
+            {
+                throw new AlgoSafeException("NotApprovable", $"Proposal {proposalId} is {summary.Status} and can no longer be approved.");
+            }
+
+            if (summary.Expired)
+            {
+                throw new AlgoSafeException("ProposalExpired", $"Proposal {proposalId} expired at round {summary.ExpiryRound}.");
+            }
+
             EnsureFullyReviewable(view, proposalId);
 
             if (view.CallerIsMember != true)
@@ -248,16 +261,6 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("AlreadyApproved", $"{sender.EncodeAsString()} has already approved proposal {proposalId}.");
             }
 
-            if (summary.Status is not ("Active" or "Ready"))
-            {
-                throw new AlgoSafeException("NotApprovable", $"Proposal {proposalId} is {summary.Status} and can no longer be approved.");
-            }
-
-            if (summary.Expired)
-            {
-                throw new AlgoSafeException("ProposalExpired", $"Proposal {proposalId} expired at round {summary.ExpiryRound}.");
-            }
-
             if (view.CallerCanApprove != true)
             {
                 throw new AlgoSafeException("NotApprovable", $"Proposal {proposalId} can't be approved: the group's membership changed since it was created (cancel it and propose again).");
@@ -267,9 +270,12 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             // Bound to the payload version just read: if the proposer changes the payload before this is mined, the contract refuses
             // ("payload changed since review") instead of counting an approval for content the signer never saw.
-            var transactions = await NewProxy(appId, parameters).ApproveProposal_Transactions(
-                proposalId, summary.PayloadVersion, 0, AsAccount(sender), null, string.Empty, 1000);
-            return await FinishAsync(transactions, parameters, $"Approve proposal {proposalId} of safe {appId} (payload version {summary.PayloadVersion}; {summary.ApprovalsCount + 1}/{summary.Threshold} approvals after this). It sends: {DescribeTransfers(view.Transactions)}", cancellationToken);
+            return await WithBudgetsAsync(
+                budget => NewProxy(appId, parameters).ApproveProposal_Transactions(proposalId, summary.PayloadVersion, budget, AsAccount(sender), null, string.Empty, 1000),
+                parameters,
+                $"Approve proposal {proposalId} of safe {appId} (payload version {summary.PayloadVersion}; {summary.ApprovalsCount + 1}/{summary.Threshold} approvals after this). It sends: {DescribeTransfers(view.Transactions)}",
+                cancellationToken,
+                ApprovalBudgets);
         }
 
         public async Task<AlgoSafeBuiltStep> BuildExecuteAsync(Address sender, ulong appId, ulong proposalId, CancellationToken cancellationToken = default)
@@ -372,6 +378,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         private static AlgoSafePayloadEntry EncodeTransfer(AlgoSafeTransferRequest transfer, ulong groupAllowedActions)
         {
             var receiver = ParseAddress(transfer.Receiver, "receiver");
+            if (receiver.Equals(AlgoSafePayloadCodec.ZeroAddress))
+            {
+                throw new AlgoSafeException("InvalidRequest", "The receiver cannot be the zero address (funds sent there are burned).");
+            }
+
             if (System.Text.Encoding.UTF8.GetByteCount(transfer.Note ?? string.Empty) > MaxNoteBytes)
             {
                 throw new AlgoSafeException("InvalidRequest", $"A transfer note can be at most {MaxNoteBytes} bytes.");
@@ -471,10 +482,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             Func<ulong, Task<List<Transaction>>> build,
             TransactionParametersResponse parameters,
             string summary,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ulong[]? budgets = null)
         {
             AlgoSafeException? last = null;
-            foreach (var budget in ExecutionBudgets)
+            foreach (var budget in budgets ?? ExecutionBudgets)
             {
                 var transactions = await build(budget);
                 try
