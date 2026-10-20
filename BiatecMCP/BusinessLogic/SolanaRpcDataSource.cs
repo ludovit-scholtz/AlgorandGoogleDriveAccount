@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BiatecMCP.Helper;
 using BiatecMCP.Model;
 using Microsoft.Extensions.Options;
 
@@ -53,14 +54,19 @@ namespace BiatecMCP.BusinessLogic
 
         public async Task<SolanaSendResult> SendTransactionAsync(byte[] signedTransaction, CancellationToken cancellationToken = default)
         {
+            // preflightCommitment matches the "confirmed" commitment createSolanaTransaction's balance pre-check uses - a
+            // balance that is confirmed but not yet finalized would otherwise pass the pre-check and then fail preflight.
             var response = await TryCallAsync(
                 "sendTransaction",
-                new object[] { Convert.ToBase64String(signedTransaction), new { encoding = "base64", preflightCommitment = "finalized" } },
+                new object[] { Convert.ToBase64String(signedTransaction), new { encoding = "base64", preflightCommitment = "confirmed" } },
                 cancellationToken);
 
             if (response == null)
             {
-                return new SolanaSendResult(null, "The Solana RPC node was unreachable. Try again shortly.");
+                // A timeout / dropped connection / error status after the request left the building does NOT prove the node
+                // dropped the transaction - it may have been accepted. Say so, and name the signature to look up, so an agent
+                // doesn't rebuild and resend a second transfer.
+                return new SolanaSendResult(null, "The Solana RPC node did not answer cleanly, so it is UNKNOWN whether the transaction was accepted.", OutcomeUnknown: true, ExpectedSignature: SolanaAddressValidator.TryComputeSignature(signedTransaction));
             }
 
             if (response.Error != null)

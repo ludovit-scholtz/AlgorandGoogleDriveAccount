@@ -218,7 +218,7 @@ namespace BiatecOIDC.BusinessLogic
             return signed;
         }
 
-        public async Task<byte[]> SignSolanaTransferAsync(string email, string provider, SolanaUnsignedTransfer transfer, string? accessToken, string? seedAddress = null, int slot = 0)
+        public async Task<byte[]> SignSolanaTransferAsync(string email, string provider, SolanaUnsignedTransfer transfer, string senderAddress, string? accessToken, string? seedAddress = null, int slot = 0)
         {
             if (string.IsNullOrWhiteSpace(email))
             {
@@ -237,6 +237,14 @@ namespace BiatecOIDC.BusinessLogic
             // A transfer to the signer's own address moves nothing - treat it as free, but determine "own" from
             // the independently derived address, never from anything the caller claims.
             var signerAddress = await _accountRepository.DeriveSolanaAddressAsync(email, provider, resolvedAddress, slot, accessToken);
+
+            // The activation registry resolves an address of ANY family to a (seed, slot), so the route's address
+            // must be checked against the Solana address that key actually has - otherwise e.g. slot N's Algorand
+            // address in the route would sign (and spend) from slot N's Solana account.
+            if (!string.Equals(senderAddress, signerAddress, StringComparison.Ordinal))
+            {
+                throw new FormatException($"'{senderAddress}' is not the Solana address of the resolved seed/slot ({signerAddress}). Sign as the Solana address returned by GET /wallet/address/{{seedAddress}}/{{slot}}.");
+            }
             var spendLamports = string.Equals(transfer.Recipient, signerAddress, StringComparison.Ordinal) ? 0UL : transfer.Lamports;
 
             var totalUsd = spendLamports > 0 ? await _solanaValuationService.GetUsdValueAsync(spendLamports) : 0m;

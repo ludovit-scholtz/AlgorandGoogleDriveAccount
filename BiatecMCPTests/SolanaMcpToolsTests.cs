@@ -294,6 +294,30 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task SubmitTransactionToBlockchain_Solana_OutcomeUnknown_ToldNotToResendAndGivenTheSignatureToCheck()
+        {
+            SetClaims(new Claim("sign", "true"));
+            _solanaRpc
+                .Setup(r => r.SendTransactionAsync(It.IsAny<byte[]>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SolanaSendResult(null, "The Solana RPC node did not answer cleanly, so it is UNKNOWN whether the transaction was accepted.", OutcomeUnknown: true, ExpectedSignature: "3abcSig"));
+
+            var result = await _tool.SubmitTransactionToBlockchain(new List<string> { Convert.ToBase64String(new byte[] { 1 }) }, "solana");
+
+            Assert.That(result.ErrorType, Is.EqualTo("BroadcastOutcomeUnknown"));
+            Assert.That(result.Error, Does.Contain("UNKNOWN").And.Contain("https://explorer.solana.com/tx/3abcSig").And.Contain("Do NOT rebuild"));
+            Assert.That(result.TxId, Is.Empty);
+        }
+
+        [Test]
+        public async Task GetCryptoBalance_Solana_InvalidExplicitAddress_IsInvalidRequestNotAnOutageAndMakesNoRpcCall()
+        {
+            var result = await _tool.GetCryptoBalance("solana", address: "abc");
+
+            Assert.That(result.ErrorType, Is.EqualTo("InvalidRequest"));
+            _solanaRpc.Verify(r => r.TryGetBalanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
         public async Task SubmitTransactionToBlockchain_Solana_MoreThanOneTransaction_ReturnsInvalidRequest()
         {
             SetClaims(new Claim("sign", "true"));

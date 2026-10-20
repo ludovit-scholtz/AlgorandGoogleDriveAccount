@@ -62,12 +62,13 @@ namespace BiatecOIDC.BusinessLogic
             {
                 response = await _httpClient.GetFromJsonAsync<CoinGeckoSimplePriceResponse>(_config.CurrentValue.CoinGeckoSimplePriceUrl, JsonOptions, cancellationToken);
             }
-            catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+            catch (Exception ex) when (ex is HttpRequestException or JsonException || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
             {
+                // A caller-initiated cancellation is not a pricing outage - let it propagate as such.
                 throw new SolanaValuationException(ex);
             }
 
-            if (response == null || !response.TryGetValue(SolanaId, out var sol) || sol.Usd <= 0)
+            if (response == null || !response.TryGetValue(SolanaId, out var sol) || sol == null || sol.Usd <= 0)
             {
                 throw new SolanaValuationException(new InvalidOperationException("CoinGecko response did not include a positive solana USD price."));
             }
@@ -80,7 +81,7 @@ namespace BiatecOIDC.BusinessLogic
             return sol.Usd;
         }
 
-        private sealed class CoinGeckoSimplePriceResponse : Dictionary<string, CoinGeckoUsdPrice>
+        private sealed class CoinGeckoSimplePriceResponse : Dictionary<string, CoinGeckoUsdPrice?>
         {
         }
 

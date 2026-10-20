@@ -323,6 +323,18 @@ namespace BiatecMCP.MCP
                         return new GetCryptoBalanceResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Sol), Error = NoSolanaAddressMessage };
                     }
 
+                    if (!SolanaAddressValidator.IsValid(solanaAddress))
+                    {
+                        return new GetCryptoBalanceResponse
+                        {
+                            Network = resolved.DisplayName,
+                            Family = nameof(ChainFamily.Sol),
+                            Address = solanaAddress,
+                            Error = $"'{solanaAddress}' is not a valid Solana address (expected a base58 public key).",
+                            ErrorType = "InvalidRequest"
+                        };
+                    }
+
                     var lamports = await _solanaRpcDataSource.TryGetBalanceAsync(solanaAddress);
                     if (lamports == null)
                     {
@@ -1746,6 +1758,18 @@ namespace BiatecMCP.MCP
             }
 
             var result = await _solanaRpcDataSource.SendTransactionAsync(rawBytes);
+            if (result.Signature == null && result.OutcomeUnknown)
+            {
+                var lookup = result.ExpectedSignature == null
+                    ? string.Empty
+                    : $" If it was accepted its signature is {result.ExpectedSignature} - check https://explorer.solana.com/tx/{result.ExpectedSignature} before doing anything else.";
+                return new SubmitTransactionToBlockchainResponse
+                {
+                    Error = $"{result.Error}{lookup} Do NOT rebuild and resend the transfer until you have checked: if it is not found within about a minute its blockhash has expired and building a fresh transfer is safe.",
+                    ErrorType = "BroadcastOutcomeUnknown"
+                };
+            }
+
             if (result.Signature == null)
             {
                 return new SubmitTransactionToBlockchainResponse { Error = result.Error ?? "The Solana RPC node rejected the transaction.", ErrorType = "BroadcastFailed" };

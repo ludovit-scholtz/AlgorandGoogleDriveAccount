@@ -145,7 +145,56 @@ namespace BiatecMCPTests
             var result = await Create(handler).SendTransactionAsync(new byte[] { 1 });
 
             Assert.That(result.Signature, Is.Null);
-            Assert.That(result.Error, Does.Contain("unreachable"));
+            Assert.That(result.OutcomeUnknown, Is.True);
+            Assert.That(result.Error, Does.Contain("UNKNOWN"));
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_Unreachable_ReportsTheLocallyComputedSignatureToLookUp()
+        {
+            var handler = new StubHandler(_ => throw new TaskCanceledException("timeout"));
+            var signed = new byte[1 + 64 + 10];
+            signed[0] = 1;
+            for (var i = 1; i <= 64; i++)
+            {
+                signed[i] = (byte)(i + 1);
+            }
+
+            var result = await Create(handler).SendTransactionAsync(signed);
+
+            Assert.That(result.OutcomeUnknown, Is.True);
+            Assert.That(result.ExpectedSignature, Is.EqualTo(SolanaAddressValidator.TryComputeSignature(signed)));
+            Assert.That(result.ExpectedSignature, Is.Not.Null.And.Not.Empty);
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_ErrorStatusCode_IsOutcomeUnknownNotAConfirmedRejection()
+        {
+            var handler = new StubHandler(_ => Json("busy", HttpStatusCode.BadGateway));
+
+            var result = await Create(handler).SendTransactionAsync(new byte[] { 1 });
+
+            Assert.That(result.OutcomeUnknown, Is.True);
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_NodeErrorResponse_IsAConfirmedRejectionNotOutcomeUnknown()
+        {
+            var handler = new StubHandler(_ => Json("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32002,\"message\":\"nope\"},\"id\":1}"));
+
+            var result = await Create(handler).SendTransactionAsync(new byte[] { 1 });
+
+            Assert.That(result.OutcomeUnknown, Is.False);
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_PreflightUsesConfirmedCommitment()
+        {
+            var handler = new StubHandler(_ => Json("{\"jsonrpc\":\"2.0\",\"result\":\"sig\",\"id\":1}"));
+
+            await Create(handler).SendTransactionAsync(new byte[] { 1 });
+
+            Assert.That(handler.LastBody, Does.Contain("\"preflightCommitment\":\"confirmed\""));
         }
 
         [Test]
@@ -169,6 +218,39 @@ namespace BiatecMCPTests
         [TestCase("EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N")] // a blockhash is the same 32-byte base58 shape
         public void IsValid_RealThirtyTwoByteKeys_ReturnsTrue(string value) =>
             Assert.That(SolanaAddressValidator.IsValid(value), Is.True);
+
+        [Test]
+        public void TryComputeSignature_MatchesBase58OfTheFirstSignature()
+        {
+            // 64 bytes with leading zeros: each leading zero byte must encode as a leading '1'.
+            var signed = new byte[1 + 64 + 5];
+            signed[0] = 1;
+            signed[1] = 0;
+            signed[2] = 0;
+            signed[3] = 7;
+
+            var signature = SolanaAddressValidator.TryComputeSignature(signed)!;
+
+            Assert.That(signature, Does.StartWith("11"));
+            Assert.That(signature, Is.EqualTo(Solnet.Wallet.Utilities.Encoders.Base58.EncodeData(signed.AsSpan(1, 64).ToArray())));
+        }
+
+        [Test]
+        public void TryComputeSignature_TooShortOrMissing_ReturnsNull()
+        {
+            Assert.That(SolanaAddressValidator.TryComputeSignature(null), Is.Null);
+            Assert.That(SolanaAddressValidator.TryComputeSignature(Array.Empty<byte>()), Is.Null);
+            Assert.That(SolanaAddressValidator.TryComputeSignature(new byte[] { 1, 2, 3 }), Is.Null);
+        }
+
+        [Test]
+        public void TryComputeSignature_MoreThanOneSignature_ReturnsNull()
+        {
+            var signed = new byte[200];
+            signed[0] = 2;
+
+            Assert.That(SolanaAddressValidator.TryComputeSignature(signed), Is.Null);
+        }
 
         [TestCase(null)]
         [TestCase("")]

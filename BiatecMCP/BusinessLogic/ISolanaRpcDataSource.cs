@@ -1,7 +1,12 @@
 namespace BiatecMCP.BusinessLogic
 {
-    /// <summary>Outcome of a <c>sendTransaction</c> call - exactly one of <see cref="Signature"/> / <see cref="Error"/> is set.</summary>
-    public sealed record SolanaSendResult(string? Signature, string? Error);
+    /// <summary>
+    /// Outcome of a <c>sendTransaction</c> call - exactly one of <see cref="Signature"/> / <see cref="Error"/> is set.
+    /// When <see cref="OutcomeUnknown"/> is <c>true</c> the request failed in a way that does not prove the node
+    /// rejected it (timeout, connection drop, non-success HTTP status): the transaction may have been accepted, and
+    /// <see cref="ExpectedSignature"/> (computed locally from the signed bytes) says what to look up.
+    /// </summary>
+    public sealed record SolanaSendResult(string? Signature, string? Error, bool OutcomeUnknown = false, string? ExpectedSignature = null);
 
     /// <summary>
     /// The three Solana JSON-RPC calls BiatecMCP needs (balance, recent blockhash, broadcast) - an interface purely
@@ -17,7 +22,7 @@ namespace BiatecMCP.BusinessLogic
         /// <summary>A recent finalized blockhash (base58), or <c>null</c> if the node is unreachable/errors.</summary>
         Task<string?> TryGetLatestBlockhashAsync(CancellationToken cancellationToken = default);
 
-        /// <summary>Broadcasts a fully-signed serialized transaction; returns its signature, or the node's error message.</summary>
+        /// <summary>Broadcasts a fully-signed serialized transaction; returns its signature, or the node's error message (or an outcome-unknown result - see <see cref="SolanaSendResult"/>).</summary>
         Task<SolanaSendResult> SendTransactionAsync(byte[] signedTransaction, CancellationToken cancellationToken = default);
     }
 }

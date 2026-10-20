@@ -1534,7 +1534,7 @@ namespace BiatecOIDCTests
             SetupValidToken("valid-token", new Claim("sign", "true"));
             SetupSolanaNetwork();
             _mockWalletService
-                .Setup(s => s.SignSolanaTransferAsync(TestEmail, It.IsAny<string>(), It.Is<SolanaUnsignedTransfer>(t => t.Lamports == 1_000_000 && t.Recipient == "FoBNuzYQ4gpiP3jmevoiRVp3EnqBeXkB2HJ1LksSwYXJ"), It.IsAny<string?>(), TestAddress, 0))
+                .Setup(s => s.SignSolanaTransferAsync(TestEmail, It.IsAny<string>(), It.Is<SolanaUnsignedTransfer>(t => t.Lamports == 1_000_000 && t.Recipient == "FoBNuzYQ4gpiP3jmevoiRVp3EnqBeXkB2HJ1LksSwYXJ"), TestAddress, It.IsAny<string?>(), TestAddress, 0))
                 .ReturnsAsync(new byte[] { 1, 2, 3 });
 
             var result = await Sign(SolanaSignRequest(), "solana");
@@ -1554,7 +1554,7 @@ namespace BiatecOIDCTests
             var result = await Sign(SolanaSignRequest(), "solana");
 
             Assert.That((result as ObjectResult)!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
-            _mockWalletService.Verify(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+            _mockWalletService.Verify(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
 
         [Test]
@@ -1594,7 +1594,7 @@ namespace BiatecOIDCTests
             var result = await Sign(SolanaSignRequest(lamports: 0), "solana");
 
             Assert.That((result as ObjectResult)!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
-            _mockWalletService.Verify(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+            _mockWalletService.Verify(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
 
         [Test]
@@ -1618,7 +1618,7 @@ namespace BiatecOIDCTests
             SetupValidToken("valid-token", new Claim("sign", "true"));
             SetupSolanaNetwork();
             _mockWalletService
-                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
                 .ThrowsAsync(new SpendingLimitExceededException("global-daily", 100m, 300m, "USD"));
 
             var result = await Sign(SolanaSignRequest(), "solana");
@@ -1635,7 +1635,7 @@ namespace BiatecOIDCTests
             SetupValidToken("valid-token", new Claim("sign", "true"));
             SetupSolanaNetwork();
             _mockWalletService
-                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
                 .ThrowsAsync(new SolanaValuationException(new HttpRequestException("down")));
 
             var result = await Sign(SolanaSignRequest(), "solana");
@@ -1652,7 +1652,7 @@ namespace BiatecOIDCTests
             SetupValidToken("valid-token", new Claim("sign", "true"));
             SetupSolanaNetwork();
             _mockWalletService
-                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
                 .ThrowsAsync(new FormatException("Unable to parse Solana transfer data."));
 
             var result = await Sign(SolanaSignRequest(recipient: "not-a-key"), "solana");

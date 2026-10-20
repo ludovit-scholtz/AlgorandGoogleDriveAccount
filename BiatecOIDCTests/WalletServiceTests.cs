@@ -475,7 +475,7 @@ namespace BiatecOIDCTests
                 .Setup(d => d.SignSolanaTransactionAsync(TestEmail, transfer, TestProvider, It.IsAny<string?>(), ResolvedAddress, 0))
                 .ReturnsAsync(new byte[] { 7, 7 });
 
-            var result = await _service.SignSolanaTransferAsync(TestEmail, TestProvider, transfer, "access-token");
+            var result = await _service.SignSolanaTransferAsync(TestEmail, TestProvider, transfer, "SolSignerAddress", "access-token");
 
             Assert.That(result, Is.EqualTo(new byte[] { 7, 7 }));
             _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, "access-token", 300m, ResolvedAddress, 0, It.IsAny<CancellationToken>()), Times.Once);
@@ -495,7 +495,7 @@ namespace BiatecOIDCTests
                 .ThrowsAsync(new SpendingLimitExceededException("global-daily", 100m, 300m, "USD"));
 
             await Assert.ThrowsAsync<SpendingLimitExceededException>(
-                async () => await _service.SignSolanaTransferAsync(TestEmail, TestProvider, transfer, null));
+                async () => await _service.SignSolanaTransferAsync(TestEmail, TestProvider, transfer, "SolSignerAddress", null));
 
             _mockDriveService.Verify(d => d.SignSolanaTransactionAsync(It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
             _mockSpendingLimitService.Verify(s => s.RecordSpendAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<SpendingLedgerEntry>>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -507,7 +507,7 @@ namespace BiatecOIDCTests
             // "SolSignerAddress" is what the repository derives for the signer - a self-transfer moves nothing.
             var transfer = BuildSolanaTransfer(recipient: "SolSignerAddress");
 
-            await _service.SignSolanaTransferAsync(TestEmail, TestProvider, transfer, null);
+            await _service.SignSolanaTransferAsync(TestEmail, TestProvider, transfer, "SolSignerAddress", null);
 
             _mockSolanaValuationService.Verify(v => v.GetUsdValueAsync(It.IsAny<ulong>(), It.IsAny<CancellationToken>()), Times.Never);
             _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -522,7 +522,7 @@ namespace BiatecOIDCTests
                 .ThrowsAsync(new SolanaValuationException(new HttpRequestException("down")));
 
             await Assert.ThrowsAsync<SolanaValuationException>(
-                async () => await _service.SignSolanaTransferAsync(TestEmail, TestProvider, BuildSolanaTransfer(), null));
+                async () => await _service.SignSolanaTransferAsync(TestEmail, TestProvider, BuildSolanaTransfer(), "SolSignerAddress", null));
 
             _mockDriveService.Verify(d => d.SignSolanaTransactionAsync(It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
@@ -531,7 +531,19 @@ namespace BiatecOIDCTests
         public async Task SignSolanaTransferAsync_ZeroLamports_Throws()
         {
             await Assert.ThrowsAsync<ArgumentException>(
-                async () => await _service.SignSolanaTransferAsync(TestEmail, TestProvider, BuildSolanaTransfer(lamports: 0), null));
+                async () => await _service.SignSolanaTransferAsync(TestEmail, TestProvider, BuildSolanaTransfer(lamports: 0), "SolSignerAddress", null));
+        }
+
+        [Test]
+        public async Task SignSolanaTransferAsync_SenderIsNotTheSeedSlotsSolanaAddress_ThrowsAndNeverSignsOrPrices()
+        {
+            // e.g. the route carried slot N's Algorand/EVM address, which the activation registry also resolves to
+            // (seed, slot N) - the Solana key must not sign "as" an address that isn't its own.
+            await Assert.ThrowsAsync<FormatException>(
+                async () => await _service.SignSolanaTransferAsync(TestEmail, TestProvider, BuildSolanaTransfer(), "SomeAlgorandOrEvmAddress", null));
+
+            _mockSolanaValuationService.Verify(v => v.GetUsdValueAsync(It.IsAny<ulong>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockDriveService.Verify(d => d.SignSolanaTransactionAsync(It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
     }
 }

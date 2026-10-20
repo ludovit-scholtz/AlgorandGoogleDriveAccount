@@ -80,5 +80,35 @@ namespace BiatecOIDCTests
 
             await Assert.ThrowsAsync<SolanaValuationException>(async () => await _service.GetUsdValueAsync(1UL));
         }
+
+        [Test]
+        public async Task GetUsdValueAsync_NullSolanaEntry_ThrowsSolanaValuationExceptionNotNullReference()
+        {
+            Respond(HttpStatusCode.OK, "{\"solana\":null}");
+
+            await Assert.ThrowsAsync<SolanaValuationException>(async () => await _service.GetUsdValueAsync(1UL));
+        }
+
+        [Test]
+        public async Task GetUsdValueAsync_CallerCancellation_IsNotReportedAsAValuationOutage()
+        {
+            _handler.Protected()
+                .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .ThrowsAsync(new TaskCanceledException());
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            await Assert.ThrowsAsync<TaskCanceledException>(async () => await _service.GetUsdValueAsync(1UL, cts.Token));
+        }
+
+        [Test]
+        public async Task GetUsdValueAsync_RequestTimeout_IsReportedAsAValuationOutage()
+        {
+            _handler.Protected()
+                .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .ThrowsAsync(new TaskCanceledException("timeout"));
+
+            await Assert.ThrowsAsync<SolanaValuationException>(async () => await _service.GetUsdValueAsync(1UL));
+        }
     }
 }

@@ -458,8 +458,8 @@ namespace BiatecOIDC.Controllers
         /// Solana message: this endpoint builds the single System Program transfer itself (signer as sender and fee
         /// payer), so the amount spent is known by construction and no other instruction can ride along. Prices the
         /// transferred SOL in USD and checks it against the caller's daily/weekly/monthly spending limits before
-        /// signing (see <see cref="IWalletService.SignSolanaTransferAsync"/>). No sender/rekey checks - the sender
-        /// is always the resolved signer. Returns the fully-signed serialized transaction (base64).
+        /// signing (see <see cref="IWalletService.SignSolanaTransferAsync"/>). No rekey checks, and no sender field to
+        /// compare - instead the route's <paramref name="address"/> must equal the resolved seed/slot's own Solana address. Returns the fully-signed serialized transaction (base64).
         /// </summary>
         private async Task<IActionResult> SignSolanaTransferAsync(ClaimsPrincipal principal, string network, string address, List<byte[]> decodedTransactions)
         {
@@ -500,7 +500,7 @@ namespace BiatecOIDC.Controllers
             try
             {
                 var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _walletService.SignSolanaTransferAsync(email, provider, transfer, token, signer.Value.SeedAddress, signer.Value.Slot));
+                    token => _walletService.SignSolanaTransferAsync(email, provider, transfer, address, token, signer.Value.SeedAddress, signer.Value.Slot));
                 return Ok(new SignTransactionGroupResponse
                 {
                     SignedTransactions = new List<string> { Convert.ToBase64String(signed) }
