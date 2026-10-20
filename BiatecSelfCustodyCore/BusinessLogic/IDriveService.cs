@@ -9,6 +9,18 @@ namespace BiatecSelfCustodyCore.BusinessLogic
         Task<byte[]> SignTransactionAsync(string email, byte[] txMsgPack, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0);
 
         /// <summary>
+        /// Signs an unsigned Algorand transaction with this seed/slot's post-quantum Falcon-1024 account (native
+        /// <c>pqsig</c>, see <c>Transaction.SignPQ</c>) instead of its Ed25519 one - a different account with its
+        /// own address (see <see cref="Repository.ICloudAccountRepository.LoadFalconAccountAsync"/>). Multisig
+        /// envelopes are rejected (multisig subsignatures are Ed25519-only). If the transaction's sender is not the
+        /// Falcon address itself, <c>sgnr</c> (auth address) is set, i.e. the sender must be rekeyed to it.
+        /// Throws <see cref="FormatException"/> if the bytes are not an unsigned transaction.
+        /// </summary>
+        /// <param name="seedAddress">Selects which seed to sign with (<c>null</c> = the vault's current primary seed).</param>
+        /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
+        Task<byte[]> SignFalconTransactionAsync(string email, byte[] txMsgPack, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0);
+
+        /// <summary>
         /// Signs an unsigned EVM (Ethereum-family) transaction - <paramref name="transaction"/>'s fields
         /// are used to build the right <c>Nethereum.Model.ISignedTransaction</c> (legacy if
         /// <see cref="EvmUnsignedTransaction.GasPrice"/> is set, EIP-1559 if

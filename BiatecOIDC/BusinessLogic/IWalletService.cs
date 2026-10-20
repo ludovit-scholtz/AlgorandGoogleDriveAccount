@@ -39,12 +39,17 @@ namespace BiatecOIDC.BusinessLogic
         /// rather than signing a transaction nothing is actually wrong with. Defaults to <c>true</c> so
         /// existing callers keep today's behavior unless they opt out explicitly.
         /// </param>
+        /// <param name="keyType">
+        /// Which of the seed/slot's Algorand keys signs - an <see cref="AvmKeyTypes"/> value (<c>null</c> = Ed25519). Falcon signs
+        /// with a native post-quantum <c>pqsig</c> via <c>IDriveService.SignFalconTransactionAsync</c>; spending limits apply
+        /// identically (the per-address bucket is keyed by seed/slot, so it is shared by that slot's Ed25519 and Falcon accounts).
+        /// </param>
         /// <returns>The signed transactions, msgpack-encoded, in the same order as the input.</returns>
         /// <exception cref="AssetValuationException">A spent asset's USD value could not be determined (only possible when <paramref name="applySpendingLimits"/> is <c>true</c>).</exception>
         /// <exception cref="SpendingLimitExceededException">The group's total spend exceeds a configured global or address-specific daily/weekly/monthly limit (only possible when <paramref name="applySpendingLimits"/> is <c>true</c>).</exception>
         /// <exception cref="FormatException">A transaction could not be decoded.</exception>
         /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
-        Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? seedAddress = null, int slot = 0, bool applySpendingLimits = true);
+        Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? seedAddress = null, int slot = 0, bool applySpendingLimits = true, string? keyType = null);
 
         /// <summary>
         /// Signs one or more unsigned EVM (Ethereum-family) transactions via the shared self-custody

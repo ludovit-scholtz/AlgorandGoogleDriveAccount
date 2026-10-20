@@ -19,6 +19,14 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         public string Family { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Which of the seed/slot's keys signs for <see cref="Address"/> - an <see cref="AvmKeyTypes"/> value. Only meaningful for
+        /// the <c>"Avm"</c> family, where one seed/slot has two independent Algorand accounts: the classic Ed25519 one and a
+        /// post-quantum Falcon-1024 one (native <c>pqsig</c>). Empty (every entry written before Falcon support, and every
+        /// non-AVM entry) means <see cref="AvmKeyTypes.Ed25519"/>.
+        /// </summary>
+        public string KeyType { get; set; } = string.Empty;
+
         /// <summary>Which seed's key signs for <see cref="Address"/> - its own identifying (Algorand slot-0) address.</summary>
         public string SeedAddress { get; set; } = string.Empty;
 
@@ -51,6 +59,19 @@ namespace BiatecOIDC.BusinessLogic
                 }
             }
         }
+    }
+
+    /// <summary>The Algorand signature schemes an AVM address can be signed with - see <see cref="AddressActivationEntry.KeyType"/>.</summary>
+    public static class AvmKeyTypes
+    {
+        public const string Ed25519 = "Ed25519";
+        public const string Falcon = "Falcon";
+
+        /// <summary>Normalizes a stored/requested key type: empty/unknown → <see cref="Ed25519"/>, case-insensitive <c>"falcon"</c> → <see cref="Falcon"/>.</summary>
+        public static string Normalize(string? keyType) =>
+            string.Equals(keyType, Falcon, StringComparison.OrdinalIgnoreCase) ? Falcon : Ed25519;
+
+        public static bool IsFalcon(string? keyType) => Normalize(keyType) == Falcon;
     }
 
     /// <summary>The persisted document shape - one per user, stored as <c>AddressActivations.%AESID%.dat</c>.</summary>

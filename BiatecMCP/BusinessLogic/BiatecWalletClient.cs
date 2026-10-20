@@ -70,6 +70,7 @@ namespace BiatecMCP.BusinessLogic
                 BitcoinAddress = result.BitcoinAddress,
                 BitcoinCashAddress = result.BitcoinCashAddress,
                 SolanaAddress = result.SolanaAddress,
+                FalconAddress = result.FalconAddress,
                 SeedAddress = result.SeedAddress,
                 Slot = result.Slot
             };
@@ -82,10 +83,10 @@ namespace BiatecMCP.BusinessLogic
             return ToAddressInfoResponse(result);
         }
 
-        public async Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string seedAddress, int slot, string address, CancellationToken cancellationToken = default)
+        public async Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string seedAddress, int slot, string address, string? keyType = null, CancellationToken cancellationToken = default)
         {
             Authenticate(bearerToken);
-            var request = new Generated.ActivateAddressRequest { Address = address };
+            var request = new Generated.ActivateAddressRequest { Address = address, KeyType = keyType };
             var result = await CallAsync(() => _client.ActivateAsync(network, seedAddress, slot, request, cancellationToken));
             return ToAddressInfoResponse(result);
         }
@@ -102,6 +103,7 @@ namespace BiatecMCP.BusinessLogic
                     Family = a.Family,
                     SeedAddress = a.SeedAddress,
                     Slot = a.Slot,
+                    KeyType = a.KeyType ?? "Ed25519",
                     ActivatedUtc = a.ActivatedUtc
                 }).ToList() ?? new()
             };
@@ -114,7 +116,8 @@ namespace BiatecMCP.BusinessLogic
             Family = result.Family,
             IsActive = result.IsActive,
             SeedAddress = result.SeedAddress,
-            Slot = result.Slot
+            Slot = result.Slot,
+            KeyType = result.KeyType ?? "Ed25519"
         };
 
         private void Authenticate(string bearerToken)

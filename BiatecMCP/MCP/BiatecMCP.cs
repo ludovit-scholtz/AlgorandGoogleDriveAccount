@@ -147,15 +147,19 @@ namespace BiatecMCP.MCP
             public string Network { get; set; } = string.Empty;
             public string Family { get; set; } = string.Empty;
             public string Address { get; set; } = string.Empty;
+
+            /// <summary>AVM only - <c>"Ed25519"</c> or <c>"Falcon"</c>, which of the seed/slot's Algorand accounts <see cref="Address"/> is.</summary>
+            public string? KeyType { get; set; }
             public string Error { get; set; } = string.Empty;
         }
 
         [McpServerTool(Name = "getCryptoAddress"),
-         Description("Returns the signed-in Biatec account's address on the given blockchain network - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, Bitcoin Cash, and Solana are all supported, derived from the same seed. 'network' must be an exact code from listSupportedNetworks (e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'ethereum', 'arbitrum', 'base', 'bitcoin', 'bitcoin-cash', 'solana') - call it first if unsure. An Algorand-family address is the same across every AVM chain; an Ethereum-family address is the same across every EVM chain - 'network' only picks which family's address to derive.")]
+         Description("Returns the signed-in Biatec account's address on the given blockchain network - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, Bitcoin Cash, and Solana are all supported, derived from the same seed. 'network' must be an exact code from listSupportedNetworks (e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'ethereum', 'arbitrum', 'base', 'bitcoin', 'bitcoin-cash', 'solana') - call it first if unsure. An Algorand-family address is the same across every AVM chain; an Ethereum-family address is the same across every EVM chain - 'network' only picks which family's address to derive. On AVM networks, keyType='Falcon' returns the seed/slot's separate post-quantum Falcon-1024 Algorand address instead (pass it as 'address' to signTransaction to sign with Falcon, and the same keyType to create* tools to build from it).")]
         public async Task<GetCryptoAddressResponse> GetCryptoAddress(
             [Description("Which network to derive the address for. Call listSupportedNetworks to see valid values.")] string network,
             [Description("ARC-76 derivation slot. 0 = the default/first address, 1 = the 'second address', etc.")] int slot = 0,
-            [Description("A specific seed's identifying address (see listAlgorandAddresses) to derive from instead of the primary seed.")] string? seedAddress = null)
+            [Description("A specific seed's identifying address (see listAlgorandAddresses) to derive from instead of the primary seed.")] string? seedAddress = null,
+            [Description("Algorand signature scheme of the address to use: 'Ed25519' (default) or 'Falcon' (the seed/slot's separate post-quantum Falcon-1024 account - a different address, signed with a native pqsig). AVM networks only.")] string? keyType = null)
         {
             try
             {
@@ -167,13 +171,18 @@ namespace BiatecMCP.MCP
 
                 if (resolved.Family == ChainFamily.Avm)
                 {
-                    var address = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
+                    var address = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress, keyType: keyType);
                     if (string.IsNullOrWhiteSpace(address))
                     {
                         return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Error = NoAlgorandAddressMessage };
                     }
 
-                    return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Address = address };
+                    return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Address = address, KeyType = AvmKeyTypes.Normalize(keyType) };
+                }
+
+                if (!string.IsNullOrWhiteSpace(keyType) && AvmKeyTypes.IsFalcon(keyType))
+                {
+                    return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = resolved.Family.ToString(), Error = "keyType 'Falcon' is only available on Algorand-family (AVM) networks." };
                 }
 
                 if (resolved.Family is ChainFamily.Btc or ChainFamily.Bch)
@@ -211,6 +220,10 @@ namespace BiatecMCP.MCP
                 return new GetCryptoAddressResponse { Network = network, Error = ex.Message };
             }
             catch (WalletApiException ex)
+            {
+                return new GetCryptoAddressResponse { Network = network, Error = ex.Message };
+            }
+            catch (ArgumentException ex)
             {
                 return new GetCryptoAddressResponse { Network = network, Error = ex.Message };
             }
@@ -252,7 +265,8 @@ namespace BiatecMCP.MCP
             [Description("Which network to query. Call listSupportedNetworks to see valid values.")] string network,
             [Description("Address to check the balance of. Omit to check the signed-in account's own address on this network.")] string? address = null,
             [Description("A specific seed's identifying address to use when 'address' is omitted.")] string? seedAddress = null,
-            [Description("ARC-76 derivation slot to use when 'address' is omitted. Defaults to 0.")] int slot = 0)
+            [Description("ARC-76 derivation slot to use when 'address' is omitted. Defaults to 0.")] int slot = 0,
+            [Description("Algorand signature scheme of the address to use: 'Ed25519' (default) or 'Falcon' (the seed/slot's separate post-quantum Falcon-1024 account - a different address, signed with a native pqsig). AVM networks only.")] string? keyType = null)
         {
             try
             {
@@ -264,7 +278,7 @@ namespace BiatecMCP.MCP
 
                 if (resolved.Family == ChainFamily.Avm)
                 {
-                    var resolvedAddress = address ?? await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
+                    var resolvedAddress = address ?? await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress, keyType: keyType);
                     if (string.IsNullOrWhiteSpace(resolvedAddress))
                     {
                         return new GetCryptoBalanceResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Avm), Error = NoAlgorandAddressMessage };
@@ -437,11 +451,12 @@ namespace BiatecMCP.MCP
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
             [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? seedAddress = null,
-            [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
+            [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0,
+            [Description("Algorand signature scheme of the address to use: 'Ed25519' (default) or 'Falcon' (the seed/slot's separate post-quantum Falcon-1024 account - a different address, signed with a native pqsig). AVM networks only.")] string? keyType = null)
         {
             try
             {
-                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress, keyType: keyType);
                 if (string.IsNullOrWhiteSpace(senderAddress))
                 {
                     return new CreateTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
@@ -449,7 +464,7 @@ namespace BiatecMCP.MCP
 
                 var sender = new Address(senderAddress);
                 var receiver = string.IsNullOrWhiteSpace(receiverAccount) ? sender : new Address(receiverAccount);
-                var suggestedParams = await GetSuggestedParamsAsync(network);
+                var suggestedParams = await GetSuggestedParamsAsync(network, keyType);
 
                 var unsignedTransaction = assetId == 0
                     ? AlgorandTransactionBuilder.BuildPayment(sender, receiver, amount, note, suggestedParams)
@@ -673,7 +688,8 @@ namespace BiatecMCP.MCP
             [Description("Note to attach to the transaction. Empty attaches no note.")] string note = "",
             [Description("Which network to build against - e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to build the transaction from instead of the primary seed.")] string? seedAddress = null,
-            [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
+            [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0,
+            [Description("Algorand signature scheme of the address to use: 'Ed25519' (default) or 'Falcon' (the seed/slot's separate post-quantum Falcon-1024 account - a different address, signed with a native pqsig). AVM networks only.")] string? keyType = null)
         {
             if (assetId == 0)
             {
@@ -682,14 +698,14 @@ namespace BiatecMCP.MCP
 
             try
             {
-                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress, keyType: keyType);
                 if (string.IsNullOrWhiteSpace(senderAddress))
                 {
                     return new CreateTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
                 }
 
                 var sender = new Address(senderAddress);
-                var suggestedParams = await GetSuggestedParamsAsync(network);
+                var suggestedParams = await GetSuggestedParamsAsync(network, keyType);
                 var unsignedTransaction = AlgorandTransactionBuilder.BuildOptIn(sender, assetId, note, suggestedParams);
 
                 return new CreateTransactionResponse
@@ -734,18 +750,19 @@ namespace BiatecMCP.MCP
             [Description("Manager address. Defaults to the creator's own address.")] string? manager = null,
             [Description("Reserve address. Defaults to the creator's own address.")] string? reserve = null,
             [Description("Freeze address. Defaults to the creator's own address.")] string? freeze = null,
-            [Description("Clawback address. Defaults to the creator's own address.")] string? clawback = null)
+            [Description("Clawback address. Defaults to the creator's own address.")] string? clawback = null,
+            [Description("Algorand signature scheme of the address to use: 'Ed25519' (default) or 'Falcon' (the seed/slot's separate post-quantum Falcon-1024 account - a different address, signed with a native pqsig). AVM networks only.")] string? keyType = null)
         {
             try
             {
-                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress, keyType: keyType);
                 if (string.IsNullOrWhiteSpace(senderAddress))
                 {
                     return new CreateTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
                 }
 
                 var sender = new Address(senderAddress);
-                var suggestedParams = await GetSuggestedParamsAsync(network);
+                var suggestedParams = await GetSuggestedParamsAsync(network, keyType);
                 var unsignedTransaction = AlgorandTransactionBuilder.BuildAssetCreate(
                     sender, total, decimals, unitName, assetName, url, defaultFrozen, suggestedParams,
                     manager: string.IsNullOrWhiteSpace(manager) ? null : new Address(manager),
@@ -923,7 +940,8 @@ namespace BiatecMCP.MCP
             [Description("Optional memo forwarded to the destination chain, max 50 characters, letters/numbers/whitespace/./,/-/_//,@,*,+,$,% only.")] string? note = null,
             [Description("Which network to bridge from. Only 'algorand-mainnet' is supported today.")] string network = AlgorandMainnetCode,
             [Description("A specific seed's identifying address to bridge from instead of the primary seed.")] string? seedAddress = null,
-            [Description("ARC-76 derivation slot to bridge from. Defaults to 0.")] int slot = 0)
+            [Description("ARC-76 derivation slot to bridge from. Defaults to 0.")] int slot = 0,
+            [Description("Algorand signature scheme of the address to use: 'Ed25519' (default) or 'Falcon' (the seed/slot's separate post-quantum Falcon-1024 account - a different address, signed with a native pqsig). AVM networks only.")] string? keyType = null)
         {
             if (!string.Equals(AlgorandMainnetCode, network, StringComparison.OrdinalIgnoreCase) ||
                 !AramidSourceChainIdsByGenesisId.TryGetValue("mainnet-v1.0", out var sourceChainId))
@@ -933,7 +951,7 @@ namespace BiatecMCP.MCP
 
             try
             {
-                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
+                var senderAddress = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress, keyType: keyType);
                 if (string.IsNullOrWhiteSpace(senderAddress))
                 {
                     return new CreateBridgeTransactionResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
@@ -963,7 +981,7 @@ namespace BiatecMCP.MCP
                     return new CreateBridgeTransactionResponse { Error = $"Aramid does not currently offer a route from asset {assetId} on Algorand to token '{destinationToken}' on chain {destinationNetwork}.", ErrorType = "RouteNotFound" };
                 }
 
-                var suggestedParams = await GetSuggestedParamsAsync(network);
+                var suggestedParams = await GetSuggestedParamsAsync(network, keyType);
                 var feeAlternative = AramidBridgeCalculator.ResolveFeeAlternative(mapping.FeeAlternatives, suggestedParams.LastRound);
 
                 var feeAmount = AramidBridgeCalculator.ComputeFeeAmount(amount, feeAlternative);
@@ -1505,6 +1523,9 @@ namespace BiatecMCP.MCP
             public bool IsActive { get; set; }
             public string? SeedAddress { get; set; }
             public int Slot { get; set; }
+
+            /// <summary><c>"Ed25519"</c> or <c>"Falcon"</c> - which of the seed/slot's Algorand keys signs for <see cref="Address"/>.</summary>
+            public string KeyType { get; set; } = AvmKeyTypes.Ed25519;
             public string Error { get; set; } = string.Empty;
             public string ErrorType { get; set; } = string.Empty;
         }
@@ -1526,7 +1547,8 @@ namespace BiatecMCP.MCP
                     Family = info.Family,
                     IsActive = info.IsActive,
                     SeedAddress = info.SeedAddress,
-                    Slot = info.Slot
+                    Slot = info.Slot,
+                    KeyType = info.KeyType
                 };
             }
             catch (WalletApiException ex)
@@ -1549,6 +1571,7 @@ namespace BiatecMCP.MCP
             public string Network { get; set; } = string.Empty;
             public string Family { get; set; } = string.Empty;
             public bool IsActive { get; set; }
+            public string KeyType { get; set; } = AvmKeyTypes.Ed25519;
             public string Error { get; set; } = string.Empty;
             public string ErrorType { get; set; } = string.Empty;
         }
@@ -1559,7 +1582,8 @@ namespace BiatecMCP.MCP
             [Description("Which network 'address' belongs to. EVM networks are only accepted for a native address (EVM has no rekey concept).")] string network,
             [Description("Which seed's key signs for 'address' - its own identifying address (see listAlgorandAddresses).")] string seedAddress,
             [Description("ARC-76 derivation slot within that seed.")] int slot,
-            [Description("The address to activate.")] string address)
+            [Description("The address to activate.")] string address,
+            [Description("Which of the seed/slot's Algorand keys signs for 'address': 'Ed25519' (default) or 'Falcon' (post-quantum Falcon-1024). For an external address, 'Falcon' means it must already be rekeyed on-chain to the seed/slot's Falcon address (see getCryptoAddress with keyType='Falcon'). AVM networks only.")] string? keyType = null)
         {
             var authError = RequireSignClaim();
             if (authError != null)
@@ -1570,18 +1594,23 @@ namespace BiatecMCP.MCP
             try
             {
                 var bearerToken = GetBearerToken();
-                var info = await _walletClient.ActivateAddressAsync(bearerToken, network, seedAddress, slot, address);
+                var info = await _walletClient.ActivateAddressAsync(bearerToken, network, seedAddress, slot, address, string.IsNullOrWhiteSpace(keyType) ? null : AvmKeyTypes.Normalize(keyType));
                 return new ActivateCryptoAddressResponse
                 {
                     Address = info.Address,
                     Network = info.Network,
                     Family = info.Family,
-                    IsActive = info.IsActive
+                    IsActive = info.IsActive,
+                    KeyType = info.KeyType
                 };
             }
             catch (WalletApiException ex)
             {
                 return new ActivateCryptoAddressResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (ArgumentException ex)
+            {
+                return new ActivateCryptoAddressResponse { Error = ex.Message, ErrorType = "InvalidRequest" };
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -1858,13 +1887,23 @@ namespace BiatecMCP.MCP
             return $"Unknown network '{network}'. Supported network codes: {string.Join(", ", codes)}.";
         }
 
-        /// <summary>Fetches Algod's current suggested transaction parameters for <paramref name="network"/> - used by every <c>create*</c> tool.</summary>
-        private async Task<Algorand.Algod.Model.TransactionParametersResponse> GetSuggestedParamsAsync(string network)
+        /// <summary>
+        /// Fetches Algod's current suggested transaction parameters for <paramref name="network"/> - used by every <c>create*</c>
+        /// tool. For a Falcon (<paramref name="keyType"/>) sender, the minimum fee is scaled by
+        /// <see cref="AvmKeyTypes.FalconFeeContributionFactor"/>, since a pqsig-signed transaction contributes that multiple of it.
+        /// </summary>
+        private async Task<Algorand.Algod.Model.TransactionParametersResponse> GetSuggestedParamsAsync(string network, string? keyType = null)
         {
             var (apiAddress, apiToken, _) = await GetAlgodSettings(network);
             using var httpClient = HttpClientConfigurator.ConfigureHttpClient(apiAddress, apiToken);
             var algodApi = new DefaultApi(httpClient);
-            return await algodApi.TransactionParamsAsync();
+            var suggestedParams = await algodApi.TransactionParamsAsync();
+            if (AvmKeyTypes.IsFalcon(keyType))
+            {
+                suggestedParams.MinFee *= AvmKeyTypes.FalconFeeContributionFactor;
+            }
+
+            return suggestedParams;
         }
 
         /// <summary>
@@ -1891,10 +1930,12 @@ namespace BiatecMCP.MCP
         /// <see cref="ResolveDerivedAddressAsync"/>. Returns <c>null</c> (never throws) if no address is
         /// available at all.
         /// </summary>
-        private async Task<string?> ResolveAlgorandAddressAsync(string? bearerToken = null, int slot = 0, string? seedAddress = null)
+        /// <param name="keyType">An <see cref="AvmKeyTypes"/> value - <c>"Falcon"</c> returns the seed/slot's post-quantum Falcon address instead of the Ed25519 one.</param>
+        private async Task<string?> ResolveAlgorandAddressAsync(string? bearerToken = null, int slot = 0, string? seedAddress = null, string? keyType = null)
         {
+            var useFalcon = AvmKeyTypes.IsFalcon(keyType);
             var derived = await ResolveDerivedAddressAsync(bearerToken, slot, seedAddress);
-            return derived?.Address;
+            return useFalcon ? derived?.FalconAddress : derived?.Address;
         }
 
         /// <summary>

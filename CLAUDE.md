@@ -848,6 +848,28 @@ setup stage needs.
   a day). Only non-change outputs are priced (`BitcoinTransactionOutput.IsChange`) - money returning to the
   sender's own change address was never actually spent, so counting it would overstate every transfer's
   real cost against the limit.
+- **Post-quantum Falcon accounts (AVM)**: every seed/slot also has a Falcon-1024 Algorand account
+  (`ARC76Account.Algorand.ARC76.GetEmailFalconAccount`, available since ARC76Account 1.0.10 / Algorand5 5.0.3's
+  `FalconAccount`), a *different* AVM address from the Ed25519 one, signed with a native `pqsig`
+  (`Transaction.SignPQ`). Deliberately **not** a new chain family - it is an AVM *key type*:
+  `ICloudAccountRepository.LoadFalconAccountAsync`/`DeriveFalconAddressAsync` and
+  `IDriveService.SignFalconTransactionAsync` (rejects multisig envelopes - subsignatures are Ed25519-only; disposes
+  the `FalconAccount`, which zeroes its private key) sit beside the Ed25519 ones. `AddressActivationEntry.KeyType`
+  (`AvmKeyTypes.Ed25519`/`Falcon`, empty = Ed25519, so every pre-existing entry keeps working) records which key signs
+  for an activated AVM address; `WalletController.ResolveSignerAsync` returns it, and the sign endpoint routes to
+  Falcon purely from the resolved address - there is no caller-supplied "sign with Falcon" flag, so a caller can never
+  make the Falcon key sign for an Ed25519 address or vice versa. `GET /wallet/address/{seedAddress}/{slot?}` returns
+  and auto-activates `falconAddress` (always, even at slot 0); `POST .../activate` takes an optional `keyType` body
+  field for rekeying an external account to a Falcon key. Spending limits apply unchanged and the per-address bucket
+  (`"{seedAddress}:{slot}"`) is shared by a slot's Ed25519 and Falcon accounts. In `BiatecMCP`, `getCryptoAddress`,
+  `getCryptoBalance`, `createPaymentTransaction`/`createOptInTransaction`/`createAssetCreateTransaction`/
+  `createBridgeTransaction` and `activateCryptoAddress` take an optional `keyType` (`BiatecMCP/Model/AvmKeyTypes.cs`,
+  an independent copy of BiatecOIDC's constants - unknown values fail rather than falling back); for Falcon the
+  `create*` tools scale the suggested `MinFee` by `AvmKeyTypes.FalconFeeContributionFactor` (2, per
+  `PQSignature.Falcon1024FeeContributionFactor`). `signTransaction`/`submitTransactionToBlockchain` needed no change.
+  `createSwapTransaction` does not take `keyType` (the router builds its own fees). Never verified against a live
+  Falcon-enabled node in this repo's build environment - treat the fee factor and broadcast as needing manual E2E
+  verification before relying on them for real funds.
 - **Solana support**: a fifth chain family, `ChainFamily.Sol` (both apps' independent `INetworkResolver` copies),
   network code `solana` (Solana mainnet-beta) - **no other Solana code is accepted** (`solana-mainnet`,
   `solana-devnet`, `sol` all fail with `unknown_network`). Mainnet only on purpose: a Solana transaction doesn't

@@ -877,6 +877,74 @@ namespace BiatecOIDCTests
             _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), "SEED-ADDR", 5), Times.Once);
         }
 
+        [Test]
+        public async Task SignTransactionGroup_FalconActivatedAddress_ForwardsFalconKeyType()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            var falconAddress = new Account().Address;
+            _mockAccountRepository
+                .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new List<SeedSummary>());
+            _mockAddressActivationService
+                .Setup(s => s.TryResolveAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), falconAddress.EncodeAsString(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AddressActivationEntry { Address = falconAddress.EncodeAsString(), Family = "Avm", KeyType = AvmKeyTypes.Falcon, SeedAddress = "SEED-ADDR", Slot = 2 });
+            _mockWalletService
+                .Setup(w => w.SignTransactionGroupAsync(TestEmail, It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), "SEED-ADDR", 2, It.IsAny<bool>(), AvmKeyTypes.Falcon))
+                .ReturnsAsync(new List<byte[]> { new byte[] { 1 } });
+
+            var result = await Sign(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { BuildPaymentTransactionBase64(sender: falconAddress) }
+            }, address: falconAddress.EncodeAsString());
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(TestEmail, It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), "SEED-ADDR", 2, It.IsAny<bool>(), AvmKeyTypes.Falcon), Times.Once);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_FalconAddressWithMultisigEnvelope_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            const string falconAddress = "FALCON-ADDR";
+            _mockAccountRepository
+                .Setup(r => r.ListSeedsAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new List<SeedSummary>());
+            _mockAddressActivationService
+                .Setup(s => s.TryResolveAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), falconAddress, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AddressActivationEntry { Address = falconAddress, Family = "Avm", KeyType = AvmKeyTypes.Falcon, SeedAddress = "SEED-ADDR", Slot = 0 });
+
+            var participants = new List<byte[]> { new Account().KeyPair.PublicKey.GetEncoded(), new Account().KeyPair.PublicKey.GetEncoded() };
+            var msigAddress = new MultisigAddress(1, 1, participants);
+            var pay = new PaymentTransaction
+            {
+                Sender = msigAddress.ToAddress(),
+                Receiver = msigAddress.ToAddress(),
+                Amount = 0,
+                Fee = 1000,
+                FirstValid = 1,
+                LastValid = 1000,
+                GenesisId = "testnet-v1.0",
+                GenesisHash = TestGenesisHash
+            };
+            var envelope = new SignedTransaction
+            {
+                Tx = pay,
+                MSig = new MultisigSignature(1, 1) { Subsigs = participants.Select(p => new MultisigSubsig(p)).ToList() }
+            };
+
+            var result = await Sign(new SignTransactionGroupRequest
+            {
+                Transactions = new List<string> { Convert.ToBase64String(Encoder.EncodeToMsgPackOrdered(envelope)) }
+            }, address: falconAddress);
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            Assert.That((objectResult.Value as ProblemDetails)!.Detail, Does.Contain("Falcon"));
+            _mockWalletService.Verify(w => w.SignTransactionGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string?>()), Times.Never);
+        }
+
         // ───────────────────────── Spending limit endpoints ─────────────────────────
 
         [Test]
@@ -1197,9 +1265,34 @@ namespace BiatecOIDCTests
             // one ActivateAsync call each (audit finding M-04/R-029).
             _mockAddressActivationService.Verify(s => s.ActivateManyAsync(
                 TestEmail, It.IsAny<string>(), It.IsAny<string?>(),
-                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)>>(list =>
+                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot, string? KeyType)>>(list =>
                     list.Any(a => a.Address == "DERIVED-ADDR" && a.Family == "Avm" && a.SeedAddress == "ADDR1" && a.Slot == 2) &&
                     list.Any(a => a.Address == "0xDERIVED" && a.Family == "Evm" && a.SeedAddress == "ADDR1" && a.Slot == 2)),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task GetAddress_SlotZero_ReturnsAndActivatesFalconAddress()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("DERIVED-ADDR");
+            _mockAccountRepository
+                .Setup(r => r.DeriveFalconAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("FALCON-ADDR");
+
+            var result = await _controller.GetAddress("ADDR1", null);
+
+            var response = (result as OkObjectResult)!.Value as DerivedAddressResponse;
+            Assert.That(response!.FalconAddress, Is.EqualTo("FALCON-ADDR"));
+            // Even at slot 0 the Falcon address is never a seed's own identifying address - always activated, tagged Falcon.
+            _mockAddressActivationService.Verify(s => s.ActivateManyAsync(
+                TestEmail, It.IsAny<string>(), It.IsAny<string?>(),
+                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot, string? KeyType)>>(list =>
+                    list.Any(a => a.Address == "FALCON-ADDR" && a.Family == "Avm" && a.SeedAddress == "ADDR1" && a.Slot == 0 && a.KeyType == AvmKeyTypes.Falcon) &&
+                    !list.Any(a => a.Address == "DERIVED-ADDR")),
                 It.IsAny<CancellationToken>()), Times.Once);
         }
 
@@ -1224,8 +1317,8 @@ namespace BiatecOIDCTests
             // Both are asserted against the single ActivateManyAsync batch (audit finding M-04/R-029).
             _mockAddressActivationService.Verify(s => s.ActivateManyAsync(
                 TestEmail, It.IsAny<string>(), It.IsAny<string?>(),
-                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)>>(list =>
-                    !list.Any(a => a.Family == "Avm") &&
+                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot, string? KeyType)>>(list =>
+                    !list.Any(a => a.Family == "Avm" && a.KeyType == null) &&
                     list.Any(a => a.Address == "0xDERIVED" && a.Family == "Evm" && a.SeedAddress == "ADDR1" && a.Slot == 0)),
                 It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -1281,7 +1374,7 @@ namespace BiatecOIDCTests
                 .Setup(r => r.DeriveEvmAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
                 .ReturnsAsync("0xDERIVED");
             _mockAddressActivationService
-                .Setup(s => s.ActivateManyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)>>(), It.IsAny<CancellationToken>()))
+                .Setup(s => s.ActivateManyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot, string? KeyType)>>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new VaultConcurrencyConflictException("conflict"));
 
             var result = await _controller.GetAddress("ADDR1", null);
@@ -1381,6 +1474,51 @@ namespace BiatecOIDCTests
         // unit-tested here: the native (self-derived) trivial-success path, and the EVM-mismatch rejection.
 
         [Test]
+        public async Task ActivateAddress_FalconKeyType_DerivesFalconAddressAndActivatesAsFalcon()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockAccountRepository
+                .Setup(r => r.DeriveFalconAddressAsync(TestEmail, It.IsAny<string>(), "SEED-ADDR", 1, It.IsAny<string?>()))
+                .ReturnsAsync("FALCON-ADDR");
+
+            var result = await _controller.ActivateAddress(TestNetwork, "SEED-ADDR", 1, new ActivateAddressRequest { Address = "FALCON-ADDR", KeyType = "falcon" });
+
+            var response = (result as OkObjectResult)!.Value as AddressInfoResponse;
+            Assert.That(response!.KeyType, Is.EqualTo(AvmKeyTypes.Falcon));
+            _mockAccountRepository.Verify(r => r.DeriveAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<string?>()), Times.Never);
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "FALCON-ADDR", "Avm", "SEED-ADDR", 1, AvmKeyTypes.Falcon, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task ActivateAddress_FalconKeyTypeOnEvmNetwork_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver.Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+
+            var result = await _controller.ActivateAddress("ethereum", "SEED-ADDR", 0, new ActivateAddressRequest { Address = "0xABC", KeyType = "Falcon" });
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            Assert.That((objectResult.Value as ProblemDetails)!.Title, Is.EqualTo("unsupported_family"));
+        }
+
+        [Test]
+        public async Task ActivateAddress_UnknownKeyType_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+
+            var result = await _controller.ActivateAddress(TestNetwork, "SEED-ADDR", 0, new ActivateAddressRequest { Address = "X", KeyType = "dilithium" });
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            Assert.That((objectResult.Value as ProblemDetails)!.Title, Is.EqualTo("invalid_request"));
+        }
+
+        [Test]
         public async Task ActivateAddress_NativeDerivedAddress_ActivatesImmediatelyWithoutAnOnChainCheck()
         {
             SetBearerHeader("valid-token");
@@ -1395,7 +1533,7 @@ namespace BiatecOIDCTests
             Assert.That(okResult, Is.Not.Null);
             var response = okResult!.Value as AddressInfoResponse;
             Assert.That(response!.IsActive, Is.True);
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "DERIVED-ADDR", "Avm", "SEED-ADDR", 3, It.IsAny<CancellationToken>()), Times.Once);
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>(), "DERIVED-ADDR", "Avm", "SEED-ADDR", 3, null, It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
@@ -1412,7 +1550,7 @@ namespace BiatecOIDCTests
             var result = await _controller.ActivateAddress("ethereum", "SEED-ADDR", 0, new ActivateAddressRequest { Address = "0xSOMEOTHERADDRESS" });
 
             Assert.That(result, Is.InstanceOf<BadRequestObjectResult>());
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -1444,7 +1582,7 @@ namespace BiatecOIDCTests
             var objectResult = result as ObjectResult;
             Assert.That(objectResult, Is.Not.Null);
             Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -1718,7 +1856,7 @@ namespace BiatecOIDCTests
             Assert.That(response!.SolanaAddress, Is.EqualTo("SolDerived"));
             _mockAddressActivationService.Verify(s => s.ActivateManyAsync(
                 TestEmail, It.IsAny<string>(), It.IsAny<string?>(),
-                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)>>(list =>
+                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot, string? KeyType)>>(list =>
                     list.Any(a => a.Address == "SolDerived" && a.Family == "Sol" && a.SeedAddress == "ADDR1" && a.Slot == 0)),
                 It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -1734,7 +1872,7 @@ namespace BiatecOIDCTests
 
             var objectResult = result as ObjectResult;
             Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
-            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         // ───────────────────────── cross-family signer resolution ─────────────────────────

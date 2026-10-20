@@ -291,6 +291,7 @@
                 <div class="kicker">Algorand-family (AVM)</div>
                 <h2>Live, currently-supported AVM chains</h2>
                 <p>Sourced live from <a href="/chains"><code style="font-family:var(--font-mono);color:var(--accent-cyan);">GET /chains</code></a> — every chain in the public genesis registry with at least one currently-live, genesis-hash-matching public algod node.</p>
+                <p>Every seed/slot has two Algorand accounts: the classic Ed25519 one and a post-quantum <strong>Falcon-1024</strong> one (<code style="font-family:var(--font-mono);color:var(--accent-cyan);">falconAddress</code>, signed with a native <code style="font-family:var(--font-mono);color:var(--accent-cyan);">pqsig</code>). Both work wherever the chain supports the signature scheme; a Falcon address cannot cosign a multisig.</p>
             </div>
             <div class="table-wrap">
                 <table class="ref-table" id="avmTable">

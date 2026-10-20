@@ -146,9 +146,9 @@ namespace BiatecOIDCTests
             // them in a single batch rather than one round trip per family.
             var results = await _service.ActivateManyAsync(TestEmail, TestProvider, "token", new[]
             {
-                ("ADDR1", "Avm", "SEED1", 2),
-                ("0xEVM1", "Evm", "SEED1", 2),
-                ("bc1qbtc", "Btc", "SEED1", 2)
+                ("ADDR1", "Avm", "SEED1", 2, (string?)null),
+                ("0xEVM1", "Evm", "SEED1", 2, null),
+                ("bc1qbtc", "Btc", "SEED1", 2, null)
             });
 
             Assert.That(results, Has.Count.EqualTo(3));
@@ -158,9 +158,22 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task ActivateAsync_FalconKeyType_PersistsKeyTypeAndResolvesIt()
+        {
+            await _service.ActivateAsync(TestEmail, TestProvider, "token", "FALCON1", "Avm", "SEED1", 4, "falcon");
+            await _service.ActivateAsync(TestEmail, TestProvider, "token", "ED1", "Avm", "SEED1", 4);
+
+            var falcon = await _service.TryResolveAsync(TestEmail, TestProvider, "token", "FALCON1");
+            var ed = await _service.TryResolveAsync(TestEmail, TestProvider, "token", "ED1");
+            Assert.That(falcon!.KeyType, Is.EqualTo(AvmKeyTypes.Falcon));
+            Assert.That(ed!.KeyType, Is.Empty);
+            Assert.That(AvmKeyTypes.Normalize(ed.KeyType), Is.EqualTo(AvmKeyTypes.Ed25519));
+        }
+
+        [Test]
         public void ActivateManyAsync_EmptyList_ReturnsEmptyWithoutTouchingStorage()
         {
-            var result = _service.ActivateManyAsync(TestEmail, TestProvider, "token", Array.Empty<(string, string, string, int)>()).GetAwaiter().GetResult();
+            var result = _service.ActivateManyAsync(TestEmail, TestProvider, "token", Array.Empty<(string, string, string, int, string?)>()).GetAwaiter().GetResult();
 
             Assert.That(result, Is.Empty);
             Assert.That(_fakeProvider.Files, Is.Empty);

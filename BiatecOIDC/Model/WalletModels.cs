@@ -211,6 +211,13 @@ namespace BiatecOIDC.Model
         /// <summary>The derived Solana address (base58 ed25519 public key) for the same seed/slot.</summary>
         public string SolanaAddress { get; set; } = string.Empty;
 
+        /// <summary>
+        /// The derived post-quantum Falcon-1024 Algorand address for the same seed/slot - a different Algorand account from
+        /// <see cref="Address"/> (same seed material, <c>ARC76Account.Algorand.ARC76.GetEmailFalconAccount</c>), whose
+        /// transactions are signed with a native <c>pqsig</c>. Valid on every AVM network that supports Falcon signatures.
+        /// </summary>
+        public string FalconAddress { get; set; } = string.Empty;
+
         /// <summary>The seed's identifying (Algorand slot-0) address, echoed back.</summary>
         public string SeedAddress { get; set; } = string.Empty;
 
@@ -223,6 +230,13 @@ namespace BiatecOIDC.Model
     {
         /// <summary>The address to register as signed by <c>{seedAddress}</c>/<c>{slot}</c> (the route segments).</summary>
         public string Address { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Which of the seed/slot's Algorand keys signs for <see cref="Address"/> - <c>"Ed25519"</c> (default, also when omitted)
+        /// or <c>"Falcon"</c> (post-quantum Falcon-1024). AVM networks only. For an external address, <c>"Falcon"</c> means
+        /// it must be rekeyed on-chain to the seed/slot's Falcon address.
+        /// </summary>
+        public string? KeyType { get; set; }
     }
 
     /// <summary>
@@ -253,6 +267,13 @@ namespace BiatecOIDC.Model
 
         /// <summary>ARC-76 slot of <see cref="SeedAddress"/> - meaningless if <see cref="IsActive"/> is <c>false</c>.</summary>
         public int Slot { get; set; }
+
+        /// <summary>
+        /// Which signature scheme signs for <see cref="Address"/> - <c>"Ed25519"</c> or <c>"Falcon"</c> (post-quantum
+        /// Falcon-1024, native <c>pqsig</c>). Only AVM addresses can be <c>"Falcon"</c>; every other family reports <c>"Ed25519"</c>
+        /// as a neutral default.
+        /// </summary>
+        public string KeyType { get; set; } = "Ed25519";
     }
 
     /// <summary>One address in the caller's active-address mapping, as returned by <c>GET /wallet/active-addresses</c>.</summary>
@@ -269,6 +290,13 @@ namespace BiatecOIDC.Model
 
         /// <summary>ARC-76 derivation slot within that seed.</summary>
         public int Slot { get; set; }
+
+        /// <summary>
+        /// Which signature scheme signs for <see cref="Address"/> - <c>"Ed25519"</c> or <c>"Falcon"</c> (post-quantum
+        /// Falcon-1024, native <c>pqsig</c>). Only AVM addresses can be <c>"Falcon"</c>; every other family reports <c>"Ed25519"</c>
+        /// as a neutral default.
+        /// </summary>
+        public string KeyType { get; set; } = "Ed25519";
 
         /// <summary>
         /// When this pairing became active - a seed's own slot-0 AVM address (active implicitly, never

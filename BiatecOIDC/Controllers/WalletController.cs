@@ -240,6 +240,18 @@ namespace BiatecOIDC.Controllers
                 });
             }
 
+            // A Falcon (post-quantum) key signs with a native pqsig and can never be a multisig participant (multisig subsignatures
+            // are Ed25519-only), so a multisig envelope routed to a Falcon address is rejected before anything is loaded.
+            var isFalconSigner = AvmKeyTypes.IsFalcon(signer.Value.KeyType);
+            if (isFalconSigner && infos.Any(i => i != null && i.IsMultisig))
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Title = "invalid_request",
+                    Detail = $"'{address}' is a post-quantum Falcon address, which cannot cosign a multisig transaction (multisig subsignatures are Ed25519-only)."
+                });
+            }
+
             // The Biatec Router (asset valuation, and therefore the spending limit it feeds) is only
             // deployed on Algorand mainnet - see CLAUDE.md's "chains.html" capability matrix note. Applying
             // it on any other AVM network (testnet, Voi, Aramid, ...) would fail every transfer closed with
@@ -270,7 +282,7 @@ namespace BiatecOIDC.Controllers
             try
             {
                 var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, signer.Value.SeedAddress, signer.Value.Slot, isAlgorandMainnet));
+                    token => _walletService.SignTransactionGroupAsync(email, provider, decodedTransactions, token, signer.Value.SeedAddress, signer.Value.Slot, isAlgorandMainnet, isFalconSigner ? AvmKeyTypes.Falcon : null));
                 return Ok(new SignTransactionGroupResponse
                 {
                     SignedTransactions = signed.Select(Convert.ToBase64String).ToList(),
@@ -794,6 +806,10 @@ namespace BiatecOIDC.Controllers
                 var solanaAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.DeriveSolanaAddressAsync(email, provider, seedAddress, resolvedSlot, token));
 
+                // The post-quantum Falcon-1024 Algorand account for the same seed/slot - a different AVM address, signed with pqsig.
+                var falconAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.DeriveFalconAddressAsync(email, provider, seedAddress, resolvedSlot, token));
+
                 // A slot-0 AVM address is already its own seed's identifying address (recognized for free,
                 // without ever touching the activation registry - see ResolveSignerAsync) - only a non-zero
                 // slot needs an explicit entry. Every other family always needs one - unlike Algorand slot 0,
@@ -801,16 +817,18 @@ namespace BiatecOIDC.Controllers
                 // written in a single batch (ActivateManyAsync) rather than one round trip per family, both
                 // for efficiency and so a concurrent writer can only race the whole batch, not interleave
                 // with it (audit finding M-04/R-029).
-                var activations = new List<(string Address, string Family, string SeedAddress, int Slot)>();
+                var activations = new List<(string Address, string Family, string SeedAddress, int Slot, string? KeyType)>();
                 if (resolvedSlot != 0)
                 {
-                    activations.Add((address, nameof(ChainFamily.Avm), seedAddress, resolvedSlot));
+                    activations.Add((address, nameof(ChainFamily.Avm), seedAddress, resolvedSlot, null));
                 }
 
-                activations.Add((evmAddress, nameof(ChainFamily.Evm), seedAddress, resolvedSlot));
-                activations.Add((bitcoinAddress, nameof(ChainFamily.Btc), seedAddress, resolvedSlot));
-                activations.Add((bitcoinCashAddress, nameof(ChainFamily.Bch), seedAddress, resolvedSlot));
-                activations.Add((solanaAddress, nameof(ChainFamily.Sol), seedAddress, resolvedSlot));
+                // Unlike the Ed25519 one, a Falcon address is never a seed's identifying address - it always needs an entry.
+                activations.Add((falconAddress, nameof(ChainFamily.Avm), seedAddress, resolvedSlot, AvmKeyTypes.Falcon));
+                activations.Add((evmAddress, nameof(ChainFamily.Evm), seedAddress, resolvedSlot, null));
+                activations.Add((bitcoinAddress, nameof(ChainFamily.Btc), seedAddress, resolvedSlot, null));
+                activations.Add((bitcoinCashAddress, nameof(ChainFamily.Bch), seedAddress, resolvedSlot, null));
+                activations.Add((solanaAddress, nameof(ChainFamily.Sol), seedAddress, resolvedSlot, null));
 
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _addressActivationService.ActivateManyAsync(email, provider, token, activations));
@@ -822,6 +840,7 @@ namespace BiatecOIDC.Controllers
                     BitcoinAddress = bitcoinAddress,
                     BitcoinCashAddress = bitcoinCashAddress,
                     SolanaAddress = solanaAddress,
+                    FalconAddress = falconAddress,
                     SeedAddress = seedAddress,
                     Slot = resolvedSlot
                 });
@@ -888,6 +907,7 @@ namespace BiatecOIDC.Controllers
                         Family = a.Family,
                         SeedAddress = a.SeedAddress,
                         Slot = a.Slot,
+                        KeyType = AvmKeyTypes.Normalize(a.KeyType),
                         ActivatedUtc = a.ActivatedUtc
                     }))
                     .ToList();
@@ -942,7 +962,8 @@ namespace BiatecOIDC.Controllers
                     Family = resolvedNetwork.Family.ToString(),
                     IsActive = signer != null,
                     SeedAddress = signer?.SeedAddress,
-                    Slot = signer?.Slot ?? 0
+                    Slot = signer?.Slot ?? 0,
+                    KeyType = signer?.KeyType ?? AvmKeyTypes.Ed25519
                 });
             }
             catch (UnauthorizedAccessException ex)
@@ -1028,6 +1049,17 @@ namespace BiatecOIDC.Controllers
                 });
             }
 
+            var keyType = AvmKeyTypes.Normalize(request.KeyType);
+            if (!string.IsNullOrEmpty(request.KeyType) && !string.Equals(request.KeyType, AvmKeyTypes.Ed25519, StringComparison.OrdinalIgnoreCase) && keyType != AvmKeyTypes.Falcon)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = $"Unknown keyType '{request.KeyType}'. Use '{AvmKeyTypes.Ed25519}' or '{AvmKeyTypes.Falcon}'." });
+            }
+
+            if (keyType == AvmKeyTypes.Falcon && resolvedNetwork.Family != ChainFamily.Avm)
+            {
+                return BadRequest(new ProblemDetails { Title = "unsupported_family", Detail = "A Falcon (post-quantum) key type is only available on Algorand-family (AVM) networks." });
+            }
+
             var address = request.Address;
             var email = principal!.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
@@ -1036,7 +1068,12 @@ namespace BiatecOIDC.Controllers
             try
             {
                 string derivedAddress;
-                if (resolvedNetwork.Family == ChainFamily.Avm)
+                if (resolvedNetwork.Family == ChainFamily.Avm && keyType == AvmKeyTypes.Falcon)
+                {
+                    derivedAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                        token => _accountRepository.DeriveFalconAddressAsync(email, provider, seedAddress, slot, token));
+                }
+                else if (resolvedNetwork.Family == ChainFamily.Avm)
                 {
                     derivedAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                         token => _accountRepository.DeriveAddressAsync(email, provider, seedAddress, slot, token));
@@ -1080,7 +1117,7 @@ namespace BiatecOIDC.Controllers
                 }
 
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
-                    token => _addressActivationService.ActivateAsync(email, provider, token, address, resolvedNetwork.Family.ToString(), seedAddress, slot));
+                    token => _addressActivationService.ActivateAsync(email, provider, token, address, resolvedNetwork.Family.ToString(), seedAddress, slot, keyType == AvmKeyTypes.Falcon ? AvmKeyTypes.Falcon : null));
 
                 return Ok(new AddressInfoResponse
                 {
@@ -1089,7 +1126,8 @@ namespace BiatecOIDC.Controllers
                     Family = resolvedNetwork.Family.ToString(),
                     IsActive = true,
                     SeedAddress = seedAddress,
-                    Slot = slot
+                    Slot = slot,
+                    KeyType = keyType
                 });
             }
             catch (VaultConcurrencyConflictException ex)
@@ -1448,9 +1486,10 @@ namespace BiatecOIDC.Controllers
         /// seed's own Algorand primary address (checked first, for free, no activation-registry read needed),
         /// else whatever <see cref="IAddressActivationService"/> has on file (populated automatically by
         /// <see cref="GetAddress"/>, or explicitly by
-        /// <see cref="ActivateAddress"/>). Returns <c>null</c> if <paramref name="address"/> is neither.
+        /// <see cref="ActivateAddress"/>). Returns <c>null</c> if <paramref name="address"/> is neither. <c>KeyType</c> is an
+        /// <see cref="AvmKeyTypes"/> value - which of the seed/slot's AVM keys (Ed25519 or post-quantum Falcon) signs.
         /// </summary>
-        private async Task<(string SeedAddress, int Slot)?> ResolveSignerAsync(ClaimsPrincipal principal, string email, string provider, string? accessToken, string address, ChainFamily expectedFamily)
+        private async Task<(string SeedAddress, int Slot, string KeyType)?> ResolveSignerAsync(ClaimsPrincipal principal, string email, string provider, string? accessToken, string address, ChainFamily expectedFamily)
         {
             var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                 token => _accountRepository.ListSeedsAsync(email, provider, token));
@@ -1459,7 +1498,7 @@ namespace BiatecOIDC.Controllers
             {
                 // A seed's own identifying address is its Algorand slot-0 address - only valid on an AVM network. Resolving it
                 // for another family's route would make that family's key (same seed, slot 0) sign "as" an address that isn't its own.
-                return expectedFamily == ChainFamily.Avm ? (nativeSeed.SeedAddress, 0) : null;
+                return expectedFamily == ChainFamily.Avm ? (nativeSeed.SeedAddress, 0, AvmKeyTypes.Ed25519) : null;
             }
 
             var entry = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
@@ -1478,7 +1517,7 @@ namespace BiatecOIDC.Controllers
                 }
             }
 
-            return entry == null ? null : (entry.SeedAddress, entry.Slot);
+            return entry == null ? null : (entry.SeedAddress, entry.Slot, AvmKeyTypes.Normalize(entry.KeyType));
         }
 
         /// <summary>
