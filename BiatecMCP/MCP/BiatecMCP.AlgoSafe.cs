@@ -203,7 +203,7 @@ namespace BiatecMCP.MCP
             [Description("Amount in microAlgo sent to the safe's own account.")] ulong depositMicroAlgo = 2_000_000,
             [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
             [Description("The group's members (max 6). Omit for the simple 1-of-1 group with you as the only member.")] List<AlgoSafeMemberInput>? members = null,
-            [Description("How many members must approve a proposal. Ignored without 'members' (always 1).")] ulong threshold = 1,
+            [Description("How many members must approve a proposal. Must be 1 without 'members'.")] ulong threshold = 1,
             [Description("Optional cap, in microAlgo, on the ALGO the group can send per day (0 = unlimited; asset transfers are not counted by it). Recommended for a safe an AI agent can propose to: Biatec's own spending limits do NOT see transfers a safe makes from its own account.")] ulong dailyLimitMicroAlgo = 0,
             [Description("Optional cap, in microAlgo, on what the group can send per month (0 = unlimited).")] ulong monthlyLimitMicroAlgo = 0,
             [Description("A specific seed's identifying address to act as instead of the primary seed (must be the safe's creator).")] string? seedAddress = null,
@@ -216,12 +216,12 @@ namespace BiatecMCP.MCP
                     new AlgoSafeBootstrapPlan(
                         groupName,
                         members?.Select(m => (m.Address, m.Label)).ToList(),
-                        members is { Count: > 0 } ? threshold : 1,
+                        threshold,
                         DailyLimit: dailyLimitMicroAlgo,
                         MonthlyLimit: monthlyLimitMicroAlgo)),
                 dailyLimitMicroAlgo == 0 && monthlyLimitMicroAlgo == 0
-                    ? "This group has NO spending limit: anyone in it can move the safe's entire ALGO balance (within the group's approval threshold). Tell the user, and consider rebuilding with dailyLimitMicroAlgo/monthlyLimitMicroAlgo set."
-                    : string.Empty);
+                    ? "This group has NO spending limit: anyone in it can move the safe's entire balance (within the group's approval threshold). Tell the user, and consider rebuilding with dailyLimitMicroAlgo/monthlyLimitMicroAlgo set."
+                    : "The spending limits count ALGO only: asset (ASA) transfers from this group are not capped. Tell the user.");
 
         [McpServerTool(Name = "proposeAlgoSafeTransaction"),
          Description("Builds the unsigned group that proposes ALGO/ASA transfers sent from an AlgoSafe's own account. You must be a member of the signer group. The proposal becomes executable once the group's threshold of members approved it (approveAlgoSafeProposal). With executeNow=true on a 1-of-N group the transfers are executed in the same group, no further step. Does NOT sign or broadcast. NOTE: transfers executed from a safe are made by the safe itself, so Biatec's wallet spending limits do not apply to them - the safe's own thresholds and group limits are the control. Next: approveAlgoSafeProposal (other members) then executeAlgoSafeProposal; get the ProposalId from listAlgoSafeProposals after broadcasting.")]
@@ -277,13 +277,13 @@ namespace BiatecMCP.MCP
         {
             try
             {
+                using var chain = await CreateAlgoSafeChainAsync(network); // validate the network code before any wallet round trip
                 var senderText = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                 if (string.IsNullOrWhiteSpace(senderText))
                 {
                     return new AlgoSafeStepResponse { Error = NoAlgorandAddressMessage, ErrorType = "NoAlgorandAddress" };
                 }
 
-                using var chain = await CreateAlgoSafeChainAsync(network);
                 var step = await build(new AlgoSafeTransactionBuilder(chain, new AlgoSafeReader(chain)), new Address(senderText));
                 return new AlgoSafeStepResponse
                 {

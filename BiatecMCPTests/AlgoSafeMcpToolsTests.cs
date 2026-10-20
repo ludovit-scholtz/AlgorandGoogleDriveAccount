@@ -160,7 +160,7 @@ namespace BiatecMCPTests
         public void SupportedContractVersions_PinTheKnownReleases()
         {
             Assert.That(AlgoSafeConstants.SupportedContractVersions[AlgoSafeConstants.LatestApprovalSha256Hex], Is.EqualTo("v3.4.0"));
-            Assert.That(AlgoSafeConstants.SupportedContractVersions, Has.Count.EqualTo(3));
+            Assert.That(AlgoSafeConstants.SupportedContractVersions, Has.Count.EqualTo(1));
         }
     }
 }

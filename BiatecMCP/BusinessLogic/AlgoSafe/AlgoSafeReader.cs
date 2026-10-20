@@ -449,7 +449,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             ApprovalsCount = proposal.ApprovalsCount,
             Threshold = proposal.Threshold,
             ExpiryRound = proposal.ExpiryRound,
-            Expired = currentRound > proposal.ExpiryRound,
+            Expired = currentRound + 1 > proposal.ExpiryRound, // a transaction built now confirms in a later round
             Proposer = proposal.Proposer.EncodeAsString(),
             PayloadVersion = proposal.PayloadVersion,
             TotalTransactions = proposal.TotalTxns

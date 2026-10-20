@@ -85,14 +85,12 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// <summary>
         /// Approval-program hashes that share the current ("modern") ABI call surface (tagged-envelope payloads,
         /// <c>approveProposal(proposalId, expectedPayloadVersion, ensureBudgetValue)</c>, box keys <c>proposalId*7+slot</c>) - the
-        /// <c>MODERN_ABI_CONTRACT_HASHES</c> of the algo-safe package, narrowed to v3.2.0+ because the box structs (signer group, member, proposal) are decoded with the v3.4.0 client and were only verified unchanged from v3.2.0 on. Older deployed hashes use a different, incompatible ABI and are
+        /// <c>MODERN_ABI_CONTRACT_HASHES</c> of the algo-safe package, narrowed to v3.4.0 - the version whose generated client, selectors, group-seed layout and limits (e.g. the proposal lifetime cap) this server builds against; older safes are refused rather than risk a call the older contract reads differently. Older deployed hashes use a different, incompatible ABI and are
         /// refused rather than guessed at; extend this table only when a new version ships WITHOUT breaking that surface.
         /// </summary>
         public static readonly IReadOnlyDictionary<string, string> SupportedContractVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [LatestApprovalSha256Hex] = "v3.4.0",
-            ["b096f50b39dff57a9df61e36a9a74a35e9f892854495f4c5efc42e5d8822bf35"] = "v3.3.0",
-            ["3f8d0cb07960bf2c8af42fb41b7d7fc2673dd831d987e80ee0e0c43fcefaa0ec"] = "v3.2.0"
         };
 
         public static string StatusName(ulong status) => status switch
@@ -121,6 +119,18 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             var names = new List<string>();
             if ((adminPrivileges & PrivGroup) != 0) names.Add("manage-groups");
             if ((adminPrivileges & PrivPolicy) != 0) names.Add("manage-policy");
+
+            // Bits this server has no name for are still shown, so a granted right is never hidden.
+            var known = PrivGroup | PrivPolicy;
+            for (var bit = 0; bit < 64; bit++)
+            {
+                var value = 1UL << bit;
+                if ((adminPrivileges & value) != 0 && (known & value) == 0)
+                {
+                    names.Add($"privilege-bit-{bit}");
+                }
+            }
+
             return names;
         }
     }
