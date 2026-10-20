@@ -254,9 +254,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 // Executing is one app call that must reference every receiver and asset (alongside the safe's own boxes), and a call can carry
                 // only 8 references: a proposal touching many distinct ones may be approvable yet impossible to execute.
                 var distinctReferences = transfers.Select(t => t.Receiver.Trim()).Distinct().Count() + transfers.Where(t => t.AssetId != 0).Select(t => t.AssetId).Distinct().Count();
-                proposed.Warning = distinctReferences > MaxComfortableReferences
+                var referenceWarning = distinctReferences > MaxComfortableReferences
                     ? $"This proposal touches {distinctReferences} distinct receivers/assets; a single execution call can reference only a few, so it may be impossible to execute. Prefer proposals with at most {MaxComfortableReferences} distinct receivers and assets combined."
                     : string.Empty;
+                proposed.Warning = string.Join(" ", new[] { referenceWarning, NoLimitWarning(group, transfers.Select(t => t.AssetId)) }.Where(w => w.Length > 0));
                 return proposed;
             }
 
@@ -304,15 +305,15 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("AlreadyApproved", $"{sender.EncodeAsString()} has already approved proposal {proposalId}.");
             }
 
-            if (view.CallerCanApprove != true)
-            {
-                throw new AlgoSafeException("NotApprovable", $"Proposal {proposalId} can't be approved: the group's membership changed since it was created (cancel it and propose again).");
-            }
-
             var approvalGroup = await _reader.ReadGroupAsync(appId, summary.GroupId, cancellationToken);
             if (approvalGroup == null || approvalGroup.Active == 0)
             {
                 throw new AlgoSafeException("GroupDisabled", $"Signer group {summary.GroupId} is disabled, so proposal {proposalId} can no longer be approved.");
+            }
+
+            if (view.CallerCanApprove != true)
+            {
+                throw new AlgoSafeException("NotApprovable", $"Proposal {proposalId} can't be approved: the group's membership changed since it was created (cancel it and propose again).");
             }
 
             var parameters = await _chain.GetTransactionParamsAsync(cancellationToken);
@@ -331,7 +332,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         public async Task<AlgoSafeBuiltStep> BuildExecuteAsync(Address sender, ulong appId, ulong proposalId, CancellationToken cancellationToken = default)
         {
-            var view = await _reader.GetProposalAsync(appId, proposalId, sender, includeApprovers: false, cancellationToken: cancellationToken);
+            var view = await _reader.GetProposalAsync(appId, proposalId, null, includeApprovers: false, cancellationToken: cancellationToken);
             var summary = view.Summary;
             if (summary.Type != "TransactionGroup")
             {
