@@ -141,7 +141,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             return (results, truncated);
         }
 
-        public async Task<AlgoSafeProposalView> GetProposalAsync(ulong appId, ulong proposalId, Address? caller, CancellationToken cancellationToken = default)
+        public async Task<AlgoSafeProposalView> GetProposalAsync(ulong appId, ulong proposalId, Address? caller, bool includeApprovers = true, CancellationToken cancellationToken = default)
         {
             var app = await RequireSupportedAsync(appId, cancellationToken);
             var proposal = await ReadProposalAsync(appId, proposalId, cancellationToken)
@@ -155,6 +155,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             var approversComplete = true;
             try
             {
+                if (!includeApprovers)
+                {
+                    throw new AlgoSafeException("TooManyBoxes", "not listed");
+                }
+
                 approvers = (await _chain.ListBoxNamesAsync(appId, cancellationToken))
                     .Select(n => AlgoSafeBoxNames.TryParseApproval(n, out var pid, out var account) && pid == proposalId ? account.EncodeAsString() : null)
                     .Where(a => a != null)

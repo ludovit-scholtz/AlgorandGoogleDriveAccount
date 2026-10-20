@@ -248,6 +248,7 @@ namespace BiatecMCPTests
         public void Clean_AlsoStripsBidiOverridesAndLineSeparators()
         {
             Assert.That(AlgoSafeText.Clean("a" + (char)0x202E + "b" + (char)0x2028 + "c" + (char)0x200B + "d"), Is.EqualTo("a b c d"));
+            Assert.That(AlgoSafeText.Clean("x" + char.ConvertFromUtf32(0xE0041) + "y"), Is.EqualTo("x y"), "invisible tag characters are surrogate pairs");
         }
 
         /// <summary>The pinned hashes must match the programs the generated client really deploys - otherwise a package bump would make createAlgoSafe deploy a contract every other tool then refuses.</summary>

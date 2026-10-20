@@ -114,8 +114,15 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             List<Transaction> transactions;
             string summary;
-            var hasLimits = plan.DailyLimit != 0 || plan.MonthlyLimit != 0 || plan.CooldownRounds != 0;
-            if ((plan.Members == null || plan.Members.Count == 0) && !hasLimits)
+            if (plan.GroupName.Trim().Length > MaxNameChars || System.Text.Encoding.UTF8.GetByteCount(plan.GroupName.Trim()) > MaxNameChars)
+            {
+                throw new AlgoSafeException("InvalidRequest", $"The group name can be at most {MaxNameChars} bytes.");
+            }
+
+            // The contract's plain bootstrap always makes a 1-of-1 all-rights group; anything else (limits, narrower rights) needs bootstrapGroup.
+            var needsCustomGroup = plan.DailyLimit != 0 || plan.MonthlyLimit != 0 || plan.CooldownRounds != 0
+                || plan.AllowedActions != AlgoSafeConstants.ActAll || plan.LimitAssetId != 0;
+            if ((plan.Members == null || plan.Members.Count == 0) && !needsCustomGroup)
             {
                 transactions = await proxy.Bootstrap_Transactions(plan.GroupName.Trim(), AsAccount(sender), null, string.Empty, 1000, _tx_transactions: preTransactions);
                 summary = $"Fund the safe with {FormatAlgo(depositMicroAlgo)} ALGO and bootstrap group '{plan.GroupName.Trim()}' (1-of-1, all rights, you as the only member).";
@@ -227,7 +234,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         public async Task<AlgoSafeBuiltStep> BuildApproveAsync(Address sender, ulong appId, ulong proposalId, CancellationToken cancellationToken = default)
         {
-            var view = await _reader.GetProposalAsync(appId, proposalId, sender, cancellationToken);
+            var view = await _reader.GetProposalAsync(appId, proposalId, sender, includeApprovers: false, cancellationToken: cancellationToken);
             var summary = view.Summary;
             EnsureFullyReviewable(view, proposalId);
 
@@ -267,7 +274,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         public async Task<AlgoSafeBuiltStep> BuildExecuteAsync(Address sender, ulong appId, ulong proposalId, CancellationToken cancellationToken = default)
         {
-            var view = await _reader.GetProposalAsync(appId, proposalId, sender, cancellationToken);
+            var view = await _reader.GetProposalAsync(appId, proposalId, sender, includeApprovers: false, cancellationToken: cancellationToken);
             var summary = view.Summary;
             if (summary.Type != "TransactionGroup")
             {
@@ -353,10 +360,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         private async Task VerifyValidatorAsync(ulong validatorAppId, CancellationToken cancellationToken)
         {
-            var app = await _chain.GetApplicationAsync(validatorAppId, cancellationToken)
-                ?? throw new AlgoSafeException("ValidatorNotFound", $"Validator application {validatorAppId} does not exist on this network.");
-            var program = app.Params?.ApprovalProgram?.Bytes;
-            var hash = program == null ? string.Empty : Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(program));
+            var (_, hash, _) = await _reader.InspectAsync(validatorAppId, cancellationToken);
             if (!string.Equals(hash, AlgoSafeConstants.ValidatorApprovalSha256Hex, StringComparison.OrdinalIgnoreCase))
             {
                 throw new AlgoSafeException(
@@ -434,9 +438,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 parsed.Add((address, 1, label ?? string.Empty));
             }
 
-            if (plan.GroupName.Trim().Length > MaxNameChars || parsed.Any(m => m.Label.Length > MaxNameChars))
+            if (parsed.Any(m => System.Text.Encoding.UTF8.GetByteCount(m.Label) > MaxNameChars))
             {
-                throw new AlgoSafeException("InvalidRequest", $"The group name and every member label can be at most {MaxNameChars} characters.");
+                throw new AlgoSafeException("InvalidRequest", $"Every member label can be at most {MaxNameChars} bytes.");
             }
 
             // The bootstrap group must be able to govern: finalizeBootstrap requires an active group with the group-management privilege.

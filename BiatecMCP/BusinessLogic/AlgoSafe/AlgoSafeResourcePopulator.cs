@@ -212,7 +212,8 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             void AddAccount(Address address)
             {
-                if (!address.Equals(tx.Sender) && !accounts.Contains(address))
+                // The sender and the called application's own account are always available without a reference.
+                if (!address.Equals(tx.Sender) && !address.Equals(Address.ForApplication(calledApp)) && !accounts.Contains(address))
                 {
                     accounts.Add(address);
                     changed = true;

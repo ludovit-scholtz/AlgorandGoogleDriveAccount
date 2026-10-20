@@ -9,10 +9,13 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
     {
         private const int MaxLength = 120;
 
-        private static bool IsInvisible(char c) =>
-            char.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.Format
+        private static bool IsInvisible(System.Text.Rune r) =>
+            System.Text.Rune.GetUnicodeCategory(r) is System.Globalization.UnicodeCategory.Control
+                or System.Globalization.UnicodeCategory.Format
                 or System.Globalization.UnicodeCategory.LineSeparator
-                or System.Globalization.UnicodeCategory.ParagraphSeparator;
+                or System.Globalization.UnicodeCategory.ParagraphSeparator
+                or System.Globalization.UnicodeCategory.PrivateUse
+                or System.Globalization.UnicodeCategory.OtherNotAssigned;
 
         public static string Clean(string? text)
         {
@@ -22,8 +25,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             }
 
             // Control characters, line/paragraph separators and invisible format characters (bidi overrides, zero-width) can fake layout or reorder text.
-            var cleaned = new string(text.Select(c => char.IsControl(c) || IsInvisible(c) ? ' ' : c).ToArray()).Trim();
-            return cleaned.Length <= MaxLength ? cleaned : cleaned[..MaxLength] + "…";
+            // Per code point (not per UTF-16 char): the invisible "tag" characters (U+E0000..) are surrogate pairs.
+            var runes = text.EnumerateRunes().Select(r => IsInvisible(r) ? new System.Text.Rune(' ') : r).ToList();
+            var cleaned = string.Concat(runes.Take(MaxLength).Select(r => r.ToString())).Trim();
+            return runes.Count <= MaxLength ? cleaned : cleaned + "…";
         }
     }
 }

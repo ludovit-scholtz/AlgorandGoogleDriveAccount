@@ -59,7 +59,17 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         public async Task<IReadOnlyList<byte[]>> ListBoxNamesAsync(ulong appId, CancellationToken cancellationToken = default)
         {
-            var response = await Algod.GetApplicationBoxesAsync(cancellationToken, appId, BoxListingCap);
+            BoxesResponse response;
+            try
+            {
+                response = await Algod.GetApplicationBoxesAsync(cancellationToken, appId, BoxListingCap);
+            }
+            catch (ApiException ex) when (ex.StatusCode == 400)
+            {
+                // algod answers 400 (rather than a truncated list) when more boxes exist than the requested maximum.
+                throw new AlgoSafeException("TooManyBoxes", $"Application {appId} has more than {BoxListingCap} boxes - too many to enumerate safely.");
+            }
+
             var names = response.Boxes?.Select(b => b.Name).ToList() ?? new List<byte[]>();
             if ((ulong)names.Count >= BoxListingCap)
             {
