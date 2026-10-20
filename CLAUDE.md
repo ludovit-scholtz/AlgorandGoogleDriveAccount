@@ -297,9 +297,7 @@ for the required GitHub secrets (shared by both workflows) and
 and short-lived. There is no automated test job in CI, so run tests locally before pushing.
 
 Root `.editorconfig` + `Directory.Build.props` (auto-imported by all 5 `.csproj`s) enable the built-in Roslyn
-analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. `Directory.Build.props` also carries a repo-wide
-security override pinning `MessagePack` (Algorand5 transitively resolves a vulnerable 3.1.8) - both Dockerfiles copy it
-before `dotnet restore` for that reason; don't lower it to what Algorand5 resolves. `AlgorandSdkVersionTests` (both test projects) guards that
+analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. `AlgorandSdkVersionTests` (both test projects) guards that
 the built `Algorand.dll` is Algorand5: the retired Algorand4 package ships an assembly with the same name, so a dependency
 that still pulls it in transitively would silently win (that was the case until `ARC76Account.*` 1.0.10). Run `dotnet format Biatec.slnx` to
 fix flagged style/unused-using issues, and `dotnet format Biatec.slnx --verify-no-changes` before committing —

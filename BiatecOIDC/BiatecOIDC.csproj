@@ -21,6 +21,9 @@
     <PackageReference Include="Google.Apis.Auth.AspNetCore3" Version="1.77.0" />
     <!-- MessagePack is used directly by AlgorandTransactionInspector (generic msgpack map decode); its version comes from the
          repo-wide security override in Directory.Build.props, not a PackageReference here. -->
+    <!-- Used directly by AlgorandTransactionInspector (generic msgpack map decode); otherwise only a transitive dependency of
+         Algorand5. Keep >= 3.1.12 (3.1.8 carries advisory GHSA-qhrr-8q5h-9q3h). -->
+    <PackageReference Include="MessagePack" Version="3.1.12" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.13" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.3.1" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.23.0" />

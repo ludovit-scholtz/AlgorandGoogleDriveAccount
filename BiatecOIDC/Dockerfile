@@ -12,7 +12,7 @@ EXPOSE 8081
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
-# Needed before restore: carries the repo-wide MessagePack security override (see Directory.Build.props).
+# Copied before restore so it sees the same repo-wide build properties (Directory.Build.props) as the later build/publish.
 COPY ["Directory.Build.props", "./"]
 COPY ["BiatecOIDC/BiatecOIDC.csproj", "BiatecOIDC/"]
 COPY ["BiatecSelfCustodyCore/BiatecSelfCustodyCore.csproj", "BiatecSelfCustodyCore/"]
