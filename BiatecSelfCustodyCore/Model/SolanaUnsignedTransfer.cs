@@ -14,6 +14,20 @@ namespace BiatecSelfCustodyCore.Model
     /// </summary>
     public sealed class SolanaUnsignedTransfer
     {
+        /// <summary>
+        /// Solana's base fee for the one-signature legacy transaction <c>DriveService.SignSolanaTransactionAsync</c> builds (no
+        /// priority-fee instruction): 5,000 lamports. Defined next to the message shape it is derived from; the spending limit
+        /// counts it (<c>WalletService</c>), so a change to what <c>DriveService</c> builds must change this too.
+        /// </summary>
+        public const ulong BaseFeeLamports = 5000;
+
+        /// <summary>
+        /// Largest accepted <see cref="Lamports"/> (<see cref="long.MaxValue"/>, ~9.2 billion SOL - far above Solana's total
+        /// supply). Bounding it keeps <c>Lamports + BaseFeeLamports</c> and the USD conversion from ever overflowing, which
+        /// would otherwise wrap a huge amount to a tiny priced spend and slip past the spending limit.
+        /// </summary>
+        public const ulong MaxLamports = long.MaxValue;
+
         /// <summary>Recipient's base58 public key (the Solana address).</summary>
         [JsonPropertyName("Recipient")]
         public string Recipient { get; set; } = string.Empty;
@@ -42,6 +56,11 @@ namespace BiatecSelfCustodyCore.Model
             if (Lamports == 0)
             {
                 throw new FormatException("Lamports must be greater than 0.");
+            }
+
+            if (Lamports > MaxLamports)
+            {
+                throw new FormatException($"Lamports must not exceed {MaxLamports}.");
             }
 
             try

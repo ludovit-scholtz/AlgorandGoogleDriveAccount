@@ -445,6 +445,14 @@ namespace BiatecOIDC.Controllers
             {
                 return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "asset_valuation_failed", Detail = ex.Message });
             }
+            catch (UnsupportedCurrencyException ex)
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "spending_limit_currency_unavailable", Detail = ex.Message });
+            }
+            catch (VaultConcurrencyConflictException ex)
+            {
+                return StatusCode(StatusCodes.Status409Conflict, new ProblemDetails { Title = "vault_concurrency_conflict", Detail = ex.Message });
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unexpected error signing a {Family} transaction for {Email}.", family, email);
@@ -523,6 +531,14 @@ namespace BiatecOIDC.Controllers
             catch (SolanaValuationException ex)
             {
                 return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "asset_valuation_failed", Detail = ex.Message });
+            }
+            catch (UnsupportedCurrencyException ex)
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "spending_limit_currency_unavailable", Detail = ex.Message });
+            }
+            catch (VaultConcurrencyConflictException ex)
+            {
+                return StatusCode(StatusCodes.Status409Conflict, new ProblemDetails { Title = "vault_concurrency_conflict", Detail = ex.Message });
             }
             catch (Exception ex)
             {
@@ -1451,10 +1467,15 @@ namespace BiatecOIDC.Controllers
 
             // The registry maps an address of ANY family to a (seed, slot): require the entry to belong to the route's family, so
             // e.g. a Solana (or Bitcoin) address of slot N can't be used to make the EVM key of slot N sign. An entry with no
-            // recorded family can't have been written by current code; it is tolerated rather than locking such a user out.
-            if (entry != null && !string.IsNullOrEmpty(entry.Family) && !string.Equals(entry.Family, expectedFamily.ToString(), StringComparison.OrdinalIgnoreCase))
+            // recorded family can't have been written by current code; if one ever exists it can only predate every other family,
+            // so it is treated as AVM (the original and only family) - failing closed for any other route.
+            if (entry != null)
             {
-                return null;
+                var entryFamily = string.IsNullOrEmpty(entry.Family) ? nameof(ChainFamily.Avm) : entry.Family;
+                if (!string.Equals(entryFamily, expectedFamily.ToString(), StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
             }
 
             return entry == null ? null : (entry.SeedAddress, entry.Slot);

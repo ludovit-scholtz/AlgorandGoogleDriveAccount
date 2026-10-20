@@ -182,6 +182,70 @@ namespace BiatecMCPTests
             return signed;
         }
 
+        [TestCase("processed")]
+        [TestCase("")]
+        public async Task SendTransactionAsync_AlreadyProcessedButNotYetConfirmed_StaysOutcomeUnknownNeverSuccess(string commitment)
+        {
+            // "processed" can still be on a minority fork that is later dropped - not something to call a success.
+            var status = commitment == ""
+                ? "{\"slot\":8,\"err\":null}"
+                : "{\"slot\":8,\"err\":null,\"confirmationStatus\":\"" + commitment + "\"}";
+            var handler = Routed(("sendTransaction", AlreadyProcessedError),
+                ("getSignatureStatuses", "{\"jsonrpc\":\"2.0\",\"result\":{\"context\":{\"slot\":9},\"value\":[" + status + "]},\"id\":1}"));
+
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
+
+            Assert.That(result.Signature, Is.Null);
+            Assert.That(result.OutcomeUnknown, Is.True);
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_AlreadyProcessedAndConfirmed_IsSuccess()
+        {
+            var handler = Routed(("sendTransaction", AlreadyProcessedError),
+                ("getSignatureStatuses", "{\"jsonrpc\":\"2.0\",\"result\":{\"context\":{\"slot\":9},\"value\":[{\"slot\":8,\"err\":null,\"confirmationStatus\":\"confirmed\"}]},\"id\":1}"));
+
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
+
+            Assert.That(result.Signature, Is.EqualTo(SolanaAddressValidator.TryComputeSignature(SignedBytes())));
+        }
+
+        [TestCase("\"just a string\"")]
+        [TestCase("[1,2,3]")]
+        [TestCase("42")]
+        [TestCase("null")]
+        public async Task Reads_ResultOfAnUnexpectedShape_FailSoftInsteadOfThrowing(string result)
+        {
+            var handler = new StubHandler(_ => Json("{\"jsonrpc\":\"2.0\",\"result\":" + result + ",\"id\":1}"));
+            var source = Create(handler);
+
+            Assert.That(await source.TryGetBalanceAsync("addr"), Is.Null);
+            Assert.That(await source.TryGetLatestBlockhashAsync(), Is.Null);
+        }
+
+        [TestCase("{\"value\":\"str\"}")]
+        [TestCase("{\"value\":{\"blockhash\":5}}")]
+        [TestCase("{\"value\":[1]}")]
+        public async Task Reads_InnerValueOfAnUnexpectedShape_FailSoft(string result)
+        {
+            var handler = new StubHandler(_ => Json("{\"jsonrpc\":\"2.0\",\"result\":" + result + ",\"id\":1}"));
+            var source = Create(handler);
+
+            Assert.That(await source.TryGetBalanceAsync("addr"), Is.Null);
+            Assert.That(await source.TryGetLatestBlockhashAsync(), Is.Null);
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_AlreadyProcessedWithAnUnexpectedStatusShape_StaysOutcomeUnknown()
+        {
+            var handler = Routed(("sendTransaction", AlreadyProcessedError), ("getSignatureStatuses", "{\"jsonrpc\":\"2.0\",\"result\":\"weird\",\"id\":1}"));
+
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
+
+            Assert.That(result.Signature, Is.Null);
+            Assert.That(result.OutcomeUnknown, Is.True);
+        }
+
         [Test]
         public async Task SendTransactionAsync_AlreadyProcessedButFailedOnChain_IsADefiniteFailureNotASuccess()
         {

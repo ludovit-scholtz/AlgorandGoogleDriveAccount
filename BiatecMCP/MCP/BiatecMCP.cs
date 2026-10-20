@@ -48,8 +48,8 @@ namespace BiatecMCP.MCP
 
         /// <summary>
         /// Solana's base network fee for a one-signature transaction (5,000 lamports) - this server adds no priority fee. Advisory
-        /// only here (balance pre-check / estimate); BiatecOIDC's own <c>WalletService</c> constant of the same value is what
-        /// the spending limit actually counts - keep the two in step if a priority fee is ever added to the signed message.
+        /// only here (balance pre-check / estimate); BiatecOIDC's <c>SolanaUnsignedTransfer.BaseFeeLamports</c> (defined next to the message DriveService builds) is
+        /// what the spending limit actually counts - keep the two in step if a priority fee is ever added to the signed message.
         /// </summary>
         private const ulong SolanaBaseFeeLamports = 5000;
 

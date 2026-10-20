@@ -117,12 +117,27 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public async Task SignSolanaTransactionAsync_MaxLamports_RoundTripsWithoutOverflow()
+        public async Task SignSolanaTransactionAsync_LargeAmount_RoundTripsLosslessly()
         {
-            var signed = await _service.SignSolanaTransactionAsync(TestEmail, Transfer(lamports: ulong.MaxValue), TestProvider);
+            var signed = await _service.SignSolanaTransactionAsync(TestEmail, Transfer(lamports: 9_000_000_000_000_000_000UL), TestProvider);
 
             var data = Transaction.Deserialize(signed).Instructions[0].Data;
-            Assert.That(BitConverter.ToUInt64(data, 4), Is.EqualTo(ulong.MaxValue));
+            Assert.That(BitConverter.ToUInt64(data, 4), Is.EqualTo(9_000_000_000_000_000_000UL));
+        }
+
+        [Test]
+        public void SignSolanaTransactionAsync_LamportsAboveTheCap_ThrowsFormatExceptionWithoutLoadingTheKey()
+        {
+            Assert.That(async () => await _service.SignSolanaTransactionAsync(TestEmail, Transfer(lamports: SolanaUnsignedTransfer.MaxLamports + 1), TestProvider), Throws.TypeOf<FormatException>());
+            _repository.Verify(r => r.LoadSolanaAccountAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignSolanaTransactionAsync_LamportsAtTheCap_IsAccepted()
+        {
+            var signed = await _service.SignSolanaTransactionAsync(TestEmail, Transfer(lamports: SolanaUnsignedTransfer.MaxLamports), TestProvider);
+
+            Assert.That(BitConverter.ToUInt64(Solnet.Rpc.Models.Transaction.Deserialize(signed).Instructions[0].Data, 4), Is.EqualTo(SolanaUnsignedTransfer.MaxLamports));
         }
     }
 }

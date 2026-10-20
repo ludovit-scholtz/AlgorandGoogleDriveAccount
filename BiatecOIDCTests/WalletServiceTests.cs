@@ -575,5 +575,31 @@ namespace BiatecOIDCTests
 
             _mockSolanaValuationService.Verify(v => v.GetUsdValueAsync(It.IsAny<ulong>(), It.IsAny<CancellationToken>()), Times.Never);
         }
+
+        [TestCase(ulong.MaxValue)]
+        [TestCase(ulong.MaxValue - 4999)]
+        [TestCase(SolanaUnsignedTransfer.MaxLamports + 1)]
+        public async Task SignSolanaTransferAsync_HugeLamports_IsRefusedBeforeItCanWrapToATinyPricedSpend(ulong lamports)
+        {
+            // Lamports + the 5,000-lamport fee would wrap ulong for values within 5,000 of 2^64 and price a ~1.8e19-lamport transfer at
+            // a few dollars cents, sailing past every limit.
+            await Assert.ThrowsAsync<FormatException>(
+                async () => await _service.SignSolanaTransferAsync(TestEmail, TestProvider, BuildSolanaTransfer(lamports: lamports), "4nrWTvCH3vGghq2FXd22mifh3rKrKAXHw8xWJxt6tZ4H", null));
+
+            _mockSolanaValuationService.Verify(v => v.GetUsdValueAsync(It.IsAny<ulong>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockDriveService.Verify(d => d.SignSolanaTransactionAsync(It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignSolanaTransferAsync_LargestAcceptedAmount_IsPricedWithoutOverflowing()
+        {
+            _mockSolanaValuationService
+                .Setup(v => v.GetUsdValueAsync(SolanaUnsignedTransfer.MaxLamports + SolanaUnsignedTransfer.BaseFeeLamports, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(123m);
+
+            await _service.SignSolanaTransferAsync(TestEmail, TestProvider, BuildSolanaTransfer(lamports: SolanaUnsignedTransfer.MaxLamports), "4nrWTvCH3vGghq2FXd22mifh3rKrKAXHw8xWJxt6tZ4H", null);
+
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, It.IsAny<string?>(), 123m, ResolvedAddress, 0, It.IsAny<CancellationToken>()), Times.Once);
+        }
     }
 }

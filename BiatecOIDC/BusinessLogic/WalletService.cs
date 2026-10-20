@@ -20,9 +20,6 @@ namespace BiatecOIDC.BusinessLogic
         /// <summary>See <see cref="MaxReasonableFeeSatoshis"/>.</summary>
         private const decimal MaxReasonableFeeFractionOfSpend = 0.10m;
 
-        /// <summary>Solana's base fee for a one-signature transaction (5,000 lamports); this wallet adds no priority fee.</summary>
-        private const ulong SolanaBaseFeeLamports = 5000;
-
         private readonly IDriveService _driveService;
         private readonly ISpendingLimitService _spendingLimitService;
         private readonly IAssetValuationService _valuationService;
@@ -252,9 +249,9 @@ namespace BiatecOIDC.BusinessLogic
             var principalLamports = string.Equals(transfer.Recipient, signerAddress, StringComparison.Ordinal) ? 0UL : transfer.Lamports;
 
             // The network fee leaves the account too: the transaction is a legacy one-signature message with no priority-fee
-            // instruction, so the fee is exactly SolanaBaseFeeLamports - counted, so many tiny transfers (or self-transfers)
+            // instruction, so the fee is exactly SolanaUnsignedTransfer.BaseFeeLamports - counted, so many tiny transfers (or self-transfers)
             // can't push real outflow past the limit unseen.
-            var spendLamports = principalLamports + SolanaBaseFeeLamports;
+            var spendLamports = principalLamports + SolanaUnsignedTransfer.BaseFeeLamports; // Validate() bounds Lamports, so this cannot overflow
 
             var totalUsd = await _solanaValuationService.GetUsdValueAsync(spendLamports);
 

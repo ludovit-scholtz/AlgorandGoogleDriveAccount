@@ -1850,5 +1850,68 @@ namespace BiatecOIDCTests
             var info = (AddressInfoResponse)((OkObjectResult)result).Value!;
             Assert.That(info.IsActive, Is.False);
         }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_LimitCurrencyRateUnavailable_ReturnsServiceUnavailableNot500()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            _mockWalletService
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ThrowsAsync(new UnsupportedCurrencyException("XYZ"));
+
+            var result = await Sign(SolanaSignRequest(), "solana");
+
+            var objectResult = (ObjectResult)result;
+            Assert.That(objectResult.StatusCode, Is.EqualTo(StatusCodes.Status503ServiceUnavailable));
+            Assert.That(((ProblemDetails)objectResult.Value!).Title, Is.EqualTo("spending_limit_currency_unavailable"));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_VaultConcurrencyConflict_ReturnsRetryableConflictNot500()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            _mockWalletService
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ThrowsAsync(new VaultConcurrencyConflictException("modified concurrently"));
+
+            var result = await Sign(SolanaSignRequest(), "solana");
+
+            Assert.That(((ObjectResult)result).StatusCode, Is.EqualTo(StatusCodes.Status409Conflict));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Evm_RegistryEntryWithNoFamily_IsTreatedAsLegacyAvmAndRejected()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+            SetupActivation("0xFamilylessEntry", "");
+            var request = new SignTransactionGroupRequest { Transactions = new List<string> { Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{}")) } };
+
+            var result = await Sign(request, "ethereum", "0xFamilylessEntry");
+
+            Assert.That(((ProblemDetails)((ObjectResult)result).Value!).Title, Is.EqualTo("address_not_active"));
+        }
+
+        [Test]
+        public async Task GetAddressInfo_RegistryEntryWithNoFamily_IsActiveOnAnAvmNetworkOnly()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            SetupActivation("LegacyEntryAddress", "");
+
+            var onAvm = (AddressInfoResponse)((OkObjectResult)await _controller.GetAddressInfo(TestNetwork, "LegacyEntryAddress")).Value!;
+            SetupSolanaNetwork();
+            var onSolana = (AddressInfoResponse)((OkObjectResult)await _controller.GetAddressInfo("solana", "LegacyEntryAddress")).Value!;
+
+            Assert.That(onAvm.IsActive, Is.True);
+            Assert.That(onSolana.IsActive, Is.False);
+        }
     }
 }

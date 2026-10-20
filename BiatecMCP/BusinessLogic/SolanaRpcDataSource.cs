@@ -30,7 +30,12 @@ namespace BiatecMCP.BusinessLogic
         public async Task<ulong?> TryGetBalanceAsync(string address, CancellationToken cancellationToken = default)
         {
             var response = await TryCallAsync("getBalance", new object[] { address, new { commitment = "confirmed" } }, cancellationToken);
-            if (response?.Result is { } result && result.TryGetProperty("value", out var value) && value.TryGetUInt64(out var lamports))
+            // JsonElement.TryGetProperty / TryGetUInt64 THROW on the wrong ValueKind - a node (or proxy) answering with an
+            // unexpected result shape must read as "no answer", never as an exception out of a fail-soft data source.
+            if (response?.Result is { ValueKind: JsonValueKind.Object } result
+                && result.TryGetProperty("value", out var value)
+                && value.ValueKind == JsonValueKind.Number
+                && value.TryGetUInt64(out var lamports))
             {
                 return lamports;
             }
@@ -41,8 +46,9 @@ namespace BiatecMCP.BusinessLogic
         public async Task<string?> TryGetLatestBlockhashAsync(CancellationToken cancellationToken = default)
         {
             var response = await TryCallAsync("getLatestBlockhash", new object[] { new { commitment = "confirmed" } }, cancellationToken);
-            if (response?.Result is { } result
+            if (response?.Result is { ValueKind: JsonValueKind.Object } result
                 && result.TryGetProperty("value", out var value)
+                && value.ValueKind == JsonValueKind.Object
                 && value.TryGetProperty("blockhash", out var blockhash)
                 && blockhash.ValueKind == JsonValueKind.String)
             {
@@ -108,22 +114,29 @@ namespace BiatecMCP.BusinessLogic
         private async Task<SolanaSendResult> ConfirmProcessedAsync(string signature, CancellationToken cancellationToken)
         {
             var response = await TryCallAsync("getSignatureStatuses", new object[] { new[] { signature }, new { searchTransactionHistory = true } }, cancellationToken);
-            if (response?.Result is { } result
+            if (response?.Result is { ValueKind: JsonValueKind.Object } result
                 && result.TryGetProperty("value", out var value)
                 && value.ValueKind == JsonValueKind.Array
                 && value.GetArrayLength() == 1
                 && value[0].ValueKind == JsonValueKind.Object)
             {
                 var status = value[0];
-                if (!status.TryGetProperty("err", out var err) || err.ValueKind == JsonValueKind.Null)
+                if (status.TryGetProperty("err", out var err) && err.ValueKind != JsonValueKind.Null)
+                {
+                    return new SolanaSendResult(null, $"The transaction was processed but FAILED on-chain ({err.GetRawText().Trim('"')}). Resubmitting it cannot succeed - fix the cause and build a new transfer.");
+                }
+
+                // Only a confirmed/finalized landing counts as success. A merely "processed" entry (or one with no recognizable
+                // commitment) may sit on a minority fork that is later dropped - not something to report as money moved.
+                if (status.TryGetProperty("confirmationStatus", out var commitment)
+                    && commitment.ValueKind == JsonValueKind.String
+                    && commitment.GetString() is "confirmed" or "finalized")
                 {
                     return new SolanaSendResult(signature, null);
                 }
-
-                return new SolanaSendResult(null, $"The transaction was processed but FAILED on-chain ({err.GetRawText().Trim('"')}). Resubmitting it cannot succeed - fix the cause and build a new transfer.");
             }
 
-            return new SolanaSendResult(null, "The Solana RPC node says the transaction was already processed, but its final status could not be confirmed.", OutcomeUnknown: true, ExpectedSignature: signature);
+            return new SolanaSendResult(null, "The Solana RPC node says the transaction was already processed, but it is not confirmed yet (or its status could not be established).", OutcomeUnknown: true, ExpectedSignature: signature);
         }
 
         private static bool IsAlreadyProcessed(JsonRpcError error) =>
