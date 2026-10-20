@@ -297,11 +297,12 @@ for the required GitHub secrets (shared by both workflows) and
 and short-lived. There is no automated test job in CI, so run tests locally before pushing.
 
 Root `.editorconfig` + `Directory.Build.props` (auto-imported by all 5 `.csproj`s) enable the built-in Roslyn
-analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. `AlgorandSdkVersionTests` (both test projects) guards that
-the built `MessagePack` is >= 3.1.12 (advisory GHSA-qhrr-8q5h-9q3h). `BiatecMCP`, `BiatecSelfCustodyCore` and `BiatecOIDC` each reference it explicitly so
-the fix doesn't depend on Algorand5's transitive choice (don't remove those as "redundant") and that
-the built `Algorand.dll` is Algorand5: the retired Algorand4 package ships an assembly with the same name, so a dependency
-that still pulls it in transitively would silently win (that was the case until `ARC76Account.*` 1.0.10). Run `dotnet format Biatec.slnx` to
+analyzers solution-wide and promote `IDE0005` (unused usings) to a build error. `AlgorandSdkVersionTests` (both test projects) guards two dependency floors: the built `MessagePack` must be >= 3.1.12
+(advisory GHSA-qhrr-8q5h-9q3h) and the built `Algorand.dll` must be Algorand5 (the retired Algorand4 package ships an
+assembly with the same name and would silently win). `BiatecMCP`, `BiatecSelfCustodyCore` and `BiatecOIDC` each reference
+MessagePack explicitly so the fix doesn't depend on Algorand5's transitive choice - don't remove those as "redundant".
+`BiatecMCPTests/Arc76KnownAnswerTests` pins known ARC-76 Algorand/EVM addresses for fixed inputs: re-run it on any
+`ARC76Account.*` bump, since a derivation change would change every existing user's addresses. Run `dotnet format Biatec.slnx` to
 fix flagged style/unused-using issues, and `dotnet format Biatec.slnx --verify-no-changes` before committing —
 both should be clean.
 
