@@ -203,6 +203,26 @@ seed/slot, since that's a different concern (choosing which identity produces th
   network (e.g. Algorand mainnet vs. testnet use different explorers - a chain with no confirmed explorer
   simply omits the link rather than guessing a URL that might not work).
 
+### AlgoSafe (multi-signer safe) tools
+
+Work with [AlgoSafe](https://github.com/ludovit-scholtz/algo-safe) safes - an Algorand app account whose funds move
+only through proposals approved by a signer group's threshold of members. Same build → sign → broadcast chain:
+every tool below that creates or changes something only **builds** an unsigned atomic group (references and fees already
+resolved by simulation); pass all its `UnsignedTransactions` in order to `signTransaction`, then
+`submitTransactionToBlockchain`.
+
+| Tool | Kind | Purpose |
+| --- | --- | --- |
+| `getAlgoSafe` | read | Safe account, balance, version, signer groups, members, limits |
+| `listAlgoSafeProposals` | read | Proposals (Active / Ready / Executed / Cancelled), newest first |
+| `getAlgoSafeProposal` | read | One proposal: approvers, the exact transfers it will send, `CallerCanApprove`, `CanExecute` |
+| `getAlgoSafeDeployment` | read | Application id + kind of a broadcast deployment transaction |
+| `createAlgoSafe` | build | Deploy the safe (or, with `validatorAppId = 0`, the shared validator library first) |
+| `bootstrapAlgoSafe` | build | Fund the safe and create its first signer group (creator only, once) |
+| `proposeAlgoSafeTransaction` | build | Propose ALGO/ASA transfers from the safe; `executeNow` for 1-of-N groups |
+| `approveAlgoSafeProposal` | build | Approve a proposal as a group member |
+| `executeAlgoSafeProposal` | build | Execute a Ready proposal (anyone may; fees cover the inner transactions) |
+
 ### Example prompts
 
 - *"what is my algorand address"* → `getCryptoAddress(network="algorand-mainnet")`

@@ -47,6 +47,7 @@ namespace BiatecMCPTests
                 Mock.Of<IPublicEvmRpcDataSource>(),
                 Mock.Of<IPublicBitcoinDataSource>(),
                 _solanaRpc.Object,
+                Mock.Of<BiatecMCP.BusinessLogic.AlgoSafe.IAlgoSafeChainClientFactory>(),
                 NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
 
             _httpContext.Request.Headers.Authorization = "Bearer tok";

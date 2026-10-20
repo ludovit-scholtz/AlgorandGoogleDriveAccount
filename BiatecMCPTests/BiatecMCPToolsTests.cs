@@ -58,6 +58,7 @@ namespace BiatecMCPTests
                 _evmRpcDataSource.Object,
                 _bitcoinDataSource.Object,
                 _solanaRpcDataSource.Object,
+                Mock.Of<BiatecMCP.BusinessLogic.AlgoSafe.IAlgoSafeChainClientFactory>(),
                 NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
 
         private void SetBearerToken(string token) =>

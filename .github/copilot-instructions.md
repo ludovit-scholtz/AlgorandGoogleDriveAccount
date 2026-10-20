@@ -72,7 +72,9 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/tools").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — 21 MCP tools split into three chainable steps (build → sign → execute) rather than
+  - `MCP/BiatecMCP.cs` (+ `MCP/BiatecMCP.AlgoSafe.cs`, a `partial` of the same class holding the nine AlgoSafe tools -
+    see "AlgoSafe tools" under Architecture notes; the tool list below covers the other 21) — 30 MCP tools split into
+    three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast:
     `listAlgorandAddresses`, `getBridgeConfiguration`, `listSupportedNetworks`, `getCryptoAddress`,
@@ -976,6 +978,26 @@ setup stage needs.
   "the current one" - that still needs a live round, done by `createBridgeTransaction` itself) so an agent can
   sanity-check `destinationNetwork`/`assetId`/`destinationToken` before calling `createBridgeTransaction` at
   all. Only bridging from Algorand mainnet (`genesisId: mainnet-v1.0`, Aramid chain id `416001`) is supported.
+- **AlgoSafe tools**: `BiatecMCP/MCP/BiatecMCP.AlgoSafe.cs` (a `partial` of the main tool class, so it shares the
+  bearer-token/address/network/error helpers) adds nine tools for [AlgoSafe](https://github.com/ludovit-scholtz/algo-safe), an
+  Algorand app-account safe with signer groups, thresholds and proposals: read-only `getAlgoSafe`, `listAlgoSafeProposals`,
+  `getAlgoSafeProposal`, `getAlgoSafeDeployment`, and build-only `createAlgoSafe` (validator deploy when `validatorAppId` is 0,
+  else the safe), `bootstrapAlgoSafe`, `proposeAlgoSafeTransaction` (optional `executeNow` for 1-of-N groups),
+  `approveAlgoSafeProposal`, `executeAlgoSafeProposal`. Each build tool returns the *unsigned atomic group* to feed through the
+  usual `signTransaction` → `submitTransactionToBlockchain` chain; no key material here. Logic lives in
+  `BiatecMCP/BusinessLogic/AlgoSafe/`: `AlgoSafeReader` (state read straight from boxes/global state, refusing any app whose
+  approval-program sha256 isn't in `AlgoSafeConstants.SupportedContractVersions`), `AlgoSafeTransactionBuilder` (pre-checks
+  membership/threshold/expiry/paused so an agent gets a plain message instead of an AVM assert, then builds with the
+  generated ARC-56 client `Arc56.Generated.ludovit-scholtz.algo-safe`, address-only senders), and `AlgoSafeResourcePopulator`
+  (the generated proxies add no references or inner-transaction fees: it simulates via algod with `AllowUnnamedResources`,
+  adds the reported accounts/apps/assets/boxes as references, doubles an app call's fee while algod says "fee too small",
+  then trims it to `minFee * (1 + inner transactions)` from the exec trace (if that trim is itself rejected - a trace that
+  under-counts - trimming stops and the fee creeps up one min fee at a time instead), so the last simulation proves the group runs;
+  more than 4 accounts / 8 references fails with `TooManyReferences`). **The generated client mis-encodes arrays of dynamic
+  tuples** (no offsets - the node rejects it with "invalid tail pointer"), so `proposeTransactionGroup` and `bootstrapGroup` go
+  through `AlgoSafeCallProxy` with hand-written ARC-4 encoders (`AlgoSafePayloadCodec`); do not switch back to the generated
+  methods for those two until fixed upstream. A safe needs the immutable `AlgoSafeTxnValidator` library deployed per network
+  (pinned by bytecode sha256; the contract re-checks it). `IAlgoSafeChainClient` is the test seam over algod.
 - **JWT issuer / OIDC provider**: `JwtIssuerService` + `JwtIssuerController` (`BiatecOIDC`) implement OIDC
   discovery (`/.well-known/openid-configuration`, `/.well-known/jwks.json`), `/authorize`, `/token`, `/userinfo`,
   `/introspect`, `/verify`. Supports both standard `response_type=code` and a legacy `returnUrl` direct
