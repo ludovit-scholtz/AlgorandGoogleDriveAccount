@@ -56,13 +56,13 @@ namespace BiatecOIDC.BusinessLogic
             return document.Entries.FirstOrDefault(e => string.Equals(e.Address, address, StringComparison.Ordinal));
         }
 
-        public async Task<AddressActivationEntry> ActivateAsync(string email, string provider, string? accessToken, string address, string family, string seedAddress, int slot, CancellationToken cancellationToken = default)
+        public async Task<AddressActivationEntry> ActivateAsync(string email, string provider, string? accessToken, string address, string family, string seedAddress, int slot, string? keyType = null, CancellationToken cancellationToken = default)
         {
-            var results = await ActivateManyAsync(email, provider, accessToken, new[] { (address, family, seedAddress, slot) }, cancellationToken);
+            var results = await ActivateManyAsync(email, provider, accessToken, new[] { (address, family, seedAddress, slot, keyType) }, cancellationToken);
             return results[0];
         }
 
-        public async Task<IReadOnlyList<AddressActivationEntry>> ActivateManyAsync(string email, string provider, string? accessToken, IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)> activations, CancellationToken cancellationToken = default)
+        public async Task<IReadOnlyList<AddressActivationEntry>> ActivateManyAsync(string email, string provider, string? accessToken, IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot, string? KeyType)> activations, CancellationToken cancellationToken = default)
         {
             RequireEmail(email);
             if (activations.Count == 0)
@@ -88,12 +88,13 @@ namespace BiatecOIDC.BusinessLogic
 
             var now = DateTimeOffset.UtcNow;
             var results = new List<AddressActivationEntry>(activations.Count);
-            foreach (var (address, family, seedAddress, slot) in activations)
+            foreach (var (address, family, seedAddress, slot, keyType) in activations)
             {
                 var entry = new AddressActivationEntry
                 {
                     Address = address,
                     Family = family,
+                    KeyType = AvmKeyTypes.IsFalcon(keyType) ? AvmKeyTypes.Falcon : string.Empty,
                     SeedAddress = seedAddress,
                     Slot = slot,
                     ActivatedUtc = now
@@ -106,9 +107,9 @@ namespace BiatecOIDC.BusinessLogic
 
             await SaveDocumentWithConcurrencyCheckAsync(storageProvider, token, activeKey, email, document, baselineRawBytes);
 
-            foreach (var (address, family, seedAddress, slot) in activations)
+            foreach (var (address, family, seedAddress, slot, keyType) in activations)
             {
-                _logger.LogInformation("Activated address {Address} ({Family}) for {Email}, backed by seed {SeedAddress} slot {Slot}.", address, family, email, seedAddress, slot);
+                _logger.LogInformation("Activated address {Address} ({Family}, {KeyType}) for {Email}, backed by seed {SeedAddress} slot {Slot}.", address, family, AvmKeyTypes.Normalize(keyType), email, seedAddress, slot);
             }
 
             return results;

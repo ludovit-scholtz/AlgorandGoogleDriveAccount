@@ -19,12 +19,13 @@ namespace BiatecOIDC.BusinessLogic
         /// (e.g. if it's later re-pointed at a different seed/slot). The caller is responsible for having
         /// already verified this pairing is actually correct (trivially, for a natively-derived address, or
         /// via an on-chain rekey check) before calling this - this method only ever persists. Equivalent to
-        /// calling <see cref="ActivateManyAsync"/> with a single entry.
+        /// calling <see cref="ActivateManyAsync"/> with a single entry. <paramref name="keyType"/> is an
+        /// <see cref="AvmKeyTypes"/> value (<c>null</c> = Ed25519) - which of the seed/slot's AVM keys signs.
         /// </summary>
         /// <exception cref="Repository.VaultConcurrencyConflictException">
         /// Another request modified this file between this call's read and write - retry against current state.
         /// </exception>
-        Task<AddressActivationEntry> ActivateAsync(string email, string provider, string? accessToken, string address, string family, string seedAddress, int slot, CancellationToken cancellationToken = default);
+        Task<AddressActivationEntry> ActivateAsync(string email, string provider, string? accessToken, string address, string family, string seedAddress, int slot, string? keyType = null, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Same as <see cref="ActivateAsync"/>, but records every entry in <paramref name="activations"/>
@@ -37,7 +38,7 @@ namespace BiatecOIDC.BusinessLogic
         /// <exception cref="Repository.VaultConcurrencyConflictException">
         /// Another request modified this file between this call's read and write - retry against current state.
         /// </exception>
-        Task<IReadOnlyList<AddressActivationEntry>> ActivateManyAsync(string email, string provider, string? accessToken, IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)> activations, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<AddressActivationEntry>> ActivateManyAsync(string email, string provider, string? accessToken, IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot, string? KeyType)> activations, CancellationToken cancellationToken = default);
 
         /// <summary>Lists every address ever activated for this user.</summary>
         Task<IReadOnlyList<AddressActivationEntry>> ListAsync(string email, string provider, string? accessToken, CancellationToken cancellationToken = default);

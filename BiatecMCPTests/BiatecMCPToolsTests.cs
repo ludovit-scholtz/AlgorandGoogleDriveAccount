@@ -148,6 +148,56 @@ namespace BiatecMCPTests
             Assert.That(result.Error, Does.Contain("bearer token"));
         }
 
+        // ───────────────────────── Falcon (post-quantum) key type ─────────────────────────
+
+        [Test]
+        public async Task GetCryptoAddress_AvmFalconKeyType_ReturnsFalconAddress()
+        {
+            SetAlgorandNetworkResolvable();
+            SetClaims(new Claim("primary_seed_address", "PRIMARY"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "ED-ADDR", FalconAddress = "FALCON-ADDR", SeedAddress = "PRIMARY", Slot = 0 });
+
+            var result = await CreateTool().GetCryptoAddress("Algorand", keyType: "falcon");
+
+            Assert.That(result.Address, Is.EqualTo("FALCON-ADDR"));
+            Assert.That(result.KeyType, Is.EqualTo(AvmKeyTypes.Falcon));
+            Assert.That(result.Error, Is.Empty);
+        }
+
+        [Test]
+        public async Task GetCryptoAddress_UnknownKeyType_ReturnsErrorWithoutFallingBackToEd25519()
+        {
+            SetAlgorandNetworkResolvable();
+            SetClaims(new Claim("primary_seed_address", "PRIMARY"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.GetAddressAsync("tok", "PRIMARY", 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DerivedAddressResponse { Address = "ED-ADDR", FalconAddress = "FALCON-ADDR", SeedAddress = "PRIMARY", Slot = 0 });
+
+            var result = await CreateTool().GetCryptoAddress("Algorand", keyType: "dilithium");
+
+            Assert.That(result.Address, Is.Empty);
+            Assert.That(result.Error, Does.Contain("dilithium"));
+        }
+
+        [Test]
+        public async Task ActivateCryptoAddress_FalconKeyType_ForwardsNormalizedKeyType()
+        {
+            SetClaims(new Claim("sign", "true"));
+            SetBearerToken("tok");
+            _walletClient
+                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "SEED1", 0, "ADDR1", AvmKeyTypes.Falcon, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true, KeyType = AvmKeyTypes.Falcon });
+
+            var result = await CreateTool().ActivateCryptoAddress("algorand", "SEED1", 0, "ADDR1", keyType: "FALCON");
+
+            Assert.That(result.IsActive, Is.True);
+            Assert.That(result.KeyType, Is.EqualTo(AvmKeyTypes.Falcon));
+        }
+
         // ───────────────────────── Multi-address (ARC-76 slot) support ─────────────────────────
 
         [Test]
@@ -454,7 +504,7 @@ namespace BiatecMCPTests
             var result = await CreateTool().ActivateCryptoAddress("algorand", "SEED1", 0, "ADDR1");
 
             Assert.That(result.ErrorType, Is.EqualTo("InsufficientScope"));
-            _walletClient.Verify(c => c.ActivateAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _walletClient.Verify(c => c.ActivateAddressAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [Test]
@@ -463,7 +513,7 @@ namespace BiatecMCPTests
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
             _walletClient
-                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "SEED1", 3, "ADDR1", It.IsAny<CancellationToken>()))
+                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "SEED1", 3, "ADDR1", null, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new AddressInfoResponse { Address = "ADDR1", Network = "algorand", Family = "Avm", IsActive = true });
 
             var result = await CreateTool().ActivateCryptoAddress("algorand", "SEED1", 3, "ADDR1");
@@ -478,7 +528,7 @@ namespace BiatecMCPTests
             SetClaims(new Claim("sign", "true"));
             SetBearerToken("tok");
             _walletClient
-                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "SEED1", 0, "ADDR1", It.IsAny<CancellationToken>()))
+                .Setup(c => c.ActivateAddressAsync("tok", "algorand", "SEED1", 0, "ADDR1", null, It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new WalletApiException(409, "rekey_not_confirmed", "Not yet rekeyed on-chain."));
 
             var result = await CreateTool().ActivateCryptoAddress("algorand", "SEED1", 0, "ADDR1");

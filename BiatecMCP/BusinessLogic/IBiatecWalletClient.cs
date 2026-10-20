@@ -43,9 +43,10 @@ namespace BiatecMCP.BusinessLogic
         /// Registers that <paramref name="seedAddress"/>/<paramref name="slot"/>'s key signs for
         /// <paramref name="address"/> - the entry point for AVM rekey support. Throws
         /// <see cref="WalletApiException"/> (e.g. <c>rekey_not_confirmed</c> if an external address isn't
-        /// yet rekeyed on-chain) on failure.
+        /// yet rekeyed on-chain) on failure. <paramref name="keyType"/> selects which of the seed/slot's AVM keys signs
+        /// (<c>"Ed25519"</c>, the default when <c>null</c>, or post-quantum <c>"Falcon"</c>).
         /// </summary>
-        Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string seedAddress, int slot, string address, CancellationToken cancellationToken = default);
+        Task<AddressInfoResponse> ActivateAddressAsync(string bearerToken, string network, string seedAddress, int slot, string address, string? keyType = null, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Lists every address currently resolvable to a signing seed/slot - every seed's own slot-0 AVM

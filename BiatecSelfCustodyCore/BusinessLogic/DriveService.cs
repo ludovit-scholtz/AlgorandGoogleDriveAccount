@@ -90,6 +90,42 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             }
         }
 
+        public async Task<byte[]> SignFalconTransactionAsync(string email, byte[] txMsgPack, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)
+        {
+            if (string.IsNullOrEmpty(email))
+            {
+                throw new ArgumentException("Email is required", nameof(email));
+            }
+
+            if (txMsgPack == null || txMsgPack.Length == 0)
+            {
+                throw new ArgumentException("Transaction data is required", nameof(txMsgPack));
+            }
+
+            // Multisig subsignatures are ed25519-only, so a Falcon key can never cosign an envelope - only a
+            // plain unsigned transaction is accepted here.
+            Algorand.Algod.Model.Transactions.Transaction? txObj;
+            try
+            {
+                txObj = Algorand.Utils.Encoder.DecodeFromMsgPack<Algorand.Algod.Model.Transactions.Transaction>(txMsgPack);
+            }
+            catch (Exception exc)
+            {
+                throw new FormatException("Unable to parse data as an unsigned Algorand transaction.", exc);
+            }
+
+            if (txObj == null)
+            {
+                throw new FormatException("Unable to parse data as an unsigned Algorand transaction.");
+            }
+
+            using var account = await _cloudAccountRepository.LoadFalconAccountAsync(email, slot, provider, accessToken, seedAddress);
+            _logger?.LogInformation($"FalconAccountSign:{account.Address.EncodeAsString()}");
+
+            var signed = txObj.SignPQ(account);
+            return Algorand.Utils.Encoder.EncodeToMsgPackOrdered(signed);
+        }
+
         public async Task<byte[]> SignEvmTransactionAsync(string email, EvmUnsignedTransaction transaction, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)
         {
             if (string.IsNullOrEmpty(email))

@@ -233,6 +233,29 @@ explorer respectively, depending on the `network` parameter). No spending-limit 
 EVM yet (BiatecMCP's `getCryptoBalance` tool queries EVM balances directly against a public RPC, without ever
 involving this API, since that needs no key material).
 
+## Post-quantum Falcon accounts (Algorand)
+
+Every seed/slot also has a **post-quantum Falcon-1024 Algorand account**, derived by
+`ARC76Account.Algorand.ARC76.GetEmailFalconAccount` from the same mnemonic/email/slot. It is a *different* Algorand
+address from the classic Ed25519 one, and its transactions carry a native `pqsig` (Falcon signature) instead of
+`sig`. `GET /wallet/address/{seedAddress}/{slot?}` returns it as `falconAddress` and registers it for signing (even
+at slot 0 - unlike the Ed25519 address it is never a seed's identifying address).
+
+To sign with it, call the normal `POST /wallet/{network}/{falconAddress}/sign` on any AVM network - Biatec recognizes
+the address as a Falcon one and signs with `pqsig`. Everything else is unchanged: the sender must equal the route
+address (or be rekeyed to it), `rekey`/close-out still need the `rekey` scope, and spending limits apply exactly as
+for Ed25519 (the per-address bucket is keyed by seed/slot, so it is **shared** with that slot's Ed25519 account).
+Two differences:
+
+- A Falcon address cannot cosign a multisig envelope (multisig subsignatures are Ed25519-only) - `400 invalid_request`.
+- A Falcon-signed transaction contributes 2x the minimum fee (`PQSignature.Falcon1024FeeContributionFactor`) - build
+  its `fee` accordingly (BiatecMCP's `create*` tools do this for you when called with `keyType: "Falcon"`).
+
+Rekeying an existing account to a Falcon key: rekey it on-chain to the seed/slot's `falconAddress`, then call
+`POST /wallet/{network}/{seedAddress}/{slot}/activate` with body `{ "address": "<account>", "keyType": "Falcon" }`
+(`keyType` defaults to `"Ed25519"`; `"Falcon"` is AVM-only). `GET /wallet/{network}/{address}/info` and
+`GET /wallet/active-addresses` report each address's `keyType` (`"Ed25519"` or `"Falcon"`).
+
 ## Solana support
 
 Every seed also has a Solana identity (ed25519), derived by the `ARC76Account.Solana` package from the same

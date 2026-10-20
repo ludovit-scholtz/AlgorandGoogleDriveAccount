@@ -46,7 +46,7 @@ namespace BiatecOIDC.BusinessLogic
             _logger = logger;
         }
 
-        public async Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? seedAddress = null, int slot = 0, bool applySpendingLimits = true)
+        public async Task<IReadOnlyList<byte[]>> SignTransactionGroupAsync(string email, string provider, IReadOnlyList<byte[]> transactionsMsgPack, string? accessToken, string? seedAddress = null, int slot = 0, bool applySpendingLimits = true, string? keyType = null)
         {
             if (string.IsNullOrWhiteSpace(email))
             {
@@ -113,7 +113,9 @@ namespace BiatecOIDC.BusinessLogic
             var signed = new List<byte[]>(transactionsMsgPack.Count);
             foreach (var txMsgPack in transactionsMsgPack)
             {
-                signed.Add(await _driveService.SignTransactionAsync(email, txMsgPack, provider, accessToken, resolvedAddress, slot));
+                signed.Add(AvmKeyTypes.IsFalcon(keyType)
+                    ? await _driveService.SignFalconTransactionAsync(email, txMsgPack, provider, accessToken, resolvedAddress, slot)
+                    : await _driveService.SignTransactionAsync(email, txMsgPack, provider, accessToken, resolvedAddress, slot));
             }
 
             if (ledgerEntries.Count > 0)

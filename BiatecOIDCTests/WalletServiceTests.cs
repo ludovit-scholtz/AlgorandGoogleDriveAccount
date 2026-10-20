@@ -136,6 +136,22 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task SignTransactionGroupAsync_FalconKeyType_SignsWithFalconAndStillEnforcesLimits()
+        {
+            var tx = BuildPayment(500_000);
+            _mockDriveService
+                .Setup(d => d.SignFalconTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ReturnsAsync(new byte[] { 9 });
+
+            var result = await _service.SignTransactionGroupAsync(TestEmail, TestProvider, new[] { tx }, "access-token", keyType: AvmKeyTypes.Falcon);
+
+            Assert.That(result[0], Is.EqualTo(new byte[] { 9 }));
+            _mockDriveService.Verify(d => d.SignFalconTransactionAsync(TestEmail, tx, TestProvider, "access-token", ResolvedAddress, 0), Times.Once);
+            _mockDriveService.Verify(d => d.SignTransactionAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(TestEmail, TestProvider, "access-token", 500_000m, ResolvedAddress, 0, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
         public async Task SignTransactionGroupAsync_WithExplicitPrimaryAddressAndSlot_ResolvesAndForwardsThatIdentity()
         {
             const string requestedAddress = "SOME-OTHER-SEED-ADDRESS";

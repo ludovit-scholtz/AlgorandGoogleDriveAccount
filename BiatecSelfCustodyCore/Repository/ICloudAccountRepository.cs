@@ -100,6 +100,24 @@ namespace BiatecSelfCustodyCore.Repository
         Task<string> DeriveSolanaAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null);
 
         /// <summary>
+        /// Loads the post-quantum Falcon-1024 Algorand signing account for <paramref name="email"/>/<paramref name="slot"/> -
+        /// the same seed mnemonic <see cref="LoadAccountAsync"/> derives the Ed25519 key from, just via
+        /// <c>ARC76Account.Algorand.ARC76.GetEmailFalconAccount</c>. It is a different Algorand account (its own
+        /// address) from the Ed25519 one for the same seed/slot, signed with a native <c>pqsig</c> rather than
+        /// <c>sig</c>. Mirrors <see cref="LoadAccountAsync"/>'s exact seed-resolution/error semantics - callers sign
+        /// immediately and dispose the returned account (it zeroes its private key); never persisted, never logged.
+        /// </summary>
+        Task<FalconAccount> LoadFalconAccountAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null);
+
+        /// <summary>
+        /// Derives (without signing or mutating anything) the Falcon-1024 Algorand address at <paramref name="slot"/>
+        /// for the seed identified by <paramref name="seedAddress"/> (<c>null</c> = the vault's current primary seed).
+        /// Throws <see cref="InvalidOperationException"/> if <paramref name="seedAddress"/> is given but no seed in the
+        /// vault has that address.
+        /// </summary>
+        Task<string> DeriveFalconAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null);
+
+        /// <summary>
         /// Resolves and validates a seed selector to its identifying address, without deriving any
         /// slot address - <c>null</c> resolves to the vault's current primary seed (auto-creating the
         /// first seed if the vault is empty, same side effect as <see cref="LoadAccountAsync"/>); a

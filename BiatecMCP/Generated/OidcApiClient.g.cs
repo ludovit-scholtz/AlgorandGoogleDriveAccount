@@ -882,7 +882,7 @@ namespace BiatecMCP.Generated
                         if (status_ == 400)
                         {
                             string responseText_ = ( response_.Content == null ) ? string.Empty : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
-                            throw new OidcApiException("`redirect_uris` was empty, contained a non-HTTPS/non-loopback URI, or\r\n            `token_endpoint_auth_method` requested anything other than `\"none\"`.", status_, responseText_, headers_, null);
+                            throw new OidcApiException("`redirect_uris` was empty, contained a non-HTTPS/non-loopback URI, or\n            `token_endpoint_auth_method` requested anything other than `\"none\"`.", status_, responseText_, headers_, null);
                         }
                         else
                         {
@@ -2562,7 +2562,7 @@ namespace BiatecMCP.Generated
                             {
                                 throw new OidcApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
                             }
-                            throw new OidcApiException<ProblemDetails>("The request was malformed, a transaction could not be decoded, an AVM\r\n            transaction\'s sender doesn\'t match address, or address is\r\n            unknown (never derived or activated).", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                            throw new OidcApiException<ProblemDetails>("The request was malformed, a transaction could not be decoded, an AVM\n            transaction\'s sender doesn\'t match address, or address is\n            unknown (never derived or activated).", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
                         }
                         else
                         if (status_ == 401)
@@ -2574,7 +2574,7 @@ namespace BiatecMCP.Generated
                         if (status_ == 403)
                         {
                             string responseText_ = ( response_.Content == null ) ? string.Empty : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
-                            throw new OidcApiException("The token lacks the `sign` claim, lacks the `rekey` claim while the\r\n            group contains an AVM rekey transaction, or the group exceeds the caller\'s spending limit.", status_, responseText_, headers_, null);
+                            throw new OidcApiException("The token lacks the `sign` claim, lacks the `rekey` claim while the\n            group contains an AVM rekey transaction, or the group exceeds the caller\'s spending limit.", status_, responseText_, headers_, null);
                         }
                         else
                         if (status_ == 503)
@@ -2660,7 +2660,7 @@ namespace BiatecMCP.Generated
                         if (status_ == 401)
                         {
                             string responseText_ = ( response_.Content == null ) ? string.Empty : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
-                            throw new OidcApiException("The bearer token is missing, invalid, or expired, or no cached provider\r\n            access token is available (see the class remarks) - a fresh interactive sign-in is required.", status_, responseText_, headers_, null);
+                            throw new OidcApiException("The bearer token is missing, invalid, or expired, or no cached provider\n            access token is available (see the class remarks) - a fresh interactive sign-in is required.", status_, responseText_, headers_, null);
                         }
                         else
                         {
@@ -3390,7 +3390,7 @@ namespace BiatecMCP.Generated
                         if (status_ == 409)
                         {
                             string responseText_ = ( response_.Content == null ) ? string.Empty : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
-                            throw new OidcApiException("`request.Address` differs from the seed\'s derived address (an external/rekey scenario)\r\n            but an on-chain check found it isn\'t currently rekeyed to that derived address - submit and\r\n            confirm the on-chain rekey transaction first; or the address activation registry was modified\r\n            concurrently by another request - retry.", status_, responseText_, headers_, null);
+                            throw new OidcApiException("`request.Address` differs from the seed\'s derived address (an external/rekey scenario)\n            but an on-chain check found it isn\'t currently rekeyed to that derived address - submit and\n            confirm the on-chain rekey transaction first; or the address activation registry was modified\n            concurrently by another request - retry.", status_, responseText_, headers_, null);
                         }
                         else
                         {
@@ -3911,6 +3911,14 @@ namespace BiatecMCP.Generated
         [System.Text.Json.Serialization.JsonPropertyName("address")]
         public string Address { get; set; }
 
+        /// <summary>
+        /// Which of the seed/slot's Algorand keys signs for BiatecOIDC.Model.ActivateAddressRequest.Address - `"Ed25519"` (default, also when omitted)
+        /// <br/>or `"Falcon"` (post-quantum Falcon-1024). AVM networks only. For an external address, `"Falcon"` means
+        /// <br/>it must be rekeyed on-chain to the seed/slot's Falcon address.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("keyType")]
+        public string KeyType { get; set; }
+
     }
 
     /// <summary>
@@ -3943,6 +3951,14 @@ namespace BiatecMCP.Generated
         /// </summary>
         [System.Text.Json.Serialization.JsonPropertyName("slot")]
         public int Slot { get; set; }
+
+        /// <summary>
+        /// Which signature scheme signs for BiatecOIDC.Model.ActiveAddressResponse.Address - `"Ed25519"` or `"Falcon"` (post-quantum
+        /// <br/>Falcon-1024, native `pqsig`). Only AVM addresses can be `"Falcon"`; every other family reports `"Ed25519"`
+        /// <br/>as a neutral default.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("keyType")]
+        public string KeyType { get; set; }
 
         /// <summary>
         /// When this pairing became active - a seed's own slot-0 AVM address (active implicitly, never
@@ -3999,6 +4015,14 @@ namespace BiatecMCP.Generated
         /// </summary>
         [System.Text.Json.Serialization.JsonPropertyName("slot")]
         public int Slot { get; set; }
+
+        /// <summary>
+        /// Which signature scheme signs for BiatecOIDC.Model.AddressInfoResponse.Address - `"Ed25519"` or `"Falcon"` (post-quantum
+        /// <br/>Falcon-1024, native `pqsig`). Only AVM addresses can be `"Falcon"`; every other family reports `"Ed25519"`
+        /// <br/>as a neutral default.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("keyType")]
+        public string KeyType { get; set; }
 
     }
 
@@ -4083,6 +4107,14 @@ namespace BiatecMCP.Generated
         /// </summary>
         [System.Text.Json.Serialization.JsonPropertyName("solanaAddress")]
         public string SolanaAddress { get; set; }
+
+        /// <summary>
+        /// The derived post-quantum Falcon-1024 Algorand address for the same seed/slot - a different Algorand account from
+        /// <br/>BiatecOIDC.Model.DerivedAddressResponse.Address (same seed material, `ARC76Account.Algorand.ARC76.GetEmailFalconAccount`), whose
+        /// <br/>transactions are signed with a native `pqsig`. Valid on every AVM network that supports Falcon signatures.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("falconAddress")]
+        public string FalconAddress { get; set; }
 
         /// <summary>
         /// The seed's identifying (Algorand slot-0) address, echoed back.

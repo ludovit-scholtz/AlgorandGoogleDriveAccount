@@ -62,6 +62,9 @@ namespace BiatecMCP.Model
         /// <summary>The derived Solana address (base58 ed25519 public key).</summary>
         public string SolanaAddress { get; set; } = string.Empty;
 
+        /// <summary>The derived post-quantum Falcon-1024 Algorand address (a different AVM account from <see cref="Address"/>, signed with <c>pqsig</c>).</summary>
+        public string FalconAddress { get; set; } = string.Empty;
+
         /// <summary>The seed's identifying (Algorand slot-0) address, echoed back.</summary>
         public string SeedAddress { get; set; } = string.Empty;
 
@@ -74,6 +77,9 @@ namespace BiatecMCP.Model
     {
         /// <summary>The address to register as signed by <c>{seedAddress}</c>/<c>{slot}</c> (the route segments).</summary>
         public string Address { get; set; } = string.Empty;
+
+        /// <summary><c>"Ed25519"</c> (default when <c>null</c>) or <c>"Falcon"</c> - which of the seed/slot's AVM keys signs for <see cref="Address"/>.</summary>
+        public string? KeyType { get; set; }
     }
 
     /// <summary>
@@ -99,6 +105,9 @@ namespace BiatecMCP.Model
 
         /// <summary>ARC-76 slot of <see cref="SeedAddress"/> - meaningless if <see cref="IsActive"/> is <c>false</c>.</summary>
         public int Slot { get; set; }
+
+        /// <summary><c>"Ed25519"</c> or <c>"Falcon"</c> (post-quantum Falcon-1024, native <c>pqsig</c>) - which of the seed/slot's AVM keys signs.</summary>
+        public string KeyType { get; set; } = "Ed25519";
     }
 
     /// <summary>One address in the caller's active-address mapping, as returned by <c>GET /wallet/active-addresses</c>.</summary>
@@ -115,6 +124,9 @@ namespace BiatecMCP.Model
 
         /// <summary>ARC-76 derivation slot within that seed.</summary>
         public int Slot { get; set; }
+
+        /// <summary><c>"Ed25519"</c> or <c>"Falcon"</c> (post-quantum Falcon-1024, native <c>pqsig</c>) - which of the seed/slot's AVM keys signs.</summary>
+        public string KeyType { get; set; } = "Ed25519";
 
         /// <summary>When this pairing became active.</summary>
         public DateTimeOffset ActivatedUtc { get; set; }
