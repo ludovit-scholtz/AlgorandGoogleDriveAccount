@@ -369,8 +369,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         {
             // A group limit only counts its own asset (0 = ALGO); a transfer of any other asset is uncapped even when a limit is set.
             var uncapped = (group.DailyLimit == 0 && group.MonthlyLimit == 0) || transferAssetIds.Any(asset => asset != group.LimitAssetId);
+            var guards = group.GuardCount > 0 ? $" (the group has {group.GuardCount} asset guard rule(s) this server does not decode, which may cap some assets)" : string.Empty;
             return uncapped
-                ? "Part of this is NOT covered by any spending limit (the signer group has no limit for it), and Biatec's own wallet spending limits do not apply to transfers a safe makes from its own account - confirm the amounts with the user before signing."
+                ? "Part of this is NOT covered by any spending limit (the signer group has no limit for it" + guards + "), and Biatec's own wallet spending limits do not apply to transfers a safe makes from its own account - confirm the amounts with the user before signing."
                 : string.Empty;
         }
 

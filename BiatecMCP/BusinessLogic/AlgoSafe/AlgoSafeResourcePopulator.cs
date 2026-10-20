@@ -81,7 +81,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
                     throw new AlgoSafeException("SimulationFailed", $"The network rejected this transaction when simulated: {Explain(result.FailureMessage)}")
                     {
-                        BudgetExhausted = result.FailureMessage.Contains("budget", StringComparison.OrdinalIgnoreCase)
+                        BudgetExhausted = result.FailureMessage.Contains("budget", StringComparison.OrdinalIgnoreCase) && result.FailureMessage.Contains("exceed", StringComparison.OrdinalIgnoreCase)
                     };
                 }
 

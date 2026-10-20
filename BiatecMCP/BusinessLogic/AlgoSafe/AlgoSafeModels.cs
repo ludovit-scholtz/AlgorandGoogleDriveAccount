@@ -31,8 +31,15 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// <summary>0 = unlimited.</summary>
         public ulong DailyLimit { get; set; }
         public ulong DailyUsage { get; set; }
+
+        /// <summary>The round the current daily period started; usage older than a period ago no longer counts, so a stale value here means the limit has effectively reset.</summary>
+        public ulong DailyPeriodStartRound { get; set; }
         public ulong MonthlyLimit { get; set; }
         public ulong MonthlyUsage { get; set; }
+        public ulong MonthlyPeriodStartRound { get; set; }
+
+        /// <summary>Number of per-asset guard rules on the group (extra caps/allowlists this server does not decode).</summary>
+        public ulong GuardCount { get; set; }
         public ulong CooldownRounds { get; set; }
         public ulong LastExecutionRound { get; set; }
         public IReadOnlyList<AlgoSafeMemberView> Members { get; set; } = Array.Empty<AlgoSafeMemberView>();

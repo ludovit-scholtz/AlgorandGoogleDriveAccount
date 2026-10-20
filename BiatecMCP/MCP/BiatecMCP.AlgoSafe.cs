@@ -114,7 +114,7 @@ namespace BiatecMCP.MCP
          Description("Lists an AlgoSafe's proposals, newest first, with status (Active = collecting approvals, Ready = threshold met and executable, Executed, Cancelled), approvals vs threshold and expiry. 'open' (default) shows Active and Ready ones. Read-only. Use a ProposalId with getAlgoSafeProposal, approveAlgoSafeProposal or executeAlgoSafeProposal.")]
         public async Task<ListAlgoSafeProposalsResponse> ListAlgoSafeProposals(
             [Description("The safe's application id.")] ulong appId,
-            [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
+            [Description("The network the safe lives on - an exact code from listSupportedNetworks. Use this SAME code for signTransaction and submitTransactionToBlockchain; never retry a failed broadcast with a different network.")] string network = "algorand-mainnet",
             [Description("Which proposals: open (Active+Ready, default), all, active, ready, executed or cancelled.")] string status = "open",
             [Description("Maximum number of proposals to return (1-100).")] int limit = 20)
         {
@@ -136,7 +136,7 @@ namespace BiatecMCP.MCP
         public async Task<GetAlgoSafeProposalResponse> GetAlgoSafeProposal(
             [Description("The safe's application id.")] ulong appId,
             [Description("The proposal id (from listAlgoSafeProposals or proposeAlgoSafeTransaction's result).")] ulong proposalId,
-            [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
+            [Description("The network the safe lives on - an exact code from listSupportedNetworks. Use this SAME code for signTransaction and submitTransactionToBlockchain; never retry a failed broadcast with a different network.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) whose address is checked for membership/approval instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot of the checked address. Defaults to 0.")] int slot = 0)
         {
@@ -201,7 +201,7 @@ namespace BiatecMCP.MCP
             [Description("The safe's application id (from getAlgoSafeDeployment).")] ulong appId,
             [Description("A name for the first signer group.")] string groupName = "Admins",
             [Description("Amount in microAlgo sent to the safe's own account.")] ulong depositMicroAlgo = 2_000_000,
-            [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
+            [Description("The network the safe lives on - an exact code from listSupportedNetworks. Use this SAME code for signTransaction and submitTransactionToBlockchain; never retry a failed broadcast with a different network.")] string network = "algorand-mainnet",
             [Description("The group's members (max 6). Omit for the simple 1-of-1 group with you as the only member.")] List<AlgoSafeMemberInput>? members = null,
             [Description("How many members must approve a proposal. Must be 1 without 'members'.")] ulong threshold = 1,
             [Description("Optional cap, in microAlgo, on the ALGO the group can send per day (0 = unlimited; asset transfers are not counted by it). Recommended for a safe an AI agent can propose to: Biatec's own spending limits do NOT see transfers a safe makes from its own account.")] ulong dailyLimitMicroAlgo = 0,
@@ -229,7 +229,7 @@ namespace BiatecMCP.MCP
             [Description("The safe's application id.")] ulong appId,
             [Description("The signer group proposing (see getAlgoSafe).")] ulong groupId,
             [Description("The transfers the safe will send - as many as fit in one call's arguments (about 14 payments or 13 asset transfers without notes).")] List<AlgoSafeTransferInput> transfers,
-            [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
+            [Description("The network the safe lives on - an exact code from listSupportedNetworks. Use this SAME code for signTransaction and submitTransactionToBlockchain; never retry a failed broadcast with a different network.")] string network = "algorand-mainnet",
             [Description("How many rounds the proposal stays valid (~2.8 s each; 100 minimum, default 1,000,000 is about 32 days).")] ulong expiryRounds = 1_000_000,
             [Description("Execute the transfers immediately in the same group. Only possible when the group's threshold is 1.")] bool executeNow = false,
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to propose as instead of the primary seed.")] string? seedAddress = null,
@@ -248,7 +248,7 @@ namespace BiatecMCP.MCP
         public Task<AlgoSafeStepResponse> ApproveAlgoSafeProposal(
             [Description("The safe's application id.")] ulong appId,
             [Description("The proposal id.")] ulong proposalId,
-            [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
+            [Description("The network the safe lives on - an exact code from listSupportedNetworks. Use this SAME code for signTransaction and submitTransactionToBlockchain; never retry a failed broadcast with a different network.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to approve as instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to approve as. Defaults to 0.")] int slot = 0) =>
             BuildAlgoSafeStepAsync(network, seedAddress, slot, nameof(ApproveAlgoSafeProposal), (builder, sender) =>
@@ -259,7 +259,7 @@ namespace BiatecMCP.MCP
         public Task<AlgoSafeStepResponse> ExecuteAlgoSafeProposal(
             [Description("The safe's application id.")] ulong appId,
             [Description("The proposal id.")] ulong proposalId,
-            [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
+            [Description("The network the safe lives on - an exact code from listSupportedNetworks. Use this SAME code for signTransaction and submitTransactionToBlockchain; never retry a failed broadcast with a different network.")] string network = "algorand-mainnet",
             [Description("A specific seed's identifying address (see listAlgorandAddresses) that pays the fees instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot that pays the fees. Defaults to 0.")] int slot = 0) =>
             BuildAlgoSafeStepAsync(network, seedAddress, slot, nameof(ExecuteAlgoSafeProposal), (builder, sender) =>
