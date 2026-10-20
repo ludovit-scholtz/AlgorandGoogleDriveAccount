@@ -18,5 +18,17 @@ namespace BiatecMCPTests
 
             Assert.That(version, Does.StartWith("5."), "Algorand.dll in the output is not from the Algorand5 package.");
         }
+
+        [Test]
+        public void LoadedMessagePackAssembly_IsAtLeastTheSecurityFixedVersion()
+        {
+            // 3.1.8 carries advisory GHSA-qhrr-8q5h-9q3h. There is no repo-wide pin anymore (Algorand5 5.0.3+ depends on
+            // 3.1.12 itself, BiatecOIDC references it explicitly), so this catches a dependency change re-introducing 3.1.8.
+            var assembly = typeof(MessagePack.MessagePackSerializer).Assembly;
+            var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
+            var version = Version.Parse(informational.Split('+', '-')[0]);
+
+            Assert.That(version, Is.GreaterThanOrEqualTo(new Version(3, 1, 12)));
+        }
     }
 }
