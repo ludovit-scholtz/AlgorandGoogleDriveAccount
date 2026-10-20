@@ -28,6 +28,7 @@ namespace BiatecMCPTests
         private Mock<INetworkResolver> _networkResolver = null!;
         private Mock<IPublicEvmRpcDataSource> _evmRpcDataSource = null!;
         private Mock<IPublicBitcoinDataSource> _bitcoinDataSource = null!;
+        private Mock<ISolanaRpcDataSource> _solanaRpcDataSource = null!;
 
         [SetUp]
         public void SetUp()
@@ -45,6 +46,7 @@ namespace BiatecMCPTests
             _networkResolver.Setup(r => r.ListNetworksAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new List<NetworkSummary>());
             _evmRpcDataSource = new Mock<IPublicEvmRpcDataSource>();
             _bitcoinDataSource = new Mock<IPublicBitcoinDataSource>();
+            _solanaRpcDataSource = new Mock<ISolanaRpcDataSource>();
         }
 
         private BiatecMCP.MCP.BiatecMCP CreateTool(DexSwapAggregatorService? aggregator = null) =>
@@ -55,6 +57,7 @@ namespace BiatecMCPTests
                 _networkResolver.Object,
                 _evmRpcDataSource.Object,
                 _bitcoinDataSource.Object,
+                _solanaRpcDataSource.Object,
                 NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
 
         private void SetBearerToken(string token) =>

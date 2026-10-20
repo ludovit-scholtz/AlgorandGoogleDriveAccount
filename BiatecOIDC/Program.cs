@@ -226,6 +226,17 @@ namespace BiatecOIDC
             builder.Services.AddHttpClient<BiatecOIDC.BusinessLogic.CoinGeckoValuationService>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IBitcoinValuationService>(sp => sp.GetRequiredService<BiatecOIDC.BusinessLogic.CoinGeckoValuationService>());
 
+            // Solana spending-limit valuation - same idea as Bitcoin above (native coin is the asset), SOL-USD spot
+            // price from CoinGecko under its own configuration section and cache key.
+            builder.Services.Configure<SolanaValuationConfiguration>(builder.Configuration.GetSection("SolanaValuation"));
+            builder.Services.AddHttpClient<BiatecOIDC.BusinessLogic.CoinGeckoSolanaValuationService>(client =>
+            {
+                // On the sign hot path (awaited before any limit check or signing): fail closed fast with a clear 503 rather than
+                // hanging for the default 100s while CoinGecko stalls.
+                client.Timeout = TimeSpan.FromSeconds(10);
+            });
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.ISolanaValuationService>(sp => sp.GetRequiredService<BiatecOIDC.BusinessLogic.CoinGeckoSolanaValuationService>());
+
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.ISpendingLimitService, BiatecOIDC.BusinessLogic.SpendingLimitService>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IWalletService, BiatecOIDC.BusinessLogic.WalletService>();
 

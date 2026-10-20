@@ -90,5 +90,33 @@ namespace BiatecOIDC.BusinessLogic
         /// <exception cref="FormatException">The transaction's implicit fee is unreasonably large, or it could not be built/signed.</exception>
         /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
         Task<byte[]> SignBitcoinTransactionGroupAsync(string email, string provider, BitcoinChainFamily family, BitcoinUnsignedTransaction transaction, string? accessToken, string? seedAddress = null, int slot = 0);
+
+        /// <summary>
+        /// Signs a native-SOL transfer via the shared self-custody signing path
+        /// (<see cref="BiatecSelfCustodyCore.BusinessLogic.IDriveService.SignSolanaTransactionAsync"/>), after pricing
+        /// the transferred amount in USD (<see cref="ISolanaValuationService"/>) and checking it against the caller's
+        /// daily/weekly/monthly limits - the same enforcement Bitcoin gets - together with the transaction's fixed 5,000-lamport network
+        /// fee. A transfer to the signer's own address (independently derived here) moves no principal, but still costs the fee. The amount is known exactly because
+        /// <see cref="SolanaUnsignedTransfer"/> is a structured transfer the signing path builds itself - no other
+        /// instruction can be smuggled into the signed message.
+        /// </summary>
+        /// <param name="email">The wallet owner (from the caller's validated OIDC access token).</param>
+        /// <param name="provider">The cloud storage provider the account is stored under.</param>
+        /// <param name="transfer">The unsigned transfer (recipient, lamports, recent blockhash).</param>
+        /// <param name="senderAddress">
+        /// The Solana address the caller asked to sign as (the sign route's <c>address</c>). Must equal the Solana address
+        /// derived for the resolved seed/slot, otherwise the request is refused - the activation registry resolves addresses
+        /// of <em>any</em> family to a seed/slot, so without this check e.g. an Algorand address of slot N would silently
+        /// sign from the Solana account of slot N.
+        /// </param>
+        /// <param name="accessToken">The caller-supplied provider access token used to read/decrypt the self-custody account file and the spending-limit data.</param>
+        /// <param name="seedAddress">Selects which seed signs (<c>null</c> = the vault's current primary seed).</param>
+        /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
+        /// <returns>The fully-signed, serialized transaction.</returns>
+        /// <exception cref="SolanaValuationException">The current SOL-USD spot price could not be determined.</exception>
+        /// <exception cref="SpendingLimitExceededException">The transfer exceeds a configured global or address-specific daily/weekly/monthly limit.</exception>
+        /// <exception cref="FormatException">The transfer could not be built/signed (e.g. an invalid recipient or blockhash), or <paramref name="senderAddress"/> isn't the resolved seed/slot's Solana address.</exception>
+        /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
+        Task<byte[]> SignSolanaTransferAsync(string email, string provider, SolanaUnsignedTransfer transfer, string senderAddress, string? accessToken, string? seedAddress = null, int slot = 0);
     }
 }

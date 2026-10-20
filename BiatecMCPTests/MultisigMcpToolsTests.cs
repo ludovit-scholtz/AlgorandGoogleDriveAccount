@@ -38,6 +38,7 @@ namespace BiatecMCPTests
         private Mock<INetworkResolver> _networkResolver = null!;
         private Mock<IPublicEvmRpcDataSource> _evmRpcDataSource = null!;
         private Mock<IPublicBitcoinDataSource> _bitcoinDataSource = null!;
+        private Mock<ISolanaRpcDataSource> _solanaRpcDataSource = null!;
 
         [SetUp]
         public void SetUp()
@@ -52,6 +53,7 @@ namespace BiatecMCPTests
             _networkResolver = new Mock<INetworkResolver>();
             _evmRpcDataSource = new Mock<IPublicEvmRpcDataSource>();
             _bitcoinDataSource = new Mock<IPublicBitcoinDataSource>();
+            _solanaRpcDataSource = new Mock<ISolanaRpcDataSource>();
         }
 
         private BiatecMCP.MCP.BiatecMCP CreateTool() =>
@@ -62,6 +64,7 @@ namespace BiatecMCPTests
                 _networkResolver.Object,
                 _evmRpcDataSource.Object,
                 _bitcoinDataSource.Object,
+                _solanaRpcDataSource.Object,
                 NullLogger<BiatecMCP.MCP.BiatecMCP>.Instance);
 
         private static TransactionParametersResponse SuggestedParams() => new()

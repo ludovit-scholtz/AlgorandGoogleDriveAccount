@@ -274,5 +274,34 @@ namespace BiatecMCPTests
                 Assert.That(resolved!.Code, Is.EqualTo(summary.Code));
             }
         }
+
+        [Test]
+        public async Task ResolveAsync_SolanaCode_ResolvesToSolanaFamily()
+        {
+            var resolved = await CreateResolver().ResolveAsync("Solana");
+
+            Assert.That(resolved, Is.Not.Null);
+            Assert.That(resolved!.Family, Is.EqualTo(ChainFamily.Sol));
+            Assert.That(resolved.Code, Is.EqualTo("solana"));
+            Assert.That(resolved.DisplayName, Is.EqualTo("Solana"));
+        }
+
+        [TestCase("solana-mainnet")]
+        [TestCase("solana-devnet")]
+        [TestCase("sol")]
+        public async Task ResolveAsync_OtherSolanaSpellings_AreNotAccepted(string code)
+        {
+            Assert.That(await CreateResolver().ResolveAsync(code), Is.Null);
+        }
+
+        [Test]
+        public async Task ListNetworksAsync_IncludesSolana()
+        {
+            var networks = await CreateResolver().ListNetworksAsync();
+
+            var solana = networks.Single(n => n.Code == "solana");
+            Assert.That(solana.Family, Is.EqualTo("Sol"));
+            Assert.That(solana.NativeCurrencySymbol, Is.EqualTo("SOL"));
+        }
     }
 }

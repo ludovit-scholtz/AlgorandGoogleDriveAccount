@@ -347,6 +347,48 @@
             </div>
         </section>
 
+        <section id="solana-chain">
+            <div class="section-head">
+                <div class="kicker">Solana</div>
+                <h2>Solana</h2>
+                <p>One network code, <code style="font-family:var(--font-mono);color:var(--accent-cyan);">solana</code> (mainnet-beta). Every seed's Solana address (ed25519) is derived from the same mnemonic as its other addresses.</p>
+            </div>
+            <div class="table-wrap">
+                <table class="ref-table" id="solanaTable">
+                    <thead>
+                        <tr>
+                            <th>Chain</th>
+                            <th>Address</th>
+                            <th>Balance</th>
+                            <th>Send / Sign</th>
+                            <th>Spending limits</th>
+                            <th>Rekey</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Solana</td>
+                            <td>Yes</td>
+                            <td>Native SOL only</td>
+                            <td>Native SOL transfers</td>
+                            <td>Yes</td>
+                            <td>No</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="callout">
+                <span class="callout-icon">ℹ️</span>
+                <p>
+                    Solana support covers <strong>native SOL only</strong>: addresses, SOL balances, and signing/sending
+                    SOL transfers (spending limits apply, priced in USD). SPL tokens and arbitrary program instructions
+                    are not supported - the sign endpoint builds the single transfer itself so exactly what is spent is
+                    known. Rekey has no Solana equivalent. Use BiatecMCP's <code>getCryptoAddress</code>,
+                    <code>getCryptoBalance</code> and <code>createSolanaTransaction</code> tools.
+                </p>
+            </div>
+        </section>
+
         <footer class="footer">
             <div class="footer-links">
                 <a href="/">Docs</a>

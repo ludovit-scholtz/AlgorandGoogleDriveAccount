@@ -13,7 +13,10 @@ namespace BiatecMCP.BusinessLogic
         Btc,
 
         /// <summary>Bitcoin Cash mainnet.</summary>
-        Bch
+        Bch,
+
+        /// <summary>Solana mainnet-beta.</summary>
+        Sol
     }
 
     /// <summary>One network a <c>network</c> tool parameter successfully resolved to.</summary>
@@ -52,7 +55,7 @@ namespace BiatecMCP.BusinessLogic
         /// The exact, case-insensitive string every <c>network</c> tool parameter expects for this chain -
         /// e.g. <c>"algorand-mainnet"</c>, <c>"algorand-testnet"</c>, <c>"voi-mainnet"</c>,
         /// <c>"aramid-mainnet"</c>, <c>"base"</c>, <c>"arbitrum"</c>, <c>"bitcoin"</c>,
-        /// <c>"bitcoin-cash"</c>. See <see cref="NetworkResolver"/>'s remarks for the naming convention.
+        /// <c>"bitcoin-cash"</c>, <c>"solana"</c>. See <see cref="NetworkResolver"/>'s remarks for the naming convention.
         /// </summary>
         public string Code { get; set; } = string.Empty;
 

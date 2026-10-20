@@ -72,13 +72,13 @@ dependency on `BiatecSelfCustodyCore`.
     `/.well-known/oauth-protected-resource`, shapes the 401/`WWW-Authenticate` challenge) — see
     `ModelContextProtocol.AspNetCore.Authentication.McpAuthenticationOptions`/`ProtectedResourceMetadata`.
     `AddAuthorizationBuilder().AddPolicy("sign", ...)` backs the `sign`-claim gate; `app.MapMcp("/tools").RequireAuthorization()`.
-  - `MCP/BiatecMCP.cs` — 20 MCP tools split into three chainable steps (build → sign → execute) rather than
+  - `MCP/BiatecMCP.cs` — 21 MCP tools split into three chainable steps (build → sign → execute) rather than
     one monolithic call, so an unsigned transaction can be inspected, handed to a different signer, or
     combined as part of a multisig proposal before ever being broadcast:
     `listAlgorandAddresses`, `getBridgeConfiguration`, `listSupportedNetworks`, `getCryptoAddress`,
     `getCryptoBalance`, `getAddressInfo`, `listActiveAddresses` (read-only - `getAddressInfo`/
     `listActiveAddresses` and the four before them are
-    chain-family-agnostic, see "EVM (Ethereum-family) support"/"Bitcoin/Bitcoin Cash support" below and
+    chain-family-agnostic, see "EVM (Ethereum-family) support"/"Bitcoin/Bitcoin Cash support"/"Solana support" below and
     "Address-centric wallet API and
     rekey support" in `BiatecOIDC`'s notes), `getMultisigAddress` (pure derivation of a multisig account's
     address from its ordered participants + threshold - see "Multisig transactions" below);
@@ -89,7 +89,8 @@ dependency on `BiatecSelfCustodyCore`.
     `sign` claim needed - see "Multisig transactions" below), `convertToMultisigTransactions` (wraps
     already-built standard unsigned AVM transactions into multisig cosigning envelopes, build-only - see
     "Multisig transactions" below), `createBitcoinTransaction` (build-only, UTXO
-    selection - see "Bitcoin/Bitcoin Cash support" below); `activateCryptoAddress` (registers a
+    selection - see "Bitcoin/Bitcoin Cash support" below), `createSolanaTransaction` (build-only native-SOL
+    transfer - see "Solana support" below); `activateCryptoAddress` (registers a
     seed/slot → address pairing - the entry point for rekeying an external Algorand address to a
     Biatec-controlled key, requires `sign`); `signTransaction` (standalone - forwards
     to BiatecOIDC's `POST /wallet/{network}/{address}/sign`, requires `sign`), `mergeMultisigTransactions`
@@ -149,6 +150,10 @@ dependency on `BiatecSelfCustodyCore`.
     `Model/BitcoinModels.cs` — Bitcoin/Bitcoin Cash UTXO data source and coin-selection/fee-estimation logic
     (see "Bitcoin/Bitcoin Cash support" below); backs `getCryptoAddress`/`getCryptoBalance`'s Btc/Bch
     branches, `createBitcoinTransaction`, and `submitTransactionToBlockchain`'s Bitcoin-family branch
+  - `BusinessLogic/ISolanaRpcDataSource.cs`/`SolanaRpcDataSource.cs`, `Helper/SolanaAddressValidator.cs`,
+    `Model/SolanaConfiguration.cs`/`SolanaModels.cs` — Solana JSON-RPC (balance, blockhash, broadcast), address
+    validation and the sign-endpoint wire DTO (see "Solana support" below); back `getCryptoAddress`/
+    `getCryptoBalance`'s Sol branches, `createSolanaTransaction`, and `submitTransactionToBlockchain`'s Solana branch
   - `Helper/AlgorandTransactionBuilder.cs` — builds *unsigned* payment/asset-transfer/opt-in/asset-create
     transactions (Algorand5 SDK) and canonical-msgpack-encodes them for `/wallet/sign` - no key material
     ever touches this project
@@ -231,6 +236,9 @@ dependency on `BiatecSelfCustodyCore`.
     prices a Bitcoin/Bitcoin Cash native-asset spend in USD via CoinGecko's public spot-price endpoint (see
     "Bitcoin/Bitcoin Cash support" below); no router involved, unlike `BiatecRouterValuationService` above,
     since the native coin *is* the asset
+  - `BusinessLogic/CoinGeckoSolanaValuationService.cs` (+ `ISolanaValuationService`, `SolanaValuationException`,
+    `Model/SolanaValuationConfiguration.cs`) — the SOL-USD equivalent for Solana spends, independent of the
+    BTC/BCH pair above (see "Solana support" below)
   - `BusinessLogic/ProviderAccessTokenProtector.cs` (+ `IProviderAccessTokenProtector`) — AES-256-GCM encrypts the
     caller's Google/Microsoft access token (under `ProviderTokenProtectionConfiguration`, a key dedicated to this
     - never `AesOptions`) so it can be cached inside issued access/refresh tokens; see the "Provider access token
@@ -753,7 +761,7 @@ setup stage needs.
   registry may report just as `"Algorand"` with no "Mainnet"/"Testnet" suffix), and any other AVM chain the
   dynamic registry currently reports falls back to `SlugifyAvmName` on its own display name, so a newly-added
   public AVM chain still gets a predictable code with no code change here first. EVM and Bitcoin-family codes
-  have no variant suffix (`ethereum`, `arbitrum`, `base`, `bitcoin`, `bitcoin-cash`) - EVM is deliberately just
+  have no variant suffix (`ethereum`, `arbitrum`, `base`, `bitcoin`, `bitcoin-cash`, `solana`) - EVM is deliberately just
   the closed `WellKnownEvmChains` table (`ethereum`/`gnosis`/`arbitrum`/`base`), not the whole ~2,700-chain
   public universe a caller could previously address by name or numeric id. `BiatecOIDC` has its own
   independent copy of this same table (per this repo's no-compile-time-coupling rule) - it must stay in sync,
@@ -838,6 +846,68 @@ setup stage needs.
   a day). Only non-change outputs are priced (`BitcoinTransactionOutput.IsChange`) - money returning to the
   sender's own change address was never actually spent, so counting it would overstate every transfer's
   real cost against the limit.
+- **Solana support**: a fifth chain family, `ChainFamily.Sol` (both apps' independent `INetworkResolver` copies),
+  network code `solana` (Solana mainnet-beta) - **no other Solana code is accepted** (`solana-mainnet`,
+  `solana-devnet`, `sol` all fail with `unknown_network`). Mainnet only on purpose: a Solana transaction doesn't
+  encode its cluster, so a separate devnet code that skipped spending-limit enforcement would let a mainnet
+  transaction bypass the limits just by being signed under that code; add devnet only together with a
+  cluster-binding check. Keys come from the `ARC76Account.Solana` package (`SolanaArc76` alias in
+  `CloudAccountRepository.cs`, ed25519, `Solnet.Wallet.Account`) off the same mnemonic/email/slot as every other
+  family - `ICloudAccountRepository.LoadSolanaAccountAsync`/`DeriveSolanaAddressAsync` mirror the EVM pair exactly,
+  and `GET /wallet/address/{seedAddress}/{slot?}` derives and auto-activates `solanaAddress` (activation `Family`
+  `"Sol"`) alongside the others; explicit `POST .../activate` is rejected for Solana like Bitcoin (no rekey
+  concept). Base58 addresses are case-sensitive, and `AddressActivationService` already matches them ordinally.
+
+  **The sign endpoint accepts a structured native-SOL transfer, not a Solana message.** A Solana transaction can
+  carry any number of arbitrary program instructions, so a pre-serialized blob could hide spend (or an authority
+  change) that nothing could price or limit. `POST /wallet/solana/{address}/sign` therefore takes exactly one
+  base64 UTF-8 JSON `SolanaUnsignedTransfer` (`Recipient`, `Lamports`, `RecentBlockhash`; PascalCase, duplicated
+  in `BiatecMCP/Model/SolanaModels.cs` - keep the property names in sync), and `DriveService.SignSolanaTransactionAsync`
+  builds the one System Program `transfer` itself via Solnet (`TransactionBuilder`, legacy format, signer as both
+  sender and fee payer, no priority-fee instruction), so what is spent is known by construction. SPL tokens and
+  arbitrary programs are deliberately unsupported. Recipient/blockhash are validated as base58 32-byte values
+  (`FormatException` -> 400, incl. `Lamports` above `long.MaxValue` - bounded so `Lamports` + the fee can never wrap `ulong`
+  into a tiny priced spend - checked *before* anything is priced, so a malformed request is a clean 400 rather than being
+  masked by a valuation outage or exhausted limit). The route's `address` must also equal the resolved seed/slot's own
+  Solana address (`WalletService.SignSolanaTransferAsync`'s `senderAddress` check, 400 otherwise), as a second line
+  of defense behind `WalletController.ResolveSignerAsync`'s family check: the activation registry maps an address of
+  *any* family to a (seed, slot), so `ResolveSignerAsync` now takes the route's `ChainFamily` and only resolves a
+  seed's own Algorand address on an AVM network and only registry entries whose `Family` matches (an entry with no
+  recorded family is treated as legacy `Avm`, so it fails closed on every other family's route) - for every network family, so slot N's Solana/Bitcoin/Algorand address can no longer
+  make slot N's EVM (or any other family's) key sign, and `GET .../info` reports an address inactive on a network
+  of another family.
+  Spending limits **are** enforced (`WalletService.SignSolanaTransferAsync`): the
+  lamports are priced via `ISolanaValuationService`/`CoinGeckoSolanaValuationService` (CoinGecko SOL-USD, its own
+  `SolanaValuation` config section and `oidc:fx:coingecko-sol-usd` cache key, deliberately independent of the
+  BTC/BCH pair so a deployment overriding `BitcoinValuation:CoinGeckoSimplePriceUrl` needs no change), checked
+  against the same global + per-address windows, and recorded to the ledger (`Kind = "Solana"`). Every transfer
+  also counts the fixed 5,000-lamport network fee (legacy one-signature message, no priority fee), so many tiny
+  transfers can't push real outflow past a limit unseen; a transfer to the signer's *own* independently-derived
+  address moves no principal (never trusts caller claims) but still costs the fee; an unpriceable spend
+  fails closed (`SolanaValuationException` -> 503 `asset_valuation_failed`).
+
+  `BiatecMCP` side: `ISolanaRpcDataSource`/`SolanaRpcDataSource` (raw JSON-RPC over a typed `HttpClient`, node URL
+  from the `Solana:RpcUrl` config section - default Solana's rate-limited public endpoint, point it at a real RPC
+  provider for production traffic - it must be mainnet-beta, since OIDC prices/limits every Solana transfer as mainnet SOL
+  and nothing detects a devnet URL; every method fails soft, `sendTransaction` returns the node's error text incl.
+  `error.data.err` such as `AccountNotFound`). Blockhash, balance pre-check and broadcast preflight all use `confirmed`
+  commitment so they agree (a `finalized` blockhash is already ~13s into its ~60s life). A 4xx from `sendTransaction`
+  (rate limit) is a definite "not accepted" - resubmitting the same signed bytes is safe; a timeout/dropped
+  connection/5xx is reported as `BroadcastOutcomeUnknown` with the signature computed locally from the signed bytes
+  (`SolanaAddressValidator.TryComputeSignature`) and an explorer link - the transaction may have been accepted, so an
+  agent must check before building and signing a *new* transfer (resubmitting the identical signed transaction can
+  never execute twice - and if the first attempt did land, the node's "already processed" answer to that resubmission is confirmed via `getSignatureStatuses` first - success only if it landed without error and is `confirmed`/`finalized` (a merely `processed` entry may sit on a dropped fork), a landed-but-FAILED
+  transaction is a definite failure, and an unconfirmable status stays "outcome unknown" - never assumed successful). `getCryptoAddress`/`getCryptoBalance` gained Solana branches (native
+  SOL only, balance as lamports string + SOL), `createSolanaTransaction` (build-only, no `sign` claim: validates the
+  receiver via `SolanaAddressValidator` before any RPC call, best-effort balance pre-check against amount + the
+  5,000-lamport base fee, fetches a `confirmed`-commitment blockhash, returns the wire JSON), `signTransaction` needs no
+  branch (forwards the blob), and `submitTransactionToBlockchain` broadcasts exactly one signed transaction
+  (explorer link `https://explorer.solana.com/tx/{signature}`). The blockhash expires after roughly a minute, so
+  sign-and-submit promptly (tool descriptions say so). Rent-exemption failures (sending under ~0.00089 SOL to a
+  brand-new address, or leaving the sender a tiny non-zero balance) surface from the node at broadcast time.
+  Verified against mainnet-beta in this session without moving funds: a transaction signed exactly as
+  `DriveService` does it from an unfunded account is accepted by the node's deserializer and rejected only by
+  simulation with `AccountNotFound`. `BiatecMCPTests/Arc76KnownAnswerTests` pins Solana derivation vectors.
 - **Unified broadcast tool**: `submitTransactionToBlockchain` (`BiatecMCP/MCP/BiatecMCP.cs`) is the single MCP tool for
   submitting an already-signed transaction to any blockchain this server supports - replaced two earlier,
   separate tools (`executeAlgorandTransaction`/`executeBitcoinTransaction`) that made a connected agent guess

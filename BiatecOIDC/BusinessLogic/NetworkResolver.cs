@@ -38,6 +38,7 @@ namespace BiatecOIDC.BusinessLogic
 
         private const string BitcoinCode = "bitcoin";
         private const string BitcoinCashCode = "bitcoin-cash";
+        private const string SolanaCode = "solana";
 
         private readonly IAlgorandChainRegistry _algorandChainRegistry;
 
@@ -73,6 +74,11 @@ namespace BiatecOIDC.BusinessLogic
             if (string.Equals(BitcoinCashCode, network, StringComparison.OrdinalIgnoreCase))
             {
                 return new ResolvedNetwork { Family = ChainFamily.Bch, DisplayName = "Bitcoin Cash" };
+            }
+
+            if (string.Equals(SolanaCode, network, StringComparison.OrdinalIgnoreCase))
+            {
+                return new ResolvedNetwork { Family = ChainFamily.Sol, DisplayName = "Solana" };
             }
 
             return null;

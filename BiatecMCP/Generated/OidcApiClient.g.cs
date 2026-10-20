@@ -108,7 +108,9 @@ namespace BiatecMCP.Generated
         /// <br/>that provider directly. Omit to show the picker.</param>
         /// <param name="scopeId">Test/dev-only (see `MOCK_TESTING.md`): combined with `idp=Mock`, skips the mock
         /// <br/>account picker too and signs in directly as the configured account with this
-        /// <br/>`CloudServices:Mock:Accounts[].ScopeId`. Ignored for any other idp.</param>
+        /// <br/>`CloudServices:Mock:Accounts[].ScopeId`. Without idp, it's forwarded to
+        /// <br/>M:BiatecOIDC.Controllers.JwtIssuerController.SelectProvider(System.String,System.String), where it's the only thing that makes the mock provider's button
+        /// <br/>render at all. Ignored for any other idp.</param>
         /// <returns>OK</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
         System.Threading.Tasks.Task AuthorizeAsync(string client_id = null, string redirect_uri = null, string returnUrl = null, string response_type = null, string response_mode = null, string scope = null, string state = null, string nonce = null, string code_challenge = null, string code_challenge_method = null, string resource = null, string idp = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
@@ -122,14 +124,19 @@ namespace BiatecMCP.Generated
         /// <br/>renders a sign-in button that can't work.
         /// </summary>
         /// <param name="requestId">Opaque id of the pending authorize request stored by `/authorize`.</param>
+        /// <param name="scopeId">Test/dev-only (see `MOCK_TESTING.md`): the mock-account `scopeId` the caller passed to
+        /// <br/>`/authorize`, forwarded here so the picker knows the caller explicitly opted into mock
+        /// <br/>testing. The mock provider's button only renders when this names a configured
+        /// <br/>`CloudServices:Mock:Accounts` entry - never on the default picker, so a real user can't
+        /// <br/>stumble into the mock sign-in path by accident.</param>
         /// <returns>OK</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
-        System.Threading.Tasks.Task SelectProviderAsync(string requestId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
+        System.Threading.Tasks.Task SelectProviderAsync(string requestId = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
 
         /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
         /// <summary>
         /// Challenges the chosen provider's sign-in. Reached either directly (the `idp` fast track on
-        /// <br/>`/authorize`) or via a M:BiatecOIDC.Controllers.JwtIssuerController.SelectProvider(System.String) button click.
+        /// <br/>`/authorize`) or via a M:BiatecOIDC.Controllers.JwtIssuerController.SelectProvider(System.String,System.String) button click.
         /// </summary>
         /// <param name="requestId">Opaque id of the pending authorize request.</param>
         /// <param name="idp">`"google"` or `"microsoft"`.</param>
@@ -392,7 +399,11 @@ namespace BiatecMCP.Generated
         /// <br/>same across every EVM chain - see `CLAUDE.md`'s "EVM (Ethereum-family) support" note).
         /// </summary>
         /// <param name="seedAddress">The seed's own identifying (slot-0) address.</param>
-        /// <param name="slot">ARC-76 derivation index within that seed. Defaults to `0`.</param>
+        /// <param name="slot">ARC-76 derivation index within that seed. Defaults to `0`. Bounded to
+        /// <br/>`[0, BiatecOIDC.Controllers.WalletController.MaxDerivationSlot]` - this endpoint requires only an identity-level
+        /// <br/>(`openid`) token and writes up to five entries to the caller's own cloud storage per distinct
+        /// <br/>slot, so an unbounded caller-supplied slot would let the lowest-privilege token grow that file
+        /// <br/>without limit (audit finding M-04/R-029).</param>
         /// <returns>The derived addresses.</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
         System.Threading.Tasks.Task<DerivedAddressResponse> AddressAsync(string seedAddress, int slot, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken));
@@ -433,7 +444,9 @@ namespace BiatecMCP.Generated
         /// <br/>just registers it immediately - the same thing `GET /wallet/address/{seedAddress}/{slot}`
         /// <br/>already does automatically, so calling this for a native address is rarely necessary.
         /// </summary>
-        /// <param name="network">Which chain the address belongs to - see `GET /chains`. EVM chains are only accepted for a native address (EVM has no rekey concept).</param>
+        /// <param name="network">Which chain the address belongs to - see `GET /chains`. EVM chains are only accepted for a
+        /// <br/>native address (EVM has no rekey concept); Bitcoin/Bitcoin Cash are rejected outright (same
+        /// <br/>reasoning - see M:BiatecOIDC.Controllers.WalletController.ActivateAddress(System.String,System.String,System.Int32,BiatecOIDC.Model.ActivateAddressRequest)'s remarks).</param>
         /// <param name="seedAddress">Which seed's key signs for the address being activated - its own identifying (Algorand slot-0) address.</param>
         /// <param name="slot">ARC-76 derivation index within that seed.</param>
         /// <param name="body">The address to activate.</param>
@@ -916,7 +929,9 @@ namespace BiatecMCP.Generated
         /// <br/>that provider directly. Omit to show the picker.</param>
         /// <param name="scopeId">Test/dev-only (see `MOCK_TESTING.md`): combined with `idp=Mock`, skips the mock
         /// <br/>account picker too and signs in directly as the configured account with this
-        /// <br/>`CloudServices:Mock:Accounts[].ScopeId`. Ignored for any other idp.</param>
+        /// <br/>`CloudServices:Mock:Accounts[].ScopeId`. Without idp, it's forwarded to
+        /// <br/>M:BiatecOIDC.Controllers.JwtIssuerController.SelectProvider(System.String,System.String), where it's the only thing that makes the mock provider's button
+        /// <br/>render at all. Ignored for any other idp.</param>
         /// <returns>OK</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
         public virtual async System.Threading.Tasks.Task AuthorizeAsync(string client_id = null, string redirect_uri = null, string returnUrl = null, string response_type = null, string response_mode = null, string scope = null, string state = null, string nonce = null, string code_challenge = null, string code_challenge_method = null, string resource = null, string idp = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
@@ -1044,9 +1059,14 @@ namespace BiatecMCP.Generated
         /// <br/>renders a sign-in button that can't work.
         /// </summary>
         /// <param name="requestId">Opaque id of the pending authorize request stored by `/authorize`.</param>
+        /// <param name="scopeId">Test/dev-only (see `MOCK_TESTING.md`): the mock-account `scopeId` the caller passed to
+        /// <br/>`/authorize`, forwarded here so the picker knows the caller explicitly opted into mock
+        /// <br/>testing. The mock provider's button only renders when this names a configured
+        /// <br/>`CloudServices:Mock:Accounts` entry - never on the default picker, so a real user can't
+        /// <br/>stumble into the mock sign-in path by accident.</param>
         /// <returns>OK</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
-        public virtual async System.Threading.Tasks.Task SelectProviderAsync(string requestId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        public virtual async System.Threading.Tasks.Task SelectProviderAsync(string requestId = null, string scopeId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
         {
             var client_ = _httpClient;
             var disposeClient_ = false;
@@ -1064,6 +1084,10 @@ namespace BiatecMCP.Generated
                     if (requestId != null)
                     {
                         urlBuilder_.Append(System.Uri.EscapeDataString("requestId")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(requestId, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    if (scopeId != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("scopeId")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(scopeId, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
                     }
                     urlBuilder_.Length--;
 
@@ -1117,7 +1141,7 @@ namespace BiatecMCP.Generated
         /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
         /// <summary>
         /// Challenges the chosen provider's sign-in. Reached either directly (the `idp` fast track on
-        /// <br/>`/authorize`) or via a M:BiatecOIDC.Controllers.JwtIssuerController.SelectProvider(System.String) button click.
+        /// <br/>`/authorize`) or via a M:BiatecOIDC.Controllers.JwtIssuerController.SelectProvider(System.String,System.String) button click.
         /// </summary>
         /// <param name="requestId">Opaque id of the pending authorize request.</param>
         /// <param name="idp">`"google"` or `"microsoft"`.</param>
@@ -2971,7 +2995,11 @@ namespace BiatecMCP.Generated
         /// <br/>same across every EVM chain - see `CLAUDE.md`'s "EVM (Ethereum-family) support" note).
         /// </summary>
         /// <param name="seedAddress">The seed's own identifying (slot-0) address.</param>
-        /// <param name="slot">ARC-76 derivation index within that seed. Defaults to `0`.</param>
+        /// <param name="slot">ARC-76 derivation index within that seed. Defaults to `0`. Bounded to
+        /// <br/>`[0, BiatecOIDC.Controllers.WalletController.MaxDerivationSlot]` - this endpoint requires only an identity-level
+        /// <br/>(`openid`) token and writes up to five entries to the caller's own cloud storage per distinct
+        /// <br/>slot, so an unbounded caller-supplied slot would let the lowest-privilege token grow that file
+        /// <br/>without limit (audit finding M-04/R-029).</param>
         /// <returns>The derived addresses.</returns>
         /// <exception cref="OidcApiException">A server side error occurred.</exception>
         public virtual async System.Threading.Tasks.Task<DerivedAddressResponse> AddressAsync(string seedAddress, int slot, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
@@ -3035,13 +3063,19 @@ namespace BiatecMCP.Generated
                         if (status_ == 400)
                         {
                             string responseText_ = ( response_.Content == null ) ? string.Empty : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
-                            throw new OidcApiException("No seed with that address exists in the caller\'s vault.", status_, responseText_, headers_, null);
+                            throw new OidcApiException("No seed with that address exists in the caller\'s vault, or slot is out of range.", status_, responseText_, headers_, null);
                         }
                         else
                         if (status_ == 401)
                         {
                             string responseText_ = ( response_.Content == null ) ? string.Empty : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
                             throw new OidcApiException("The bearer token is missing, invalid, or expired, or no cached provider access token is available.", status_, responseText_, headers_, null);
+                        }
+                        else
+                        if (status_ == 409)
+                        {
+                            string responseText_ = ( response_.Content == null ) ? string.Empty : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
+                            throw new OidcApiException("The address activation registry was modified concurrently by another request - retry.", status_, responseText_, headers_, null);
                         }
                         else
                         {
@@ -3259,7 +3293,9 @@ namespace BiatecMCP.Generated
         /// <br/>just registers it immediately - the same thing `GET /wallet/address/{seedAddress}/{slot}`
         /// <br/>already does automatically, so calling this for a native address is rarely necessary.
         /// </summary>
-        /// <param name="network">Which chain the address belongs to - see `GET /chains`. EVM chains are only accepted for a native address (EVM has no rekey concept).</param>
+        /// <param name="network">Which chain the address belongs to - see `GET /chains`. EVM chains are only accepted for a
+        /// <br/>native address (EVM has no rekey concept); Bitcoin/Bitcoin Cash are rejected outright (same
+        /// <br/>reasoning - see M:BiatecOIDC.Controllers.WalletController.ActivateAddress(System.String,System.String,System.Int32,BiatecOIDC.Model.ActivateAddressRequest)'s remarks).</param>
         /// <param name="seedAddress">Which seed's key signs for the address being activated - its own identifying (Algorand slot-0) address.</param>
         /// <param name="slot">ARC-76 derivation index within that seed.</param>
         /// <param name="body">The address to activate.</param>
@@ -3336,7 +3372,7 @@ namespace BiatecMCP.Generated
                         if (status_ == 400)
                         {
                             string responseText_ = ( response_.Content == null ) ? string.Empty : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
-                            throw new OidcApiException("network is unrecognized, seedAddress names an unknown seed, or an EVM address doesn\'t match its seed\'s own derived address.", status_, responseText_, headers_, null);
+                            throw new OidcApiException("network is unrecognized or is Bitcoin/Bitcoin Cash, seedAddress names an unknown seed, or an EVM address doesn\'t match its seed\'s own derived address.", status_, responseText_, headers_, null);
                         }
                         else
                         if (status_ == 401)
@@ -3354,7 +3390,7 @@ namespace BiatecMCP.Generated
                         if (status_ == 409)
                         {
                             string responseText_ = ( response_.Content == null ) ? string.Empty : await ReadAsStringAsync(response_.Content, cancellationToken).ConfigureAwait(false);
-                            throw new OidcApiException("`request.Address` differs from the seed\'s derived address (an external/rekey scenario)\r\n            but an on-chain check found it isn\'t currently rekeyed to that derived address - submit and\r\n            confirm the on-chain rekey transaction first.", status_, responseText_, headers_, null);
+                            throw new OidcApiException("`request.Address` differs from the seed\'s derived address (an external/rekey scenario)\r\n            but an on-chain check found it isn\'t currently rekeyed to that derived address - submit and\r\n            confirm the on-chain rekey transaction first; or the address activation registry was modified\r\n            concurrently by another request - retry.", status_, responseText_, headers_, null);
                         }
                         else
                         {
@@ -4043,6 +4079,12 @@ namespace BiatecMCP.Generated
         public string BitcoinCashAddress { get; set; }
 
         /// <summary>
+        /// The derived Solana address (base58 ed25519 public key) for the same seed/slot.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("solanaAddress")]
+        public string SolanaAddress { get; set; }
+
+        /// <summary>
         /// The seed's identifying (Algorand slot-0) address, echoed back.
         /// </summary>
         [System.Text.Json.Serialization.JsonPropertyName("seedAddress")]
@@ -4216,6 +4258,17 @@ namespace BiatecMCP.Generated
         [System.Text.Json.Serialization.JsonPropertyName("signedTransactions")]
         public System.Collections.Generic.ICollection<string> SignedTransactions { get; set; }
 
+        /// <summary>
+        /// Non-fatal warnings about this signed group - currently populated only when it contains one or more
+        /// <br/>Algorand transactions of a type `POST /wallet/{network}/{address}/sign` does not price against
+        /// <br/>the spending limit (application calls, asset configuration, and any other non-payment/non-asset-
+        /// <br/>transfer type - `appl` in particular can move arbitrary value via inner transactions, which
+        /// <br/>this endpoint cannot see or price). Empty for a group with nothing to warn about. Added so a
+        /// <br/>signed group's spend history is never silently understated (audit finding M-03/R-028).
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("warnings")]
+        public System.Collections.Generic.ICollection<string> Warnings { get; set; }
+
     }
 
     /// <summary>
@@ -4273,6 +4326,19 @@ namespace BiatecMCP.Generated
         /// </summary>
         [System.Text.Json.Serialization.JsonPropertyName("slot")]
         public int Slot { get; set; }
+
+        /// <summary>
+        /// Whether this limit is actually enforced by `POST /wallet/{network}/{address}/sign` on
+        /// <br/>BiatecOIDC.Model.SpendingLimitResponse.Network today. `true` for Bitcoin/Bitcoin Cash and Algorand mainnet; `false`
+        /// <br/>for every EVM chain (native-currency valuation isn't implemented yet) and every non-mainnet AVM
+        /// <br/>chain (the Biatec Router that prices assets isn't deployed there). `null` for the account-wide
+        /// <br/>global bucket (BiatecOIDC.Model.SpendingLimitResponse.Network is also `null` there), since enforcement is a per-network
+        /// <br/>question - see `GET /wallet/{network}/{address}/limits` for a network-specific answer. Added
+        /// <br/>so a configured limit is never silently weaker than the API's own response implies (audit findings
+        /// <br/>M-01/R-026, M-02/R-027).
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("limitsEnforced")]
+        public bool? LimitsEnforced { get; set; }
 
     }
 

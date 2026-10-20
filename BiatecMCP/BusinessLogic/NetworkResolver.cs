@@ -51,6 +51,7 @@ namespace BiatecMCP.BusinessLogic
 
         private const string BitcoinCode = "bitcoin";
         private const string BitcoinCashCode = "bitcoin-cash";
+        private const string SolanaCode = "solana";
 
         private readonly IAlgorandChainRegistry _algorandChainRegistry;
         private readonly IEvmChainRegistry _evmChainRegistry;
@@ -83,6 +84,7 @@ namespace BiatecMCP.BusinessLogic
                 nameof(ChainFamily.Evm) => await ResolveEvmByCodeAsync(match.Code, cancellationToken),
                 nameof(ChainFamily.Btc) => new ResolvedNetwork { Code = BitcoinCode, Family = ChainFamily.Btc, DisplayName = "Bitcoin" },
                 nameof(ChainFamily.Bch) => new ResolvedNetwork { Code = BitcoinCashCode, Family = ChainFamily.Bch, DisplayName = "Bitcoin Cash" },
+                nameof(ChainFamily.Sol) => new ResolvedNetwork { Code = SolanaCode, Family = ChainFamily.Sol, DisplayName = "Solana" },
                 _ => null
             };
         }
@@ -148,6 +150,7 @@ namespace BiatecMCP.BusinessLogic
 
             summaries.Add(new NetworkSummary { Code = BitcoinCode, Name = "Bitcoin", Family = nameof(ChainFamily.Btc), Id = BitcoinCode, NativeCurrencySymbol = "BTC" });
             summaries.Add(new NetworkSummary { Code = BitcoinCashCode, Name = "Bitcoin Cash", Family = nameof(ChainFamily.Bch), Id = BitcoinCashCode, NativeCurrencySymbol = "BCH" });
+            summaries.Add(new NetworkSummary { Code = SolanaCode, Name = "Solana", Family = nameof(ChainFamily.Sol), Id = SolanaCode, NativeCurrencySymbol = "SOL" });
 
             return summaries;
         }

@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using AlgorandArc76 = ARC76Account.Algorand.ARC76;
 using EthereumArc76 = ARC76Account.Ethereum.ARC76;
+using SolanaArc76 = ARC76Account.Solana.ARC76;
 
 namespace BiatecMCPTests
 {
@@ -23,6 +24,17 @@ namespace BiatecMCPTests
         {
             Assert.That(AlgorandArc76.GetEmailAccount(email, Mnemonic, slot).Address.ToString(), Is.EqualTo(expectedAvm));
             Assert.That(EthereumArc76.GetEmailAccount(email, Mnemonic, slot).GetPublicAddress(), Is.EqualTo(expectedEvm));
+        }
+
+        // Solana vectors generated with ARC76Account.Solana 1.0.4 and verified identical on 1.0.10.
+        [TestCase("alice@example.com", 0, "4nrWTvCH3vGghq2FXd22mifh3rKrKAXHw8xWJxt6tZ4H")]
+        [TestCase("alice@example.com", 1, "FoBNuzYQ4gpiP3jmevoiRVp3EnqBeXkB2HJ1LksSwYXJ")]
+        [TestCase("alice@example.com", 7, "9jxewpDahVqWQmC5uu3gzSoKBYX8SeqVyz5QE1jan3ft")]
+        [TestCase("Bob.Smith+tag@Example.org", 0, "6KhScr1kejXuRGfxJVGKcVVT4w439dLpwxq5fZD2Uq8W")]
+        [TestCase("Bob.Smith+tag@Example.org", 100, "81qYtomaG7mhmpMn1cjf9eQaSmExHyXeAHisbQx976ZX")]
+        public void GetEmailAccount_FixedInputs_DeriveStableSolanaAddresses(string email, int slot, string expectedSolana)
+        {
+            Assert.That(SolanaArc76.GetEmailAccount(email, Mnemonic, slot).PublicKey.Key, Is.EqualTo(expectedSolana));
         }
     }
 }

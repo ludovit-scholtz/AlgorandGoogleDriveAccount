@@ -204,6 +204,39 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             }
         }
 
+        public async Task<byte[]> SignSolanaTransactionAsync(string email, SolanaUnsignedTransfer transfer, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)
+        {
+            if (string.IsNullOrEmpty(email))
+            {
+                throw new ArgumentException("Email is required", nameof(email));
+            }
+
+            if (transfer == null)
+            {
+                throw new ArgumentException("Transfer data is required", nameof(transfer));
+            }
+
+            var recipient = transfer.Validate();
+
+            var account = await _cloudAccountRepository.LoadSolanaAccountAsync(email, slot, provider, accessToken, seedAddress);
+            try
+            {
+                var builder = new Solnet.Rpc.Builders.TransactionBuilder()
+                    .SetRecentBlockHash(transfer.RecentBlockhash)
+                    .SetFeePayer(account.PublicKey)
+                    .AddInstruction(Solnet.Programs.SystemProgram.Transfer(account.PublicKey, recipient, transfer.Lamports));
+
+                var signed = builder.Build(account);
+                _logger?.LogInformation($"SolanaAccountSign:{account.PublicKey.Key}");
+                return signed;
+            }
+            catch (Exception exc) when (exc is not ArgumentException)
+            {
+                _logger?.LogWarning(exc, "Failed to build/sign a Solana transaction.");
+                throw new FormatException("Unable to build or sign Solana transaction.", exc);
+            }
+        }
+
         public async Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)
         {
             if (string.IsNullOrEmpty(email))

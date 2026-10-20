@@ -99,7 +99,7 @@ way as `/userinfo`/`/introspect` (manual `Authorization: Bearer` extraction + `V
 
 - `POST /wallet/{network}/{address}/sign` — requires the `sign` claim. `network` is an exact, strict network
   code (`algorand-mainnet`, `algorand-testnet`, `voi-mainnet`, `aramid-mainnet`, `ethereum`, `arbitrum`,
-  `base`, `bitcoin`, `bitcoin-cash`, ...) resolved via `INetworkResolver` - no fuzzy matching, no raw genesis
+  `base`, `bitcoin`, `bitcoin-cash`, `solana`, ...) resolved via `INetworkResolver` - no fuzzy matching, no raw genesis
   id, no display name; unknown → 400 `unknown_network`. `address` is
   resolved to `(seedAddress, slot)` by `WalletController.ResolveSignerAsync`: first checked against every
   seed's own primary (slot-0) address (free, no file access), then against

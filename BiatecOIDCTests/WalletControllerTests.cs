@@ -113,8 +113,32 @@ namespace BiatecOIDCTests
                 .Returns((true, principal, (IDictionary<string, object>?)null, (string?)null));
         }
 
-        private Task<IActionResult> Sign(SignTransactionGroupRequest request, string network = TestNetwork, string? address = null) =>
-            _controller.SignTransactionGroup(network, address ?? TestAddress, request);
+        private const string EvmTestAddress = "0xEvmTestAddress";
+        private const string SolanaTestAddress = "SolanaTestAddress";
+
+        /// <summary>
+        /// Signs as <paramref name="address"/>, or - when none is given - as the default address OF THE ROUTE'S OWN FAMILY: the
+        /// seed's native Algorand address for AVM, and an activated (seed = <see cref="TestAddress"/>, slot 0) EVM / Solana address
+        /// otherwise. A route must only ever resolve addresses of its own family (see ResolveSignerAsync), so an Algorand address
+        /// is no longer a valid default for an EVM or Solana route.
+        /// </summary>
+        private Task<IActionResult> Sign(SignTransactionGroupRequest request, string network = TestNetwork, string? address = null)
+        {
+            if (address == null)
+            {
+                var family = network switch { "ethereum" => "Evm", "solana" => "Sol", _ => null };
+                if (family != null)
+                {
+                    address = family == "Evm" ? EvmTestAddress : SolanaTestAddress;
+                    var entry = new AddressActivationEntry { Address = address, Family = family, SeedAddress = TestAddress, Slot = 0 };
+                    _mockAddressActivationService
+                        .Setup(s => s.TryResolveAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), address, It.IsAny<CancellationToken>()))
+                        .ReturnsAsync(entry);
+                }
+            }
+
+            return _controller.SignTransactionGroup(network, address ?? TestAddress, request);
+        }
 
         private static string BuildPaymentTransactionBase64(Address? sender = null, Address? rekeyTo = null)
         {
@@ -1505,6 +1529,389 @@ namespace BiatecOIDCTests
             var result = await _controller.GetActiveAddresses();
 
             Assert.That(result, Is.InstanceOf<UnauthorizedObjectResult>());
+        }
+
+        // ───────────────────────── Solana ─────────────────────────
+
+        private static SignTransactionGroupRequest SolanaSignRequest(ulong lamports = 1_000_000, string recipient = "FoBNuzYQ4gpiP3jmevoiRVp3EnqBeXkB2HJ1LksSwYXJ") => new()
+        {
+            Transactions = new List<string>
+            {
+                Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new SolanaUnsignedTransfer
+                {
+                    Recipient = recipient,
+                    Lamports = lamports,
+                    RecentBlockhash = "EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N"
+                }))
+            }
+        };
+
+        private void SetupSolanaNetwork() =>
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("solana", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Sol, DisplayName = "Solana" });
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_SignsAndReturnsBase64()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            _mockWalletService
+                .Setup(s => s.SignSolanaTransferAsync(TestEmail, It.IsAny<string>(), It.Is<SolanaUnsignedTransfer>(t => t.Lamports == 1_000_000 && t.Recipient == "FoBNuzYQ4gpiP3jmevoiRVp3EnqBeXkB2HJ1LksSwYXJ"), SolanaTestAddress, It.IsAny<string?>(), TestAddress, 0))
+                .ReturnsAsync(new byte[] { 1, 2, 3 });
+
+            var result = await Sign(SolanaSignRequest(), "solana");
+
+            var ok = result as OkObjectResult;
+            Assert.That(ok, Is.Not.Null);
+            Assert.That(((SignTransactionGroupResponse)ok!.Value!).SignedTransactions, Is.EqualTo(new[] { Convert.ToBase64String(new byte[] { 1, 2, 3 }) }));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_MissingSignClaim_IsForbidden()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            SetupSolanaNetwork();
+
+            var result = await Sign(SolanaSignRequest(), "solana");
+
+            Assert.That((result as ObjectResult)!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+            _mockWalletService.Verify(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_MoreThanOneTransaction_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            var request = SolanaSignRequest();
+            request.Transactions.Add(request.Transactions[0]);
+
+            var result = await Sign(request, "solana");
+
+            Assert.That((result as ObjectResult)!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_UnparseableTransfer_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            var request = new SignTransactionGroupRequest { Transactions = new List<string> { Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("not json")) } };
+
+            var result = await Sign(request, "solana");
+
+            Assert.That((result as ObjectResult)!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_ZeroLamports_ReturnsBadRequestWithoutSigning()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+
+            var result = await Sign(SolanaSignRequest(lamports: 0), "solana");
+
+            Assert.That((result as ObjectResult)!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            _mockWalletService.Verify(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [TestCase("not-a-key")]
+        [TestCase("")]
+        public async Task SignTransactionGroup_Solana_MalformedTransfer_IsA400WithoutAnyCloudStorageRead(string recipient)
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+
+            var result = await Sign(SolanaSignRequest(recipient: recipient), "solana");
+
+            Assert.That((result as ObjectResult)!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            // No seed-list / activation-registry read from the user's cloud drive just to answer a plain 400.
+            _mockAccountRepository.Verify(r => r.ListSeedsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            _mockAddressActivationService.Verify(s => s.TryResolveAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_UnknownAddress_ReturnsAddressNotActive()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+
+            var result = await Sign(SolanaSignRequest(), "solana", "SomeoneElsesAddress");
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            Assert.That(((ProblemDetails)objectResult.Value!).Title, Is.EqualTo("address_not_active"));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_SpendingLimitExceeded_ReturnsForbidden()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            _mockWalletService
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ThrowsAsync(new SpendingLimitExceededException("global-daily", 100m, 300m, "USD"));
+
+            var result = await Sign(SolanaSignRequest(), "solana");
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+            Assert.That(((ProblemDetails)objectResult.Value!).Title, Is.EqualTo("spending_limit_exceeded"));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_ValuationUnavailable_ReturnsServiceUnavailable()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            _mockWalletService
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ThrowsAsync(new SolanaValuationException(new HttpRequestException("down")));
+
+            var result = await Sign(SolanaSignRequest(), "solana");
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status503ServiceUnavailable));
+            Assert.That(((ProblemDetails)objectResult.Value!).Title, Is.EqualTo("asset_valuation_failed"));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_InvalidRecipient_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            _mockWalletService
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ThrowsAsync(new FormatException("Unable to parse Solana transfer data."));
+
+            var result = await Sign(SolanaSignRequest(recipient: "not-a-key"), "solana");
+
+            Assert.That((result as ObjectResult)!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+        }
+
+        [Test]
+        public async Task GetAddress_ReturnsAndActivatesSolanaAddress()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            _mockAccountRepository
+                .Setup(r => r.DeriveAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("DERIVED-ADDR");
+            _mockAccountRepository
+                .Setup(r => r.DeriveSolanaAddressAsync(TestEmail, It.IsAny<string>(), "ADDR1", 0, It.IsAny<string?>()))
+                .ReturnsAsync("SolDerived");
+
+            var result = await _controller.GetAddress("ADDR1", null);
+
+            var response = (result as OkObjectResult)!.Value as DerivedAddressResponse;
+            Assert.That(response!.SolanaAddress, Is.EqualTo("SolDerived"));
+            _mockAddressActivationService.Verify(s => s.ActivateManyAsync(
+                TestEmail, It.IsAny<string>(), It.IsAny<string?>(),
+                It.Is<IReadOnlyList<(string Address, string Family, string SeedAddress, int Slot)>>(list =>
+                    list.Any(a => a.Address == "SolDerived" && a.Family == "Sol" && a.SeedAddress == "ADDR1" && a.Slot == 0)),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task ActivateAddress_SolanaNetwork_ReturnsBadRequest()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+
+            var result = await _controller.ActivateAddress("solana", "SEED-ADDR", 0, new ActivateAddressRequest { Address = "SomeSolanaAddress" });
+
+            var objectResult = result as ObjectResult;
+            Assert.That(objectResult!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            _mockAddressActivationService.Verify(s => s.ActivateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        // ───────────────────────── cross-family signer resolution ─────────────────────────
+        // The activation registry maps an address of ANY family to a (seed, slot); a route's network must only ever resolve
+        // addresses of its own family, or e.g. a Solana address of slot N could make the EVM key of slot N sign.
+
+        private void SetupActivation(string address, string family, string seed = "SEED-ADDR", int slot = 3) =>
+            _mockAddressActivationService
+                .Setup(s => s.TryResolveAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), address, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AddressActivationEntry { Address = address, Family = family, SeedAddress = seed, Slot = slot });
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_RouteWithAnEvmAddressOfTheSameSlot_IsNotResolved()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            SetupActivation("0xEvmAddressOfSlot3", "Evm");
+
+            var result = await Sign(SolanaSignRequest(), "solana", "0xEvmAddressOfSlot3");
+
+            Assert.That(((ProblemDetails)((ObjectResult)result).Value!).Title, Is.EqualTo("address_not_active"));
+            _mockWalletService.Verify(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_RouteWithASeedsOwnAlgorandAddress_IsNotResolved()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+
+            // TestAddress is a seed's own (native) Algorand address - valid on an AVM route, never on a Solana one.
+            var result = await Sign(SolanaSignRequest(), "solana", TestAddress);
+
+            Assert.That(((ProblemDetails)((ObjectResult)result).Value!).Title, Is.EqualTo("address_not_active"));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Evm_RouteWithASolanaAddress_IsNotResolved()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+            SetupActivation("SolanaAddressOfSlot3", "Sol");
+            var request = new SignTransactionGroupRequest { Transactions = new List<string> { Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{}")) } };
+
+            var result = await Sign(request, "ethereum", "SolanaAddressOfSlot3");
+
+            Assert.That(((ProblemDetails)((ObjectResult)result).Value!).Title, Is.EqualTo("address_not_active"));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Evm_RouteWithASeedsOwnAlgorandAddress_IsNotResolved()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+            var request = new SignTransactionGroupRequest { Transactions = new List<string> { Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{}")) } };
+
+            // Previously this resolved to (seed, slot 0) and the seed's EVM key signed "as" an Algorand address.
+            var result = await Sign(request, "ethereum", TestAddress);
+
+            Assert.That(((ProblemDetails)((ObjectResult)result).Value!).Title, Is.EqualTo("address_not_active"));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_BitcoinCash_RouteWithABitcoinAddress_IsNotResolved()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("bitcoin-cash", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Bch, DisplayName = "Bitcoin Cash" });
+            SetupActivation("bc1qaddressofslot3", "Btc");
+            var request = new SignTransactionGroupRequest { Transactions = new List<string> { Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{}")) } };
+
+            var result = await Sign(request, "bitcoin-cash", "bc1qaddressofslot3");
+
+            Assert.That(((ProblemDetails)((ObjectResult)result).Value!).Title, Is.EqualTo("address_not_active"));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_RouteWithASolanaAddress_Resolves()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            SetupActivation("SolanaAddressOfSlot3", "Sol");
+            _mockWalletService
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), "SolanaAddressOfSlot3", It.IsAny<string?>(), "SEED-ADDR", 3))
+                .ReturnsAsync(new byte[] { 1 });
+
+            var result = await Sign(SolanaSignRequest(), "solana", "SolanaAddressOfSlot3");
+
+            Assert.That(result, Is.InstanceOf<OkObjectResult>());
+        }
+
+        [Test]
+        public async Task GetAddressInfo_AddressOfAnotherFamily_IsReportedInactiveOnThisNetwork()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            SetupSolanaNetwork();
+            SetupActivation("0xEvmAddressOfSlot3", "Evm");
+
+            var result = await _controller.GetAddressInfo("solana", "0xEvmAddressOfSlot3");
+
+            var info = (AddressInfoResponse)((OkObjectResult)result).Value!;
+            Assert.That(info.IsActive, Is.False);
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_LimitCurrencyRateUnavailable_ReturnsServiceUnavailableNot500()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            _mockWalletService
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ThrowsAsync(new UnsupportedCurrencyException("XYZ"));
+
+            var result = await Sign(SolanaSignRequest(), "solana");
+
+            var objectResult = (ObjectResult)result;
+            Assert.That(objectResult.StatusCode, Is.EqualTo(StatusCodes.Status503ServiceUnavailable));
+            Assert.That(((ProblemDetails)objectResult.Value!).Title, Is.EqualTo("spending_limit_currency_unavailable"));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Solana_VaultConcurrencyConflict_ReturnsRetryableConflictNot500()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+            _mockWalletService
+                .Setup(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()))
+                .ThrowsAsync(new VaultConcurrencyConflictException("modified concurrently"));
+
+            var result = await Sign(SolanaSignRequest(), "solana");
+
+            Assert.That(((ObjectResult)result).StatusCode, Is.EqualTo(StatusCodes.Status409Conflict));
+        }
+
+        [Test]
+        public async Task SignTransactionGroup_Evm_RegistryEntryWithNoFamily_IsTreatedAsLegacyAvmAndRejected()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            _mockNetworkResolver
+                .Setup(r => r.ResolveAsync("ethereum", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResolvedNetwork { Family = ChainFamily.Evm, DisplayName = "Ethereum" });
+            SetupActivation("0xFamilylessEntry", "");
+            var request = new SignTransactionGroupRequest { Transactions = new List<string> { Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{}")) } };
+
+            var result = await Sign(request, "ethereum", "0xFamilylessEntry");
+
+            Assert.That(((ProblemDetails)((ObjectResult)result).Value!).Title, Is.EqualTo("address_not_active"));
+        }
+
+        [Test]
+        public async Task GetAddressInfo_RegistryEntryWithNoFamily_IsActiveOnAnAvmNetworkOnly()
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token");
+            SetupActivation("LegacyEntryAddress", "");
+
+            var onAvm = (AddressInfoResponse)((OkObjectResult)await _controller.GetAddressInfo(TestNetwork, "LegacyEntryAddress")).Value!;
+            SetupSolanaNetwork();
+            var onSolana = (AddressInfoResponse)((OkObjectResult)await _controller.GetAddressInfo("solana", "LegacyEntryAddress")).Value!;
+
+            Assert.That(onAvm.IsActive, Is.True);
+            Assert.That(onSolana.IsActive, Is.False);
         }
     }
 }
