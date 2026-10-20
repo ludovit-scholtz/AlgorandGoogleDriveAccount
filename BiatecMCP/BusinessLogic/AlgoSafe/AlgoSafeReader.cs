@@ -138,16 +138,28 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             var currentRound = (await _chain.GetTransactionParamsAsync(cancellationToken)).LastRound;
             var summary = ToSummary(proposalId, proposal, currentRound);
 
-            var approvers = (await _chain.ListBoxNamesAsync(appId, cancellationToken))
-                .Select(n => AlgoSafeBoxNames.TryParseApproval(n, out var pid, out var account) && pid == proposalId ? account.EncodeAsString() : null)
-                .Where(a => a != null)
-                .Select(a => a!)
-                .ToList();
+            // Who approved can only be enumerated from the box listing; a safe too large to list degrades to "unknown" rather than failing -
+            // the caller's own approval is checked directly below, which is all approving or executing needs.
+            var approvers = new List<string>();
+            var approversComplete = true;
+            try
+            {
+                approvers = (await _chain.ListBoxNamesAsync(appId, cancellationToken))
+                    .Select(n => AlgoSafeBoxNames.TryParseApproval(n, out var pid, out var account) && pid == proposalId ? account.EncodeAsString() : null)
+                    .Where(a => a != null)
+                    .Select(a => a!)
+                    .ToList();
+            }
+            catch (AlgoSafeException ex) when (ex.ErrorType == "TooManyBoxes")
+            {
+                approversComplete = false;
+            }
 
             var view = new AlgoSafeProposalView
             {
                 Summary = summary,
                 Approvers = approvers,
+                ApproversComplete = approversComplete,
                 CanExecute = proposal.Status == AlgoSafeConstants.StatusReady && !summary.Expired
             };
 
@@ -160,7 +172,8 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             {
                 var callerString = caller.EncodeAsString();
                 var isMember = await ReadMemberAsync(appId, proposal.GroupId, caller, cancellationToken) != null;
-                var hasApproved = approvers.Contains(callerString);
+                var hasApproved = approvers.Contains(callerString)
+                    || await _chain.GetBoxAsync(appId, AlgoSafeBoxNames.Approval(proposalId, caller), cancellationToken) != null;
                 var group = await ReadGroupAsync(appId, proposal.GroupId, cancellationToken);
                 var epochMatches = group != null && group.MembershipEpoch == proposal.EpochAtCreation;
                 view.CallerIsMember = isMember;
@@ -193,10 +206,6 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             return bytes == null ? null : AlgoSafeProxy.Structs.Proposal.Parse(bytes);
         }
 
-        /// <summary>The safe's <c>nextProposalId</c> global (the id the next proposal will get).</summary>
-        public async Task<ulong> ReadNextProposalIdAsync(ulong appId, CancellationToken cancellationToken = default) =>
-            ParseGlobalState(await RequireSupportedAsync(appId, cancellationToken)).GetUInt("npid");
-
         /// <summary>Looks up a deployment transaction: whether it confirmed, the application it created and what that application is.</summary>
         public async Task<AlgoSafeDeploymentView> DescribeDeploymentAsync(string transactionId, CancellationToken cancellationToken = default)
         {
@@ -206,7 +215,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             }
 
             var pending = await _chain.GetPendingTransactionAsync(transactionId.Trim(), cancellationToken)
-                ?? throw new AlgoSafeException("TransactionNotFound", $"Transaction {transactionId} is not known to the node (not broadcast yet, or on a different network).");
+                ?? throw new AlgoSafeException("TransactionNotFound", $"Transaction {transactionId} is not known to the node: not broadcast yet, on a different network, or too old for the node to still remember (nodes only keep recent transactions - do NOT redeploy; look the application up by its id instead if you have it).");
 
             var confirmedRound = (pending as Algorand.Algod.Model.Transactions.Transaction)?.ConfirmedRound ?? 0;
             if (confirmedRound == 0)

@@ -188,6 +188,8 @@ namespace BiatecMCP.MCP
             [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
             [Description("The group's members (max 6). Omit for the simple 1-of-1 group with you as the only member.")] List<AlgoSafeMemberInput>? members = null,
             [Description("How many members must approve a proposal. Ignored without 'members' (always 1).")] ulong threshold = 1,
+            [Description("Optional cap, in microAlgo, on what the group can send per day (0 = unlimited). Strongly recommended for a safe an AI agent can propose to: Biatec's own spending limits do NOT see transfers a safe makes from its own account.")] ulong dailyLimitMicroAlgo = 0,
+            [Description("Optional cap, in microAlgo, on what the group can send per month (0 = unlimited).")] ulong monthlyLimitMicroAlgo = 0,
             [Description("A specific seed's identifying address to act as instead of the primary seed (must be the safe's creator).")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to act as. Defaults to 0.")] int slot = 0) =>
             BuildAlgoSafeStepAsync(network, seedAddress, slot, nameof(BootstrapAlgoSafe), (builder, sender) =>
@@ -198,16 +200,18 @@ namespace BiatecMCP.MCP
                     new AlgoSafeBootstrapPlan(
                         groupName,
                         members?.Select(m => (m.Address, m.Label)).ToList(),
-                        members is { Count: > 0 } ? threshold : 1)));
+                        members is { Count: > 0 } ? threshold : 1,
+                        DailyLimit: dailyLimitMicroAlgo,
+                        MonthlyLimit: monthlyLimitMicroAlgo)));
 
         [McpServerTool(Name = "proposeAlgoSafeTransaction"),
-         Description("Builds the unsigned group that proposes ALGO/ASA transfers sent from an AlgoSafe's own account. You must be a member of the signer group. The proposal becomes executable once the group's threshold of members approved it (approveAlgoSafeProposal). With executeNow=true on a 1-of-N group the transfers are executed in the same group, no further step. Does NOT sign or broadcast. Next: approveAlgoSafeProposal (other members) then executeAlgoSafeProposal; get the ProposalId from listAlgoSafeProposals after broadcasting.")]
+         Description("Builds the unsigned group that proposes ALGO/ASA transfers sent from an AlgoSafe's own account. You must be a member of the signer group. The proposal becomes executable once the group's threshold of members approved it (approveAlgoSafeProposal). With executeNow=true on a 1-of-N group the transfers are executed in the same group, no further step. Does NOT sign or broadcast. NOTE: transfers executed from a safe are made by the safe itself, so Biatec's wallet spending limits do not apply to them - the safe's own thresholds and group limits are the control. Next: approveAlgoSafeProposal (other members) then executeAlgoSafeProposal; get the ProposalId from listAlgoSafeProposals after broadcasting.")]
         public Task<AlgoSafeStepResponse> ProposeAlgoSafeTransaction(
             [Description("The safe's application id.")] ulong appId,
             [Description("The signer group proposing (see getAlgoSafe).")] ulong groupId,
-            [Description("The transfers the safe will send (1-16).")] List<AlgoSafeTransferInput> transfers,
+            [Description("The transfers the safe will send - as many as fit in one call's arguments (about 14 payments or 13 asset transfers without notes).")] List<AlgoSafeTransferInput> transfers,
             [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
-            [Description("How many rounds the proposal stays valid (~2.8 s each; default 1,000,000 is about 32 days).")] ulong expiryRounds = 1_000_000,
+            [Description("How many rounds the proposal stays valid (~2.8 s each; 100 minimum, default 1,000,000 is about 32 days).")] ulong expiryRounds = 1_000_000,
             [Description("Execute the transfers immediately in the same group. Only possible when the group's threshold is 1.")] bool executeNow = false,
             [Description("A specific seed's identifying address (see listAlgorandAddresses) to propose as instead of the primary seed.")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to propose as. Defaults to 0.")] int slot = 0) =>

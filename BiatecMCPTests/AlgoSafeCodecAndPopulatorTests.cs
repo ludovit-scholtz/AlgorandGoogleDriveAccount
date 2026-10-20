@@ -159,13 +159,6 @@ namespace BiatecMCPTests
             Assert.That(ex.Message, Does.Contain("assert failed"));
         }
 
-        [Test]
-        public void TryParseFailureLocation_ReadsAppAndPc()
-        {
-            Assert.That(AlgoSafeResourcePopulator.TryParseFailureLocation("x Details: app=774602782, pc=272 y"), Is.EqualTo((774602782UL, 272)));
-            Assert.That(AlgoSafeResourcePopulator.TryParseFailureLocation("nothing here"), Is.Null);
-        }
-
         private static SimulateTransactionGroupResult Succeeded(int innerTransactions, SimulateUnnamedResourcesAccessed? accessed = null) => new()
         {
             TxnResults = new List<SimulateTransactionResult>

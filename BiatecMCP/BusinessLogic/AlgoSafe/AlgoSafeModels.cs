@@ -111,6 +111,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
     {
         public AlgoSafeProposalSummaryView Summary { get; set; } = new();
         public IReadOnlyList<string> Approvers { get; set; } = Array.Empty<string>();
+
+        /// <summary>False when the safe has too many boxes to enumerate, so <see cref="Approvers"/> may be incomplete (the caller's own approval is still checked exactly).</summary>
+        public bool ApproversComplete { get; set; } = true;
         public IReadOnlyList<AlgoSafeProposedTransactionView> Transactions { get; set; } = Array.Empty<AlgoSafeProposedTransactionView>();
 
         /// <summary>Set only when a caller address was supplied.</summary>

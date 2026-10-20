@@ -51,6 +51,12 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// <summary>The contract (v3.4.0) rejects <c>expiryRound &gt; Global.round + this</c>.</summary>
         public const ulong MaxProposalLifetimeRounds = 20_000_000;
 
+        /// <summary>A proposal must outlive the time it takes to sign, broadcast and confirm it (and still leave approvers time).</summary>
+        public const ulong MinProposalLifetimeRounds = 100;
+
+        /// <summary>The payload array is one application argument; an app call's arguments total at most 2048 bytes, minus the selector, group id, expiry, flag and budget arguments.</summary>
+        public const int MaxPayloadArgumentBytes = 1900;
+
         /// <summary>
         /// <c>ensureBudgetValue</c> the safe's own UI passes when a call executes a proposal (propose-with-execute / executeProposal):
         /// every ~700 requested budget spawns one opup inner call (one min fee each).
@@ -76,16 +82,14 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// <summary>
         /// Approval-program hashes that share the current ("modern") ABI call surface (tagged-envelope payloads,
         /// <c>approveProposal(proposalId, expectedPayloadVersion, ensureBudgetValue)</c>, box keys <c>proposalId*7+slot</c>) - the
-        /// <c>MODERN_ABI_CONTRACT_HASHES</c> of the algo-safe package. Older deployed hashes use a different, incompatible ABI and are
+        /// <c>MODERN_ABI_CONTRACT_HASHES</c> of the algo-safe package, narrowed to v3.2.0+ because the box structs (signer group, member, proposal) are decoded with the v3.4.0 client and were only verified unchanged from v3.2.0 on. Older deployed hashes use a different, incompatible ABI and are
         /// refused rather than guessed at; extend this table only when a new version ships WITHOUT breaking that surface.
         /// </summary>
         public static readonly IReadOnlyDictionary<string, string> SupportedContractVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [LatestApprovalSha256Hex] = "v3.4.0",
             ["b096f50b39dff57a9df61e36a9a74a35e9f892854495f4c5efc42e5d8822bf35"] = "v3.3.0",
-            ["3f8d0cb07960bf2c8af42fb41b7d7fc2673dd831d987e80ee0e0c43fcefaa0ec"] = "v3.2.0",
-            ["0ec5f00067169dae3414cffd9f2e04d8e2a91884d7fd0eb903c31aa409da6ead"] = "v3.1.0",
-            ["8a9073ec02dd208e4757e57180a96b452e074c1731c7ecccdabdbe8dc7f3acee"] = "v3.0.0"
+            ["3f8d0cb07960bf2c8af42fb41b7d7fc2673dd831d987e80ee0e0c43fcefaa0ec"] = "v3.2.0"
         };
 
         public static string StatusName(ulong status) => status switch

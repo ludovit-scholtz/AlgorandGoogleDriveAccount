@@ -193,8 +193,8 @@ namespace BiatecMCP
             });
             builder.Services.AddScoped<ISolanaRpcDataSource>(sp => sp.GetRequiredService<SolanaRpcDataSource>());
 
-            // AlgoSafe tools: a chain client is created per call for the resolved network (the factory holds no state).
-            builder.Services.AddSingleton<BiatecMCP.BusinessLogic.AlgoSafe.IAlgoSafeChainClientFactory, BiatecMCP.BusinessLogic.AlgoSafe.AlgodAlgoSafeChainClientFactory>();
+            // AlgoSafe tools: a chain client is created per call for the resolved network (the factory holds no state; like the other per-call algod clients here it opens a short-lived HttpClient per call).
+            builder.Services.AddScoped<BiatecMCP.BusinessLogic.AlgoSafe.IAlgoSafeChainClientFactory, BiatecMCP.BusinessLogic.AlgoSafe.AlgodAlgoSafeChainClientFactory>();
 
             // Configure MCP Server
             builder.Services.AddMcpServer(options =>

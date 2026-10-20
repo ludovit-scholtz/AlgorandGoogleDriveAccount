@@ -109,17 +109,24 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             List<Transaction> transactions;
             string summary;
-            if (plan.Members == null || plan.Members.Count == 0)
+            var hasLimits = plan.DailyLimit != 0 || plan.MonthlyLimit != 0 || plan.CooldownRounds != 0;
+            if ((plan.Members == null || plan.Members.Count == 0) && !hasLimits)
             {
                 transactions = await proxy.Bootstrap_Transactions(plan.GroupName.Trim(), AsAccount(sender), null, string.Empty, 1000, _tx_transactions: preTransactions);
                 summary = $"Fund the safe with {FormatAlgo(depositMicroAlgo)} ALGO and bootstrap group '{plan.GroupName.Trim()}' (1-of-1, all rights, you as the only member).";
             }
             else
             {
+                // Spending limits only exist on a group created through bootstrapGroup; the creator is then its only member.
+                if (plan.Members == null || plan.Members.Count == 0)
+                {
+                    plan = plan with { Members = new List<(string, string)> { (sender.EncodeAsString(), "owner") }, Threshold = 1 };
+                }
+
                 var (encodedSeed, members) = ValidatePlan(plan);
                 transactions = await proxy.BuildBootstrapGroupAsync(encodedSeed, members, 0, AsAccount(sender), preTransactions);
                 transactions = await proxy.FinalizeBootstrap_Transactions(AsAccount(sender), null, string.Empty, 1000, _tx_transactions: transactions);
-                summary = $"Fund the safe with {FormatAlgo(depositMicroAlgo)} ALGO, create group '{plan.GroupName.Trim()}' ({plan.Threshold}-of-{plan.Members.Count}) and finalize the bootstrap.";
+                summary = $"Fund the safe with {FormatAlgo(depositMicroAlgo)} ALGO, create group '{plan.GroupName.Trim()}' ({plan.Threshold}-of-{plan.Members!.Count}) and finalize the bootstrap.";
             }
 
             return await FinishAsync(transactions, parameters, summary, cancellationToken);
@@ -146,9 +153,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("InvalidRequest", $"A proposal can hold at most {AlgoSafeConstants.MaxGroupTransactions} transactions (an atomic group limit).");
             }
 
-            if (expiryRounds == 0 || expiryRounds > AlgoSafeConstants.MaxProposalLifetimeRounds)
+            if (expiryRounds < AlgoSafeConstants.MinProposalLifetimeRounds || expiryRounds > AlgoSafeConstants.MaxProposalLifetimeRounds)
             {
-                throw new AlgoSafeException("InvalidRequest", $"expiryRounds must be between 1 and {AlgoSafeConstants.MaxProposalLifetimeRounds} (about {AlgoSafeConstants.MaxProposalLifetimeRounds * 28 / 10 / 86400} days at ~2.8s/round).");
+                throw new AlgoSafeException("InvalidRequest", $"expiryRounds must be between {AlgoSafeConstants.MinProposalLifetimeRounds} and {AlgoSafeConstants.MaxProposalLifetimeRounds} (about {AlgoSafeConstants.MaxProposalLifetimeRounds * 28 / 10 / 86400} days at ~2.8s/round).");
             }
 
             await _reader.RequireSupportedAsync(appId, cancellationToken);
@@ -181,6 +188,14 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 payload.Add(EncodeTransfer(transfer, group.AllowedActions));
             }
 
+            var encodedSize = AlgoSafePayloadCodec.EncodeEnvelopeArray(payload).Length;
+            if (encodedSize > AlgoSafeConstants.MaxPayloadArgumentBytes)
+            {
+                throw new AlgoSafeException(
+                    "ProposalTooLarge",
+                    $"These {transfers.Count} transfer(s) encode to {encodedSize} bytes, more than the {AlgoSafeConstants.MaxPayloadArgumentBytes} bytes one call can carry (about 14 payments or 13 asset transfers without notes). Split them into several proposals.");
+            }
+
             if (executeNow && group.Threshold != 1)
             {
                 throw new AlgoSafeException(
@@ -209,6 +224,17 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         {
             var view = await _reader.GetProposalAsync(appId, proposalId, sender, cancellationToken);
             var summary = view.Summary;
+            if (summary.Type != "TransactionGroup")
+            {
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} is a governance (admin) change, whose content this server cannot show; approve it in the AlgoSafe app instead.");
+            }
+
+            var undecoded = view.Transactions.Where(t => t.Kind.StartsWith("Unsupported", StringComparison.Ordinal)).ToList();
+            if (undecoded.Count > 0)
+            {
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} contains {undecoded.Count} transaction(s) this server cannot decode (e.g. app calls, key registration, asset configuration or rekeys); approving blind is refused - review and approve it in the AlgoSafe app instead.");
+            }
+
             if (view.CallerIsMember != true)
             {
                 throw new AlgoSafeException("NotAMember", $"{sender.EncodeAsString()} is not a member of signer group {summary.GroupId}, so it cannot approve proposal {proposalId}.");

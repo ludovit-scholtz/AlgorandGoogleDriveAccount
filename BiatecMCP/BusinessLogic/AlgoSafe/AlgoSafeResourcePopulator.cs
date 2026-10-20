@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Algorand;
 using Algorand.Algod.Model;
 using Algorand.Algod.Model.Transactions;
@@ -29,7 +28,6 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             IAlgoSafeChainClient chain,
             IReadOnlyList<Transaction> group,
             ulong minFee,
-            Func<string, string>? explainFailure = null,
             CancellationToken cancellationToken = default)
         {
             var innerCount = 0;
@@ -56,7 +54,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                         continue;
                     }
 
-                    throw new AlgoSafeException("SimulationFailed", $"The network rejected this transaction when simulated: {Explain(result.FailureMessage, explainFailure)}");
+                    throw new AlgoSafeException("SimulationFailed", $"The network rejected this transaction when simulated: {Explain(result.FailureMessage)}");
                 }
 
                 var changed = false;
@@ -69,7 +67,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                         continue;
                     }
 
-                    changed |= ApplyUnnamedResources(appCall, results[i].UnnamedResourcesAccessed, null);
+                    changed |= ApplyUnnamedResources(appCall, results[i].UnnamedResourcesAccessed);
 
                     // Exact fee: the call itself plus one min fee per inner transaction it spawned - never more, never less.
                     var inner = CountInner(results[i].ExecTrace);
@@ -138,10 +136,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             message.Contains("fee", StringComparison.OrdinalIgnoreCase) && message.Contains("too small", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
-        /// Makes algod's failure text usable: drops the huge struct dump it embeds, keeps the "Details: app=..., pc=..." tail, and (when the
-        /// failing program counter maps to one of the contract's <c>assert</c> messages in its ARC-56 source info) leads with that message.
+        /// Makes algod's failure text usable: drops the huge struct dump it embeds and keeps the "Details: app=..., pc=..." tail.
         /// </summary>
-        internal static string Explain(string failureMessage, Func<string, string>? explain)
+        internal static string Explain(string failureMessage)
         {
             var cleaned = failureMessage;
             var dump = cleaned.IndexOf(" []transactions.", StringComparison.Ordinal);
@@ -156,8 +153,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 cleaned = cleaned[..700] + "...";
             }
 
-            var contractMessage = explain?.Invoke(failureMessage);
-            return string.IsNullOrEmpty(contractMessage) ? cleaned : $"{contractMessage} ({cleaned})";
+            return cleaned;
         }
 
         private static bool ApplyGroupLevelResources(IReadOnlyList<Transaction> group, SimulateUnnamedResourcesAccessed accessed)
@@ -174,7 +170,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             foreach (var box in accessed.Boxes ?? Array.Empty<BoxReference>())
             {
                 var holder = calls.FirstOrDefault(c => ((c as ApplicationNoopTransaction)?.ApplicationId ?? 0) == box.App) ?? calls[0];
-                changed |= ApplyUnnamedResources(holder, new SimulateUnnamedResourcesAccessed { Boxes = new List<BoxReference> { box } }, null);
+                changed |= ApplyUnnamedResources(holder, new SimulateUnnamedResourcesAccessed { Boxes = new List<BoxReference> { box } });
             }
 
             // Everything else is shared by the whole group; the first call that can carry it does.
@@ -190,13 +186,13 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             if (HasAny(rest))
             {
                 var holder = calls.FirstOrDefault(c => c is not ApplicationCreateTransaction) ?? calls[0];
-                changed |= ApplyUnnamedResources(holder, rest, null);
+                changed |= ApplyUnnamedResources(holder, rest);
             }
 
             return changed;
         }
 
-        private static bool ApplyUnnamedResources(ApplicationCallTransaction tx, SimulateUnnamedResourcesAccessed? accessed, object? unused)
+        private static bool ApplyUnnamedResources(ApplicationCallTransaction tx, SimulateUnnamedResourcesAccessed? accessed)
         {
             if (!HasAny(accessed))
             {
@@ -330,13 +326,6 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             }
 
             return trace.InnerTrace.Sum(inner => 1 + CountInner(inner));
-        }
-
-        /// <summary>Extracts <c>app=…, pc=…</c> from algod's failure text, if present.</summary>
-        internal static (ulong AppId, int Pc)? TryParseFailureLocation(string failureMessage)
-        {
-            var match = Regex.Match(failureMessage, @"app=(\d+), pc=(\d+)");
-            return match.Success ? (ulong.Parse(match.Groups[1].Value), int.Parse(match.Groups[2].Value)) : null;
         }
     }
 }
