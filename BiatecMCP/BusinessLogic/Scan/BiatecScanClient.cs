@@ -21,6 +21,9 @@ namespace BiatecMCP.BusinessLogic.Scan
         /// <summary>Pools touching <paramref name="assetId"/> (on either side), newest-updated first.</summary>
         Task<IReadOnlyList<ScanPool>> GetPoolsForAssetAsync(string networkCode, AlgorandChain chain, ulong assetId, string? protocol, int size, CancellationToken cancellationToken = default);
 
+        /// <summary>Pools of exactly asset A / asset B in that pool order (Scan matches the pair order exactly when both are given).</summary>
+        Task<IReadOnlyList<ScanPool>> GetPoolsForPairAsync(string networkCode, AlgorandChain chain, ulong assetIdA, ulong assetIdB, string? protocol, int size, CancellationToken cancellationToken = default);
+
         Task<IReadOnlyList<ScanAssetStat>> GetAssetStatsAsync(string networkCode, AlgorandChain chain, string? protocol, string sortBy, CancellationToken cancellationToken = default);
     }
 
@@ -69,6 +72,17 @@ namespace BiatecMCP.BusinessLogic.Scan
             return GetAsync<ScanPool>(networkCode, chain, path, cancellationToken);
         }
 
+        public Task<IReadOnlyList<ScanPool>> GetPoolsForPairAsync(string networkCode, AlgorandChain chain, ulong assetIdA, ulong assetIdB, string? protocol, int size, CancellationToken cancellationToken = default)
+        {
+            var path = $"/api/pool?assetIdA={assetIdA.ToString(CultureInfo.InvariantCulture)}&assetIdB={assetIdB.ToString(CultureInfo.InvariantCulture)}&size={size.ToString(CultureInfo.InvariantCulture)}";
+            if (!string.IsNullOrEmpty(protocol))
+            {
+                path += "&protocol=" + Uri.EscapeDataString(protocol);
+            }
+
+            return GetAsync<ScanPool>(networkCode, chain, path, cancellationToken);
+        }
+
         public Task<IReadOnlyList<ScanAssetStat>> GetAssetStatsAsync(string networkCode, AlgorandChain chain, string? protocol, string sortBy, CancellationToken cancellationToken = default)
         {
             var path = $"/api/asset-stat?sortBy={Uri.EscapeDataString(sortBy)}";
@@ -89,12 +103,19 @@ namespace BiatecMCP.BusinessLogic.Scan
 
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, baseUrl.TrimEnd('/') + path);
-                request.Headers.TryAddWithoutValidation("Authorization", await _auth.GetAuthorizationHeaderAsync(chain, cancellationToken));
-                using var response = await _http.SendAsync(request, cancellationToken);
+                var response = await SendAsync(baseUrl, path, chain, cancellationToken);
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 {
-                    throw new ScanApiException("Biatec Scan rejected the request's authentication. Try again in a moment.");
+                    // The cached token may be stale (e.g. its validity window drifted from Scan's view of the chain): mint a fresh one, once.
+                    response.Dispose();
+                    _auth.Invalidate(chain);
+                    response = await SendAsync(baseUrl, path, chain, cancellationToken);
+                }
+
+                using var _ = response;
+                if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                {
+                    throw new ScanApiException("Biatec Scan rejected the request's authentication, even with a freshly signed token.");
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -113,10 +134,27 @@ namespace BiatecMCP.BusinessLogic.Scan
             {
                 throw new ScanApiException("Biatec Scan timed out.");
             }
-            catch (JsonException)
+            catch (Exception ex) when (ex is JsonException or NotSupportedException)
             {
                 throw new ScanApiException("Biatec Scan returned an unreadable answer.");
             }
+        }
+
+        private async Task<HttpResponseMessage> SendAsync(string baseUrl, string path, AlgorandChain chain, CancellationToken cancellationToken)
+        {
+            string authorization;
+            try
+            {
+                authorization = await _auth.GetAuthorizationHeaderAsync(chain, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new ScanApiException("Could not prepare the authentication for Biatec Scan (the network's node is unreachable).");
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, baseUrl.TrimEnd('/') + path);
+            request.Headers.TryAddWithoutValidation("Authorization", authorization);
+            return await _http.SendAsync(request, cancellationToken);
         }
     }
 }

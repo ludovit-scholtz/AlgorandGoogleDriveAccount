@@ -19,6 +19,7 @@ namespace BiatecMCP.MCP
         private const int MaxCandidatesPerSymbol = 3;
 
         private const int PoolsPerAsset = 500;
+        private const int AssetSearchSize = 100;
 
         private static readonly string[] PoolSortKeys = ["apr7d", "apr24h", "tvl", "volume24h", "volume7d"];
         private static readonly string[] AssetSortKeys = ["apr7d", "apr24h"];
@@ -62,9 +63,13 @@ namespace BiatecMCP.MCP
             public string SymbolA { get; set; } = string.Empty;
             public ulong AssetIdB { get; set; }
             public string SymbolB { get; set; } = string.Empty;
-            public double TvlUsd { get; set; }
-            public double Volume24hUsd { get; set; }
-            public double Volume7dUsd { get; set; }
+            /// <summary>Total value locked in USD, or <c>null</c> when Scan has no price for either side.</summary>
+            public double? TvlUsd { get; set; }
+
+            /// <summary><c>null</c> means Scan has no volume figure (not "no trading").</summary>
+            public double? Volume24hUsd { get; set; }
+
+            public double? Volume7dUsd { get; set; }
 
             /// <summary>The swap fee liquidity providers earn, in percent of volume (the protocol's cut already deducted).</summary>
             public double LpFeePercent { get; set; }
@@ -93,6 +98,9 @@ namespace BiatecMCP.MCP
             public List<ResolvedScanAsset> ResolvedAssets { get; set; } = new();
 
             public int TotalMatchingPools { get; set; }
+
+            /// <summary>True when Scan hit its per-request pool cap, so the list may be missing pools.</summary>
+            public bool Truncated { get; set; }
             public List<ScanPoolSummary> Pools { get; set; } = new();
             public string Note { get; set; } = string.Empty;
             public string Error { get; set; } = string.Empty;
@@ -165,7 +173,7 @@ namespace BiatecMCP.MCP
                 }
 
                 var protocolName = NormalizeProtocol(protocol);
-                if (protocol != null && protocolName == null)
+                if (!string.IsNullOrWhiteSpace(protocol) && protocolName == null)
                 {
                     return new FindBestLiquidityPoolsResponse { Network = network, Error = "protocol must be Biatec, Pact or Tiny.", ErrorType = "InvalidRequest" };
                 }
@@ -178,13 +186,14 @@ namespace BiatecMCP.MCP
                 var (code, chain) = await ResolveScanNetworkAsync(network);
                 var response = new FindBestLiquidityPoolsResponse { Network = code, SortedBy = sortKey };
 
-                var aMatches = await ResolveSymbolAsync(code, chain, assetA);
+                var aTask = ResolveSymbolAsync(code, chain, assetA);
+                var bTask = string.IsNullOrWhiteSpace(assetB) ? null : ResolveSymbolAsync(code, chain, assetB);
+                var aMatches = await aTask;
+                List<ScanAsset>? bMatches = bTask == null ? null : await bTask;
                 response.ResolvedAssets.Add(new ResolvedScanAsset { Input = assetA, Matches = aMatches.Select(ToSummary).ToList() });
-                List<ScanAsset>? bMatches = null;
-                if (!string.IsNullOrWhiteSpace(assetB))
+                if (bMatches != null)
                 {
-                    bMatches = await ResolveSymbolAsync(code, chain, assetB);
-                    response.ResolvedAssets.Add(new ResolvedScanAsset { Input = assetB, Matches = bMatches.Select(ToSummary).ToList() });
+                    response.ResolvedAssets.Add(new ResolvedScanAsset { Input = assetB!, Matches = bMatches.Select(ToSummary).ToList() });
                 }
 
                 if (aMatches.Count == 0 || (bMatches != null && bMatches.Count == 0))
@@ -199,22 +208,39 @@ namespace BiatecMCP.MCP
 
                 // Pools are looked up per candidate asset A (an asset alone matches either side of a pool); the pair is filtered here.
                 var pools = new Dictionary<string, ScanPool>();
-                foreach (var candidate in aMatches)
-                {
-                    foreach (var pool in await _scan.GetPoolsForAssetAsync(code, chain, candidate.Index, protocolName, PoolsPerAsset))
-                    {
-                        if (pool.AssetIdA == null || pool.AssetIdB == null)
-                        {
-                            continue;
-                        }
+                var truncated = false;
+                var perAsset = await Task.WhenAll(aMatches.Select(a => _scan.GetPoolsForAssetAsync(code, chain, a.Index, protocolName, PoolsPerAsset)));
+                var fetched = perAsset.SelectMany(list => list).ToList();
 
-                        var matchesPair = bIds == null
-                            || (aIds.Contains(pool.AssetIdA.Value) && bIds.Contains(pool.AssetIdB.Value))
-                            || (aIds.Contains(pool.AssetIdB.Value) && bIds.Contains(pool.AssetIdA.Value));
-                        if (matchesPair)
-                        {
-                            pools[$"{pool.PoolAppId}:{pool.AssetIdA}:{pool.AssetIdB}"] = pool;
-                        }
+                // Scan returns at most PoolsPerAsset rows per request. When an asset hit that cap the pair filter below could miss pools, so for a
+                // pair the exact (A, B) queries - both pool orders - are made instead; for a single asset the answer is flagged as partial.
+                if (perAsset.Any(list => list.Count >= PoolsPerAsset))
+                {
+                    if (bMatches != null)
+                    {
+                        var pairs = aMatches.SelectMany(a => bMatches.Where(b => b.Index != a.Index).SelectMany(b => new[] { (a.Index, b.Index), (b.Index, a.Index) })).ToList();
+                        fetched = (await Task.WhenAll(pairs.Select(pair => _scan.GetPoolsForPairAsync(code, chain, pair.Item1, pair.Item2, protocolName, PoolsPerAsset)))).SelectMany(list => list).ToList();
+                        truncated = fetched.Count >= PoolsPerAsset;
+                    }
+                    else
+                    {
+                        truncated = true;
+                    }
+                }
+
+                foreach (var pool in fetched)
+                {
+                    if (pool.AssetIdA == null || pool.AssetIdB == null)
+                    {
+                        continue;
+                    }
+
+                    var matchesPair = bIds == null
+                        || (aIds.Contains(pool.AssetIdA.Value) && bIds.Contains(pool.AssetIdB.Value))
+                        || (aIds.Contains(pool.AssetIdB.Value) && bIds.Contains(pool.AssetIdA.Value));
+                    if (matchesPair)
+                    {
+                        pools[$"{pool.PoolAppId}:{pool.AssetIdA}:{pool.AssetIdB}"] = pool;
                     }
                 }
 
@@ -227,9 +253,11 @@ namespace BiatecMCP.MCP
 
                 response.TotalMatchingPools = ranked.Count;
                 response.Pools = await ToPoolSummariesAsync(code, chain, top, aMatches.Concat(bMatches ?? new List<ScanAsset>()));
+                response.Truncated = truncated;
                 response.Note = ranked.Count == 0
                     ? $"No pool matched with at least ${minTvlUsd.ToString("0.##", CultureInfo.InvariantCulture)} TVL; lower minTvlUsd to see smaller ones."
-                    : "APR = trailing liquidity-provider fees / TVL, annualised. It is not guaranteed future yield and excludes impermanent loss; check ScamRating and TVL before depositing anywhere.";
+                    : "APR = trailing liquidity-provider fees / TVL, annualised. It is not guaranteed future yield and excludes impermanent loss; check ScamRating and TVL before depositing anywhere. A pool holding a token Scan cannot price can show a distorted TVL and APR."
+                    + (truncated ? " Scan returned its maximum number of pools for this asset, so the list may be incomplete - name a second asset or filter by protocol to narrow it." : string.Empty);
                 return response;
             }
             catch (Exception ex)
@@ -257,7 +285,7 @@ namespace BiatecMCP.MCP
                 }
 
                 var protocolName = NormalizeProtocol(protocol);
-                if (protocol != null && protocolName == null)
+                if (!string.IsNullOrWhiteSpace(protocol) && protocolName == null)
                 {
                     return new GetBiatecScanTopAssetsByAprResponse { Network = network, Error = "protocol must be Biatec, Pact or Tiny.", ErrorType = "InvalidRequest" };
                 }
@@ -287,7 +315,7 @@ namespace BiatecMCP.MCP
                 {
                     Network = code,
                     Assets = rows,
-                    Note = "APR = trailing liquidity-provider fees / TVL, annualised; not guaranteed future yield. Check the pools with findBestLiquidityPools before depositing anywhere."
+                    Note = "APR = trailing liquidity-provider fees / TVL, annualised; not guaranteed future yield. This ranking has NO scam screening - check the pools with findBestLiquidityPools (it shows ScamRating) before depositing anywhere."
                 };
             }
             catch (Exception ex)
@@ -316,12 +344,12 @@ namespace BiatecMCP.MCP
             var text = (query ?? string.Empty).Trim();
             if (text.Length == 0)
             {
-                throw new ScanApiException("A search text or asset id is required.");
+                throw new ArgumentException("A search text or asset id is required.");
             }
 
             var found = ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
                 ? await _scan.GetAssetsByIdAsync(code, chain, new[] { id })
-                : await _scan.SearchAssetsAsync(code, chain, text, 50);
+                : await _scan.SearchAssetsAsync(code, chain, text, AssetSearchSize);
             return found.Where(a => !a.Deleted).OrderByDescending(a => a.TvlUsd).ToList();
         }
 
@@ -367,9 +395,9 @@ namespace BiatecMCP.MCP
                 SymbolA = Symbol(p.AssetIdA.Value),
                 AssetIdB = p.AssetIdB!.Value,
                 SymbolB = Symbol(p.AssetIdB.Value),
-                TvlUsd = PoolAprCalculator.TvlUsd(p) ?? 0,
-                Volume24hUsd = p.Volume24H ?? 0,
-                Volume7dUsd = p.Volume7D ?? 0,
+                TvlUsd = PoolAprCalculator.TvlUsd(p),
+                Volume24hUsd = p.Volume24H,
+                Volume7dUsd = p.Volume7D,
                 LpFeePercent = (PoolAprCalculator.LpFeeRate(p) ?? 0) * 100,
                 Apr24hPercent = PoolAprCalculator.Apr24h(p) * 100,
                 Apr7dPercent = PoolAprCalculator.Apr7d(p) * 100,
@@ -411,6 +439,8 @@ namespace BiatecMCP.MCP
             {
                 case ScanApiException e:
                     return (e.Message, "ScanUnavailable");
+                case ArgumentException e:
+                    return (e.Message, "InvalidRequest");
                 default:
                     _logger.LogError(ex, "Unexpected error in MCP tool {ToolName}.", toolName);
                     return ("An unexpected error occurred while processing the request. It has been logged server-side.", "UnexpectedError");

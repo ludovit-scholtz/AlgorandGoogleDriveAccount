@@ -116,6 +116,22 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public async Task ARejectedToken_IsReplacedOnceWithAFreshOne()
+        {
+            var calls = 0;
+            var handler = new StubHandler(_ => ++calls == 1 ? new HttpResponseMessage(HttpStatusCode.Unauthorized) : Json("[]"));
+            var auth = new Mock<IScanAuthTokenProvider>();
+            auth.Setup(a => a.GetAuthorizationHeaderAsync(It.IsAny<AlgorandChain>(), It.IsAny<CancellationToken>())).ReturnsAsync("SigTx abc");
+            var client = new BiatecScanClient(new HttpClient(handler), auth.Object, Options.Create(new ScanConfiguration()));
+
+            var result = await client.SearchAssetsAsync("algorand-mainnet", Chain, "x", 5);
+
+            Assert.That(result, Is.Empty);
+            Assert.That(handler.Requests, Has.Count.EqualTo(2));
+            auth.Verify(a => a.Invalidate(Chain), Times.Once);
+        }
+
+        [Test]
         public async Task Errors_BecomeScanApiExceptionsWithSafeMessages()
         {
             var unauthorized = ClientFor(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized)));
@@ -163,6 +179,7 @@ namespace BiatecMCPTests
             _scan.Setup(s => s.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<AlgorandChain>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<ScanAsset>());
             _scan.Setup(s => s.GetAssetsByIdAsync(It.IsAny<string>(), It.IsAny<AlgorandChain>(), It.IsAny<IEnumerable<ulong>>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<ScanAsset>());
             _scan.Setup(s => s.GetPoolsForAssetAsync(It.IsAny<string>(), It.IsAny<AlgorandChain>(), It.IsAny<ulong>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<ScanPool>());
+            _scan.Setup(s => s.GetPoolsForPairAsync(It.IsAny<string>(), It.IsAny<AlgorandChain>(), It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<ScanPool>());
             _scan.Setup(s => s.SearchAssetsAsync("algorand-mainnet", Chain, "EUR", It.IsAny<int>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new[] { Asset(1, "EURX", 5, "Euro X"), Asset(Eurs, "EUR", 9000, "Euro"), Asset(2, "EUR", 40, "Fake Euro"), Asset(3, "EUR", 0, "Dead Euro") });
             _scan.Setup(s => s.SearchAssetsAsync("algorand-mainnet", Chain, "USDC", It.IsAny<int>(), It.IsAny<CancellationToken>()))
@@ -246,6 +263,47 @@ namespace BiatecMCPTests
             Assert.That((await _tool.FindBestLiquidityPools("EUR", protocol: "uniswap")).ErrorType, Is.EqualTo("InvalidRequest"));
             Assert.That((await _tool.FindBestLiquidityPools(" ")).ErrorType, Is.EqualTo("InvalidRequest"));
             _scan.Verify(s => s.GetPoolsForAssetAsync(It.IsAny<string>(), It.IsAny<AlgorandChain>(), It.IsAny<ulong>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Test]
+        public async Task EmptyOptionalArguments_AreTreatedAsOmitted_AndEmptySearchIsInvalidRequest()
+        {
+            PoolsFor(Eurs, Pool(10, Eurs, Usdc, 10_000, 7000));
+            PoolsFor(2);
+
+            var result = await _tool.FindBestLiquidityPools("EUR", "USDC", protocol: "");
+            var empty = await _tool.SearchBiatecScanAssets("");
+
+            Assert.That(result.Error, Is.Empty);
+            Assert.That(empty.ErrorType, Is.EqualTo("InvalidRequest"));
+        }
+
+        [Test]
+        public async Task WhenScanHitsItsPoolCap_ThePairIsQueriedExactly_InBothOrders()
+        {
+            var many = Enumerable.Range(0, 500).Select(i => Pool((ulong)(100 + i), Eurs, (ulong)(5000 + i), 10_000, 100)).ToArray();
+            PoolsFor(Eurs, many);
+            PoolsFor(2);
+            _scan.Setup(s => s.GetPoolsForPairAsync("algorand-mainnet", Chain, Eurs, Usdc, It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new[] { Pool(900, Eurs, Usdc, 10_000, 7000) });
+            _scan.Setup(s => s.GetPoolsForPairAsync("algorand-mainnet", Chain, Usdc, Eurs, It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new[] { Pool(901, Usdc, Eurs, 10_000, 14_000) });
+
+            var result = await _tool.FindBestLiquidityPools("EUR", "USDC");
+
+            Assert.That(result.Pools.Select(p => p.PoolAppId), Is.EqualTo(new ulong[] { 901, 900 }));
+            Assert.That(result.Truncated, Is.False);
+        }
+
+        [Test]
+        public async Task ASingleAssetAtTheCap_IsFlaggedAsPossiblyIncomplete()
+        {
+            PoolsFor(Usdc, Enumerable.Range(0, 500).Select(i => Pool((ulong)(100 + i), Usdc, (ulong)(5000 + i), 10_000, 100)).ToArray());
+
+            var result = await _tool.FindBestLiquidityPools("USDC");
+
+            Assert.That(result.Truncated, Is.True);
+            Assert.That(result.Note, Does.Contain("incomplete"));
         }
 
         [Test]

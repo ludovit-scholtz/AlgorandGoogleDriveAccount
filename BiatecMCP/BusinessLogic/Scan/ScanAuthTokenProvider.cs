@@ -12,6 +12,9 @@ namespace BiatecMCP.BusinessLogic.Scan
     public interface IScanAuthTokenProvider
     {
         Task<string> GetAuthorizationHeaderAsync(AlgorandChain chain, CancellationToken cancellationToken = default);
+
+        /// <summary>Forgets the cached token of a network (after Scan rejected it), so the next call mints a fresh one.</summary>
+        void Invalidate(AlgorandChain chain);
     }
 
     /// <summary>
@@ -78,6 +81,8 @@ namespace BiatecMCP.BusinessLogic.Scan
                 _mint.Release();
             }
         }
+
+        public void Invalidate(AlgorandChain chain) => _cache.Remove("scan-arc14:" + chain.GenesisId);
 
         public void Dispose() => _mint.Dispose();
 
