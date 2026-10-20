@@ -1007,6 +1007,8 @@ setup stage needs.
   keypair generated in memory per process** (never persisted, never funded, signs nothing but this proof), cached ~15 min per network.
   That is deliberately *not* a wallet key - the same throwaway-identity approach Biatec Scan's own web app uses - so BiatecMCP still holds no
   wallet key material and these tools need neither BiatecOIDC nor the `sign` scope; do not swap it for a user's wallet identity or persist it.
+  `IScanAuthTokenProvider` is therefore registered as a `Singleton` (one keypair per process, or the cached tokens would stop verifying) - a
+  deliberate exception to the "interfaces are `Scoped`" convention.
   The pool document carries no APR field, so `Helper/PoolAprCalculator` derives it exactly as Scan's UI does
   (`lpFee * (1 - protocolFeePortion) * volume / TVL * 365/window`, as percent in the tool output); `getBiatecScanTopAssetsByApr` instead relays
   the API's own per-asset `apr24h`/`apr7d`, which are **already percent** (unlike the fractions this server computes per pool). A symbol

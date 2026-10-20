@@ -88,7 +88,10 @@ namespace BiatecMCP.BusinessLogic.Scan
 
         private static async Task<TransactionParametersResponse> FetchParamsAsync(AlgorandChain chain, CancellationToken cancellationToken)
         {
-            using var http = HttpClientConfigurator.ConfigureHttpClient(chain.AlgodApiAddress, chain.AlgodApiToken);
+            // Short timeout: minting holds a lock, so a hanging node must not stall every Scan call for the default 100 s.
+            using var http = string.IsNullOrWhiteSpace(chain.AlgodApiTokenHeader)
+                ? HttpClientConfigurator.ConfigureHttpClient(chain.AlgodApiAddress, chain.AlgodApiToken, timeout: 10_000)
+                : HttpClientConfigurator.ConfigureHttpClient(chain.AlgodApiAddress, chain.AlgodApiToken, chain.AlgodApiTokenHeader, timeout: 10_000);
             return await new DefaultApi(http).TransactionParamsAsync(cancellationToken);
         }
     }

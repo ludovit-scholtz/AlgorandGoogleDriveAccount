@@ -219,8 +219,9 @@ namespace BiatecMCP.MCP
                     if (bMatches != null)
                     {
                         var pairs = aMatches.SelectMany(a => bMatches.Where(b => b.Index != a.Index).SelectMany(b => new[] { (a.Index, b.Index), (b.Index, a.Index) })).ToList();
-                        fetched = (await Task.WhenAll(pairs.Select(pair => _scan.GetPoolsForPairAsync(code, chain, pair.Item1, pair.Item2, protocolName, PoolsPerAsset)))).SelectMany(list => list).ToList();
-                        truncated = fetched.Count >= PoolsPerAsset;
+                        var perPair = await Task.WhenAll(pairs.Select(pair => _scan.GetPoolsForPairAsync(code, chain, pair.Item1, pair.Item2, protocolName, PoolsPerAsset)));
+                        fetched = perPair.SelectMany(list => list).ToList();
+                        truncated = perPair.Any(list => list.Count >= PoolsPerAsset);
                     }
                     else
                     {
@@ -240,7 +241,7 @@ namespace BiatecMCP.MCP
                         || (aIds.Contains(pool.AssetIdB.Value) && bIds.Contains(pool.AssetIdA.Value));
                     if (matchesPair)
                     {
-                        pools[$"{pool.PoolAppId}:{pool.AssetIdA}:{pool.AssetIdB}"] = pool;
+                        pools[$"{pool.PoolAddress}:{pool.PoolAppId}:{pool.AssetIdA}:{pool.AssetIdB}"] = pool;
                     }
                 }
 
@@ -437,6 +438,8 @@ namespace BiatecMCP.MCP
         {
             switch (ex)
             {
+                case OperationCanceledException:
+                    return ("The request was cancelled.", "Cancelled");
                 case ScanApiException e:
                     return (e.Message, "ScanUnavailable");
                 case ArgumentException e:
