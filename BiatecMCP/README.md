@@ -49,7 +49,7 @@ until it's live again, rather than resolving to a dead node. A locally-configure
 connection details; the code itself still goes through the same table either way. This dynamic set is cached
 in-process for ~10 minutes and also backs `createBridgeTransaction`'s destination-liquidity check (below) and
 BiatecOIDC's public `GET /chains` endpoint. Unlike AVM, the EVM and Bitcoin-family code sets are fixed
-(`ethereum`/`gnosis`/`arbitrum`/`base`, `bitcoin`/`bitcoin-cash`) - deliberately not open to the ~2,700-chain
+(`ethereum`/`gnosis`/`arbitrum`/`base`, `bitcoin`/`bitcoin-cash`, `solana`) - deliberately not open to the ~2,700-chain
 public EVM universe some earlier version of this server accepted by name or numeric chain id, since a small,
 predictable, always-listed vocabulary is far less likely for a connected AI agent to get wrong (or to recover
 from getting wrong) than an open-ended one - see "Strict network codes" below for the real reported confusion
@@ -91,7 +91,7 @@ Wallet operations are three separate, chainable steps — **build** an unsigned 
 **execute** (broadcast) it — rather than one monolithic call. Each `create*` tool only builds and never touches
 BiatecOIDC or the network; only `signTransaction`, `activateCryptoAddress`, and `submitTransactionToBlockchain`
 require the `sign` scope. `submitTransactionToBlockchain` is the *only* broadcast tool - one tool for every supported
-chain family (AVM, Bitcoin, Bitcoin Cash), never a separate per-chain-family tool to pick between - `network`
+chain family (AVM, Bitcoin, Bitcoin Cash, Solana), never a separate per-chain-family tool to pick between - `network`
 (the same parameter name/values every other tool uses) is what tells it where to broadcast. **Always pass the
 exact same `network` value the transaction was built/signed for** - a transaction is only ever valid on the
 one network it was built against (its own genesis hash for AVM, its own chain rules for Bitcoin-family), so
@@ -127,8 +127,8 @@ seed/slot, since that's a different concern (choosing which identity produces th
 - **`listSupportedNetworks`** — lists the exact, closed set of `network` codes every `create*`/
   `getCryptoAddress`/`getCryptoBalance`/`signTransaction`/`submitTransactionToBlockchain` tool accepts: every live
   Algorand-family chain (`algorand-mainnet`, `algorand-testnet`, `voi-mainnet`, `aramid-mainnet`, ...),
-  Ethereum-family chain (`ethereum`, `gnosis`, `arbitrum`, `base`), and Bitcoin-family chain (`bitcoin`,
-  `bitcoin-cash`). **`network` must match one of these `code` values exactly** (case-insensitive, no
+  Ethereum-family chain (`ethereum`, `gnosis`, `arbitrum`, `base`), Bitcoin-family chain (`bitcoin`,
+  `bitcoin-cash`), and Solana (`solana`). **`network` must match one of these `code` values exactly** (case-insensitive, no
   fuzzy/partial matching, no display names, no genesis ids, no numeric EVM chain ids) - passing anything else
   fails with an error listing every valid code. Always call this first if you're not certain of the exact
   code, and never retry a failed call by guessing a different `network` value. No authentication required.

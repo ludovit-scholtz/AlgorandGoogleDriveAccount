@@ -150,5 +150,23 @@ namespace BiatecOIDCTests
 
             Assert.That(resolved, Is.Null);
         }
+
+        [Test]
+        public async Task ResolveAsync_SolanaCode_ResolvesToSolanaFamilyCaseInsensitively()
+        {
+            var resolved = await CreateResolver().ResolveAsync("Solana");
+
+            Assert.That(resolved, Is.Not.Null);
+            Assert.That(resolved!.Family, Is.EqualTo(ChainFamily.Sol));
+            Assert.That(resolved.AvmChain, Is.Null);
+        }
+
+        [TestCase("solana-mainnet")]
+        [TestCase("solana-devnet")]
+        [TestCase("sol")]
+        public async Task ResolveAsync_OtherSolanaSpellings_AreNotAccepted(string code)
+        {
+            Assert.That(await CreateResolver().ResolveAsync(code), Is.Null);
+        }
     }
 }

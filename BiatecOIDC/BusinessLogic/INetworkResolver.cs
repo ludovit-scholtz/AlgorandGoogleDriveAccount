@@ -13,7 +13,10 @@ namespace BiatecOIDC.BusinessLogic
         Btc,
 
         /// <summary>Bitcoin Cash mainnet.</summary>
-        Bch
+        Bch,
+
+        /// <summary>Solana mainnet-beta.</summary>
+        Sol
     }
 
     /// <summary>

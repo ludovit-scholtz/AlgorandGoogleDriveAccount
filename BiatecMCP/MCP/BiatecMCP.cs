@@ -43,6 +43,12 @@ namespace BiatecMCP.MCP
         private const string NoBitcoinAddressMessage =
             "This account has no Bitcoin-family address yet. Complete storage-provider consent by signing in through BiatecOIDC first.";
 
+        private const string NoSolanaAddressMessage =
+            "This account has no Solana address yet. Complete storage-provider consent by signing in through BiatecOIDC first.";
+
+        /// <summary>Solana's base network fee for a one-signature transaction (5,000 lamports) - this server adds no priority fee.</summary>
+        private const ulong SolanaBaseFeeLamports = 5000;
+
         private readonly IBiatecWalletClient _walletClient;
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly DexSwapAggregatorService _dexSwapAggregator;
@@ -51,6 +57,7 @@ namespace BiatecMCP.MCP
         private readonly INetworkResolver _networkResolver;
         private readonly IPublicEvmRpcDataSource _evmRpcDataSource;
         private readonly IPublicBitcoinDataSource _bitcoinDataSource;
+        private readonly ISolanaRpcDataSource _solanaRpcDataSource;
         private readonly ILogger<BiatecMCP> _logger;
 
         public BiatecMCP(
@@ -62,6 +69,7 @@ namespace BiatecMCP.MCP
             INetworkResolver networkResolver,
             IPublicEvmRpcDataSource evmRpcDataSource,
             IPublicBitcoinDataSource bitcoinDataSource,
+            ISolanaRpcDataSource solanaRpcDataSource,
             ILogger<BiatecMCP> logger)
         {
             _walletClient = walletClient;
@@ -72,6 +80,7 @@ namespace BiatecMCP.MCP
             _networkResolver = networkResolver;
             _evmRpcDataSource = evmRpcDataSource;
             _bitcoinDataSource = bitcoinDataSource;
+            _solanaRpcDataSource = solanaRpcDataSource;
             _logger = logger;
         }
 
@@ -111,7 +120,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "listSupportedNetworks"),
-         Description("Lists every exact 'network' code accepted by every tool that takes one (getCryptoAddress/getCryptoBalance/create*/signTransaction/submitTransactionToBlockchain) - every live Algorand-family (AVM) chain (e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'aramid-mainnet') plus every supported Ethereum-family (EVM) chain ('ethereum', 'gnosis', 'arbitrum', 'base') and Bitcoin-family chain ('bitcoin', 'bitcoin-cash'). ALWAYS call this first if you're unsure of the exact code - 'network' must match one of these Code values EXACTLY (case-insensitive, but no partial/fuzzy matching, no display names, no genesis ids, no numeric chain ids); passing anything else fails with an error listing every valid code. Never guess a network code, and never retry a failed call with a different network value - resolve the right one from this list first. No authentication required.")]
+         Description("Lists every exact 'network' code accepted by every tool that takes one (getCryptoAddress/getCryptoBalance/create*/signTransaction/submitTransactionToBlockchain) - every live Algorand-family (AVM) chain (e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'aramid-mainnet') plus every supported Ethereum-family (EVM) chain ('ethereum', 'gnosis', 'arbitrum', 'base') Bitcoin-family chain ('bitcoin', 'bitcoin-cash') and Solana ('solana'). ALWAYS call this first if you're unsure of the exact code - 'network' must match one of these Code values EXACTLY (case-insensitive, but no partial/fuzzy matching, no display names, no genesis ids, no numeric chain ids); passing anything else fails with an error listing every valid code. Never guess a network code, and never retry a failed call with a different network value - resolve the right one from this list first. No authentication required.")]
         public async Task<ListSupportedNetworksResponse> ListSupportedNetworks()
         {
             try
@@ -134,7 +143,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "getCryptoAddress"),
-         Description("Returns the signed-in Biatec account's address on the given blockchain network - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash are all supported, derived from the same seed. 'network' must be an exact code from listSupportedNetworks (e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'ethereum', 'arbitrum', 'base', 'bitcoin', 'bitcoin-cash') - call it first if unsure. An Algorand-family address is the same across every AVM chain; an Ethereum-family address is the same across every EVM chain - 'network' only picks which family's address to derive.")]
+         Description("Returns the signed-in Biatec account's address on the given blockchain network - Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, Bitcoin Cash, and Solana are all supported, derived from the same seed. 'network' must be an exact code from listSupportedNetworks (e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'ethereum', 'arbitrum', 'base', 'bitcoin', 'bitcoin-cash', 'solana') - call it first if unsure. An Algorand-family address is the same across every AVM chain; an Ethereum-family address is the same across every EVM chain - 'network' only picks which family's address to derive.")]
         public async Task<GetCryptoAddressResponse> GetCryptoAddress(
             [Description("Which network to derive the address for. Call listSupportedNetworks to see valid values.")] string network,
             [Description("ARC-76 derivation slot. 0 = the default/first address, 1 = the 'second address', etc.")] int slot = 0,
@@ -168,6 +177,17 @@ namespace BiatecMCP.MCP
                     }
 
                     return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = resolved.Family.ToString(), Address = bitcoinAddress };
+                }
+
+                if (resolved.Family == ChainFamily.Sol)
+                {
+                    var solanaAddress = await ResolveSolanaAddressAsync(slot: slot, seedAddress: seedAddress);
+                    if (string.IsNullOrWhiteSpace(solanaAddress))
+                    {
+                        return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Sol), Error = NoSolanaAddressMessage };
+                    }
+
+                    return new GetCryptoAddressResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Sol), Address = solanaAddress };
                 }
 
                 var evmAddress = await ResolveEvmAddressAsync(slot: slot, seedAddress: seedAddress);
@@ -219,7 +239,7 @@ namespace BiatecMCP.MCP
         private const int MaxAssetsInBalanceResponse = 50;
 
         [McpServerTool(Name = "getCryptoBalance"),
-         Description("Returns the native-currency balance (and, on Algorand-family chains, ASA holdings) for an address on the given blockchain network - see listSupportedNetworks for valid 'network' values. Omit 'address' to check the signed-in account's own address on that network. EVM balances are the native gas token only (e.g. ETH) - ERC-20 token balances are not supported. Bitcoin/Bitcoin Cash balances are the confirmed on-chain balance from a public block explorer.")]
+         Description("Returns the native-currency balance (and, on Algorand-family chains, ASA holdings) for an address on the given blockchain network - see listSupportedNetworks for valid 'network' values. Omit 'address' to check the signed-in account's own address on that network. EVM balances are the native gas token only (e.g. ETH) - ERC-20 token balances are not supported. Bitcoin/Bitcoin Cash balances are the confirmed on-chain balance from a public block explorer. Solana balances are native SOL only (SPL token balances are not supported), read from a Solana RPC node.")]
         public async Task<GetCryptoBalanceResponse> GetCryptoBalance(
             [Description("Which network to query. Call listSupportedNetworks to see valid values.")] string network,
             [Description("Address to check the balance of. Omit to check the signed-in account's own address on this network.")] string? address = null,
@@ -292,6 +312,38 @@ namespace BiatecMCP.MCP
                         NativeCurrencySymbol = resolved.Family == ChainFamily.Btc ? "BTC" : "BCH",
                         NativeBalance = satoshis.Value / 100_000_000m,
                         NativeBalanceBaseUnits = satoshis.Value.ToString(CultureInfo.InvariantCulture)
+                    };
+                }
+
+                if (resolved.Family == ChainFamily.Sol)
+                {
+                    var solanaAddress = address ?? await ResolveSolanaAddressAsync(slot: slot, seedAddress: seedAddress);
+                    if (string.IsNullOrWhiteSpace(solanaAddress))
+                    {
+                        return new GetCryptoBalanceResponse { Network = resolved.DisplayName, Family = nameof(ChainFamily.Sol), Error = NoSolanaAddressMessage };
+                    }
+
+                    var lamports = await _solanaRpcDataSource.TryGetBalanceAsync(solanaAddress);
+                    if (lamports == null)
+                    {
+                        return new GetCryptoBalanceResponse
+                        {
+                            Network = resolved.DisplayName,
+                            Family = nameof(ChainFamily.Sol),
+                            Address = solanaAddress,
+                            Error = "Could not reach the Solana RPC node to check the balance right now. Try again shortly.",
+                            ErrorType = "RpcUnavailable"
+                        };
+                    }
+
+                    return new GetCryptoBalanceResponse
+                    {
+                        Network = resolved.DisplayName,
+                        Family = nameof(ChainFamily.Sol),
+                        Address = solanaAddress,
+                        NativeCurrencySymbol = "SOL",
+                        NativeBalance = lamports.Value / 1_000_000_000m,
+                        NativeBalanceBaseUnits = lamports.Value.ToString(CultureInfo.InvariantCulture)
                     };
                 }
 
@@ -501,6 +553,96 @@ namespace BiatecMCP.MCP
             catch (Exception ex)
             {
                 return new CreateBitcoinTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateBitcoinTransaction)), ErrorType = ex.GetType().ToString() };
+            }
+        }
+
+        public class CreateSolanaTransactionResponse
+        {
+            public string UnsignedTransaction { get; set; } = string.Empty;
+            public string Sender { get; set; } = string.Empty;
+            public string Receiver { get; set; } = string.Empty;
+            public long AmountLamports { get; set; }
+            public long EstimatedFeeLamports { get; set; }
+            public string Error { get; set; } = string.Empty;
+            public string ErrorType { get; set; } = string.Empty;
+        }
+
+        [McpServerTool(Name = "createSolanaTransaction"),
+         Description("Builds an unsigned native-SOL transfer from the signed-in Biatec account - does NOT sign or broadcast it. Native SOL only (SPL tokens and other programs are not supported). Fetches a recent blockhash from a Solana RPC node. Pass the result's UnsignedTransaction to signTransaction next (network='solana', address=Sender), then the signed result to submitTransactionToBlockchain (same network) to broadcast it. The blockhash expires after roughly a minute, so sign and submit promptly - if it expires, call this tool again. Solana accounts must stay rent-exempt: a transfer that leaves the sender with a tiny non-zero balance, or sends less than about 0.00089 SOL to a brand-new recipient address, is rejected by the network.")]
+        public async Task<CreateSolanaTransactionResponse> CreateSolanaTransaction(
+            [Description("Recipient Solana address (base58).")] string receiverAddress,
+            [Description("Amount to send, in lamports (1 SOL = 1,000,000,000 lamports).")] long amountLamports,
+            [Description("Which network to build for - 'solana'.")] string network,
+            [Description("A specific seed's identifying address to build the transaction from instead of the primary seed.")] string? seedAddress = null,
+            [Description("ARC-76 derivation slot to build the transaction from. Defaults to 0 (matches the signed-in identity).")] int slot = 0)
+        {
+            try
+            {
+                var resolved = await _networkResolver.ResolveAsync(network);
+                if (resolved == null)
+                {
+                    return new CreateSolanaTransactionResponse { Error = await BuildUnknownNetworkErrorAsync(network), ErrorType = "InvalidRequest" };
+                }
+
+                if (resolved.Family != ChainFamily.Sol)
+                {
+                    return new CreateSolanaTransactionResponse { Error = $"'{network}' is not a Solana network. Use 'solana'.", ErrorType = "InvalidRequest" };
+                }
+
+                if (amountLamports <= 0)
+                {
+                    return new CreateSolanaTransactionResponse { Error = "Amount must be positive.", ErrorType = "InvalidRequest" };
+                }
+
+                if (!SolanaAddressValidator.IsValid(receiverAddress))
+                {
+                    return new CreateSolanaTransactionResponse { Error = $"'{receiverAddress}' is not a valid Solana address (expected a base58 public key).", ErrorType = "InvalidRequest" };
+                }
+
+                var senderAddress = await ResolveSolanaAddressAsync(slot: slot, seedAddress: seedAddress);
+                if (string.IsNullOrWhiteSpace(senderAddress))
+                {
+                    return new CreateSolanaTransactionResponse { Error = NoSolanaAddressMessage, ErrorType = "NoSolanaAddress" };
+                }
+
+                // Best-effort early failure only - if the node can't answer, carry on and let the network be the judge.
+                var balance = await _solanaRpcDataSource.TryGetBalanceAsync(senderAddress);
+                if (balance != null && balance.Value < (ulong)amountLamports + SolanaBaseFeeLamports)
+                {
+                    return new CreateSolanaTransactionResponse
+                    {
+                        Error = $"'{senderAddress}' holds {balance.Value} lamports, which does not cover {amountLamports} lamports plus the {SolanaBaseFeeLamports}-lamport network fee.",
+                        ErrorType = "InsufficientFunds"
+                    };
+                }
+
+                var blockhash = await _solanaRpcDataSource.TryGetLatestBlockhashAsync();
+                if (string.IsNullOrEmpty(blockhash))
+                {
+                    return new CreateSolanaTransactionResponse { Error = "Could not reach the Solana RPC node to fetch a recent blockhash right now. Try again shortly.", ErrorType = "RpcUnavailable" };
+                }
+
+                var transfer = new SolanaUnsignedTransfer { Recipient = receiverAddress, Lamports = (ulong)amountLamports, RecentBlockhash = blockhash };
+                return new CreateSolanaTransactionResponse
+                {
+                    UnsignedTransaction = Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(transfer)),
+                    Sender = senderAddress,
+                    Receiver = receiverAddress,
+                    AmountLamports = amountLamports,
+                    EstimatedFeeLamports = (long)SolanaBaseFeeLamports
+                };
+            }
+            catch (WalletApiException ex)
+            {
+                return new CreateSolanaTransactionResponse { Error = ex.Message, ErrorType = ex.ErrorCode };
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return new CreateSolanaTransactionResponse { Error = ex.Message, ErrorType = "Unauthorized" };
+            }
+            catch (Exception ex)
+            {
+                return new CreateSolanaTransactionResponse { Error = SanitizeForToolResponse(ex, nameof(CreateSolanaTransaction)), ErrorType = ex.GetType().ToString() };
             }
         }
 
@@ -1261,7 +1403,7 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "signTransaction"),
-         Description("Signs unsigned transaction(s) as 'address' on 'network'. This does NOT broadcast anything - signing alone has no effect on the blockchain. After this call succeeds, ALWAYS call submitTransactionToBlockchain next (same 'network') to actually broadcast the result - unless this was a createMultisigTransaction envelope, in which case call mergeMultisigTransactions first instead. Requires the 'sign' scope. Supports Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, and Bitcoin Cash. For AVM, each transaction is from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope (base64-encoded msgpack). For EVM (no create* tool builds these yet), each transaction is base64-encoded UTF-8 JSON with fields chainId/nonce/to/value/data/gasLimit plus either gasPrice (legacy) or maxFeePerGas+maxPriorityFeePerGas (EIP-1559) - all numeric fields as decimal or 0x-prefixed hex strings. For Bitcoin/Bitcoin Cash, pass exactly one transaction - the UnsignedTransaction from createBitcoinTransaction. 'address' must be the same address the create* tool (or getCryptoAddress/listAlgorandAddresses) returned as the sender - use getAddressInfo/activateCryptoAddress first if it's not the signed-in account's own default address. 'network' must be the exact same network code the transaction was built for - see listSupportedNetworks for the full list.")]
+         Description("Signs unsigned transaction(s) as 'address' on 'network'. This does NOT broadcast anything - signing alone has no effect on the blockchain. After this call succeeds, ALWAYS call submitTransactionToBlockchain next (same 'network') to actually broadcast the result - unless this was a createMultisigTransaction envelope, in which case call mergeMultisigTransactions first instead. Requires the 'sign' scope. Supports Algorand-family (AVM), Ethereum-family (EVM), Bitcoin, Bitcoin Cash, and Solana. For AVM, each transaction is from createPaymentTransaction/createOptInTransaction/createAssetCreateTransaction/createSwapTransaction, or a createMultisigTransaction envelope (base64-encoded msgpack). For EVM (no create* tool builds these yet), each transaction is base64-encoded UTF-8 JSON with fields chainId/nonce/to/value/data/gasLimit plus either gasPrice (legacy) or maxFeePerGas+maxPriorityFeePerGas (EIP-1559) - all numeric fields as decimal or 0x-prefixed hex strings. For Bitcoin/Bitcoin Cash, pass exactly one transaction - the UnsignedTransaction from createBitcoinTransaction. For Solana, pass exactly one transaction - the UnsignedTransaction from createSolanaTransaction (submit it promptly: its blockhash expires after roughly a minute). 'address' must be the same address the create* tool (or getCryptoAddress/listAlgorandAddresses) returned as the sender - use getAddressInfo/activateCryptoAddress first if it's not the signed-in account's own default address. 'network' must be the exact same network code the transaction was built for - see listSupportedNetworks for the full list.")]
         public async Task<SignTransactionResponse> SignTransaction(
             [Description("Unsigned transaction(s) - base64-encoded msgpack for an AVM network, or base64-encoded UTF-8 JSON for an EVM one (see this tool's own description for the JSON shape).")] List<string> unsignedTransactions,
             [Description("Which network 'address' belongs to - the exact code from listSupportedNetworks (e.g. 'algorand-mainnet', 'bitcoin').")] string network,
@@ -1499,10 +1641,10 @@ namespace BiatecMCP.MCP
         }
 
         [McpServerTool(Name = "submitTransactionToBlockchain"),
-         Description("Broadcasts one or more already-signed transactions to the blockchain - the one broadcast tool for every chain family this server supports (Algorand-family/AVM, Bitcoin, Bitcoin Cash). 'network' (see listSupportedNetworks) must be the exact same network the transaction(s) were built and signed for - broadcasting to the wrong network always fails, since a transaction signed for one network's genesis/chain is invalid on any other. Requires the 'sign' scope.")]
+         Description("Broadcasts one or more already-signed transactions to the blockchain - the one broadcast tool for every chain family this server supports (Algorand-family/AVM, Bitcoin, Bitcoin Cash, Solana). 'network' (see listSupportedNetworks) must be the exact same network the transaction(s) were built and signed for - broadcasting to the wrong network always fails, since a transaction signed for one network's genesis/chain is invalid on any other. Requires the 'sign' scope.")]
         public async Task<SubmitTransactionToBlockchainResponse> SubmitTransactionToBlockchain(
-            [Description("Signed transaction(s) to broadcast, base64-encoded, in submission order. AVM: one or more msgpack-encoded transactions (e.g. from signTransaction or mergeMultisigTransactions). Bitcoin/BitcoinCash: exactly one raw signed transaction.")] List<string> signedTransactions,
-            [Description("Which network to broadcast on - the exact network code the transaction(s) were built/signed for, e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'bitcoin', 'bitcoin-cash'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network)
+            [Description("Signed transaction(s) to broadcast, base64-encoded, in submission order. AVM: one or more msgpack-encoded transactions (e.g. from signTransaction or mergeMultisigTransactions). Bitcoin/BitcoinCash: exactly one raw signed transaction. Solana: exactly one signed transaction (from signTransaction).")] List<string> signedTransactions,
+            [Description("Which network to broadcast on - the exact network code the transaction(s) were built/signed for, e.g. 'algorand-mainnet', 'algorand-testnet', 'voi-mainnet', 'bitcoin', 'bitcoin-cash', 'solana'. Call listSupportedNetworks to see the full list of valid, exact network codes.")] string network)
         {
             var authError = RequireSignClaim();
             if (authError != null)
@@ -1526,6 +1668,11 @@ namespace BiatecMCP.MCP
                 if (resolved.Family is ChainFamily.Btc or ChainFamily.Bch)
                 {
                     return await SubmitBitcoinTransactionAsync(resolved.Family, signedTransactions);
+                }
+
+                if (resolved.Family == ChainFamily.Sol)
+                {
+                    return await SubmitSolanaTransactionAsync(signedTransactions);
                 }
 
                 if (resolved.Family == ChainFamily.Evm)
@@ -1579,6 +1726,32 @@ namespace BiatecMCP.MCP
             }
 
             return new SubmitTransactionToBlockchainResponse { TxId = txId, ExplorerLink = $"https://blockchair.com/{chainSlug}/transaction/{txId}" };
+        }
+
+        private async Task<SubmitTransactionToBlockchainResponse> SubmitSolanaTransactionAsync(List<string> signedTransactions)
+        {
+            if (signedTransactions.Count != 1)
+            {
+                return new SubmitTransactionToBlockchainResponse { Error = "Exactly one signed transaction is required for Solana.", ErrorType = "InvalidRequest" };
+            }
+
+            byte[] rawBytes;
+            try
+            {
+                rawBytes = Convert.FromBase64String(signedTransactions[0]);
+            }
+            catch (FormatException)
+            {
+                return new SubmitTransactionToBlockchainResponse { Error = "The signed transaction must be base64-encoded.", ErrorType = "InvalidRequest" };
+            }
+
+            var result = await _solanaRpcDataSource.SendTransactionAsync(rawBytes);
+            if (result.Signature == null)
+            {
+                return new SubmitTransactionToBlockchainResponse { Error = result.Error ?? "The Solana RPC node rejected the transaction.", ErrorType = "BroadcastFailed" };
+            }
+
+            return new SubmitTransactionToBlockchainResponse { TxId = result.Signature, ExplorerLink = $"https://explorer.solana.com/tx/{result.Signature}" };
         }
 
         private const string BiatecRouterProviderName = "BiatecRouter";
@@ -1716,6 +1889,13 @@ namespace BiatecMCP.MCP
         {
             var derived = await ResolveDerivedAddressAsync(bearerToken, slot, seedAddress);
             return family == ChainFamily.Btc ? derived?.BitcoinAddress : derived?.BitcoinCashAddress;
+        }
+
+        /// <summary>Resolves a Solana address for signing/reporting - same thin-wrapper shape as <see cref="ResolveEvmAddressAsync"/>.</summary>
+        private async Task<string?> ResolveSolanaAddressAsync(string? bearerToken = null, int slot = 0, string? seedAddress = null)
+        {
+            var derived = await ResolveDerivedAddressAsync(bearerToken, slot, seedAddress);
+            return derived?.SolanaAddress;
         }
 
         /// <summary>

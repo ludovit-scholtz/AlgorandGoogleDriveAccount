@@ -12,6 +12,7 @@ using NBitcoin;
 using NBitcoin.Altcoins;
 using AlgorandArc76 = ARC76Account.Algorand.ARC76;
 using EthereumArc76 = ARC76Account.Ethereum.ARC76;
+using SolanaArc76 = ARC76Account.Solana.ARC76;
 
 namespace BiatecSelfCustodyCore.Repository
 {
@@ -115,6 +116,42 @@ namespace BiatecSelfCustodyCore.Repository
                 _logger.LogError(ex, "Error loading an EVM account from {Provider} for email {Email}", storageProvider.Name, email);
                 throw new InvalidOperationException($"Error loading an EVM account from {storageProvider.Name}.");
             }
+        }
+
+        public async Task<Solnet.Wallet.Account> LoadSolanaAccountAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null)
+        {
+            var storageProvider = _catalog.Resolve(provider);
+
+            try
+            {
+                var context = await ResolveContextAsync(storageProvider, accessToken);
+                var seed = await ResolveSeedEntryAsync(email, storageProvider, context, seedAddress);
+
+                return SolanaArc76.GetEmailAccount(email, seed.Mnemonic, slot);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (VaultConcurrencyConflictException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading a Solana account from {Provider} for email {Email}", storageProvider.Name, email);
+                throw new InvalidOperationException($"Error loading a Solana account from {storageProvider.Name}.");
+            }
+        }
+
+        public async Task<string> DeriveSolanaAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null)
+        {
+            var account = await LoadSolanaAccountAsync(email, slot, provider, accessToken, seedAddress);
+            return account.PublicKey.Key;
         }
 
         public async Task<Key> LoadBitcoinKeyAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null)

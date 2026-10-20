@@ -24,6 +24,7 @@ namespace BiatecOIDC.BusinessLogic
         private readonly ISpendingLimitService _spendingLimitService;
         private readonly IAssetValuationService _valuationService;
         private readonly IBitcoinValuationService _bitcoinValuationService;
+        private readonly ISolanaValuationService _solanaValuationService;
         private readonly ICloudAccountRepository _accountRepository;
         private readonly ILogger<WalletService> _logger;
 
@@ -32,6 +33,7 @@ namespace BiatecOIDC.BusinessLogic
             ISpendingLimitService spendingLimitService,
             IAssetValuationService valuationService,
             IBitcoinValuationService bitcoinValuationService,
+            ISolanaValuationService solanaValuationService,
             ICloudAccountRepository accountRepository,
             ILogger<WalletService> logger)
         {
@@ -39,6 +41,7 @@ namespace BiatecOIDC.BusinessLogic
             _spendingLimitService = spendingLimitService;
             _valuationService = valuationService;
             _bitcoinValuationService = bitcoinValuationService;
+            _solanaValuationService = solanaValuationService;
             _accountRepository = accountRepository;
             _logger = logger;
         }
@@ -212,6 +215,56 @@ namespace BiatecOIDC.BusinessLogic
             }
 
             _logger.LogInformation("Signed a {Family} transaction for {Email}, totaling {TotalUsd:0.####} USD.", family, email, totalUsd);
+            return signed;
+        }
+
+        public async Task<byte[]> SignSolanaTransferAsync(string email, string provider, SolanaUnsignedTransfer transfer, string? accessToken, string? seedAddress = null, int slot = 0)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                throw new ArgumentException("Email is required.", nameof(email));
+            }
+
+            if (transfer == null || transfer.Lamports == 0)
+            {
+                throw new ArgumentException("A transfer of more than 0 lamports is required.", nameof(transfer));
+            }
+
+            // Resolved once, up front, so the spending-limit check and the actual signing call below agree
+            // on the same identity even if the vault's primary seed changes mid-request.
+            var resolvedAddress = await _accountRepository.ResolveSeedAddressAsync(email, provider, seedAddress, accessToken);
+
+            // A transfer to the signer's own address moves nothing - treat it as free, but determine "own" from
+            // the independently derived address, never from anything the caller claims.
+            var signerAddress = await _accountRepository.DeriveSolanaAddressAsync(email, provider, resolvedAddress, slot, accessToken);
+            var spendLamports = string.Equals(transfer.Recipient, signerAddress, StringComparison.Ordinal) ? 0UL : transfer.Lamports;
+
+            var totalUsd = spendLamports > 0 ? await _solanaValuationService.GetUsdValueAsync(spendLamports) : 0m;
+
+            if (totalUsd > 0m)
+            {
+                await _spendingLimitService.EnsureWithinLimitsAsync(email, provider, accessToken, totalUsd, resolvedAddress, slot);
+            }
+
+            var signed = await _driveService.SignSolanaTransactionAsync(email, transfer, provider, accessToken, resolvedAddress, slot);
+
+            if (totalUsd > 0m)
+            {
+                await _spendingLimitService.RecordSpendAsync(email, provider, accessToken, new[]
+                {
+                    new SpendingLedgerEntry
+                    {
+                        TimestampUtc = DateTimeOffset.UtcNow,
+                        AmountUsd = totalUsd,
+                        AssetId = 0,
+                        Kind = "Solana",
+                        SeedAddress = resolvedAddress,
+                        Slot = slot
+                    }
+                });
+            }
+
+            _logger.LogInformation("Signed a Solana transfer for {Email}, totaling {TotalUsd:0.####} USD.", email, totalUsd);
             return signed;
         }
     }

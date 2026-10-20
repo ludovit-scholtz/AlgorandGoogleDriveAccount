@@ -83,6 +83,23 @@ namespace BiatecSelfCustodyCore.Repository
         Task<string> DeriveEvmAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null);
 
         /// <summary>
+        /// Loads the Solana (ed25519) signing account for <paramref name="email"/>/<paramref name="slot"/> - the same
+        /// seed mnemonic <see cref="LoadAccountAsync"/> derives the Algorand key from, just via
+        /// <c>ARC76Account.Solana.ARC76.GetEmailAccount</c>. Mirrors <see cref="LoadEvmAccountAsync"/>'s exact
+        /// seed-resolution/error semantics - callers sign immediately and let it go out of scope; never persisted,
+        /// never logged.
+        /// </summary>
+        Task<Solnet.Wallet.Account> LoadSolanaAccountAsync(string email, int slot, string provider, string? accessToken = null, string? seedAddress = null);
+
+        /// <summary>
+        /// Derives (without signing or mutating anything) the Solana address (base58 public key) at
+        /// <paramref name="slot"/> for the seed identified by <paramref name="seedAddress"/> (<c>null</c> = the
+        /// vault's current primary seed). Throws <see cref="InvalidOperationException"/> if
+        /// <paramref name="seedAddress"/> is given but no seed in the vault has that address.
+        /// </summary>
+        Task<string> DeriveSolanaAddressAsync(string email, string provider, string? seedAddress, int slot, string? accessToken = null);
+
+        /// <summary>
         /// Resolves and validates a seed selector to its identifying address, without deriving any
         /// slot address - <c>null</c> resolves to the vault's current primary seed (auto-creating the
         /// first seed if the vault is empty, same side effect as <see cref="LoadAccountAsync"/>); a

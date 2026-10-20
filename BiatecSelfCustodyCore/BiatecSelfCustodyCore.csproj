@@ -17,6 +17,7 @@
          of both, never referenced directly here). -->
     <PackageReference Include="ARC76Account.Algorand" Version="1.0.10.2026102000" />
     <PackageReference Include="ARC76Account.Ethereum" Version="1.0.10.2026102000" />
+    <PackageReference Include="ARC76Account.Solana" Version="1.0.10.2026102000" />
     <PackageReference Include="Google.Apis.Auth" Version="1.77.0" />
     <PackageReference Include="Google.Apis.Auth.AspNetCore3" Version="1.77.0" />
     <PackageReference Include="Google.Apis.Drive.v3" Version="1.77.0.4276" />
@@ -35,6 +36,8 @@
     <PackageReference Include="MessagePack" Version="3.1.12" />
     <PackageReference Include="NBitcoin" Version="10.0.17" />
     <PackageReference Include="NBitcoin.Altcoins" Version="6.0.11" />
+    <!-- Solana: System Program transfer instruction + legacy transaction builder/serializer (Solnet.Rpc comes transitively). -->
+    <PackageReference Include="Solnet.Programs" Version="6.1.0" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.23.0" />
   </ItemGroup>
 

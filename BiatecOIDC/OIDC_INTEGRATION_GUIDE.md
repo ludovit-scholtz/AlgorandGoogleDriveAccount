@@ -167,7 +167,7 @@ display name):
 
 **Strict network codes**: `network` must exactly match one of a small, closed set of codes - AVM chains are
 `{chain}-{variant}` (`algorand-mainnet`, `algorand-testnet`, `voi-mainnet`, `aramid-mainnet`, ...), EVM and
-Bitcoin-family chains have no variant suffix (`ethereum`, `arbitrum`, `base`, `bitcoin`, `bitcoin-cash`). No
+Bitcoin-family chains and Solana have no variant suffix (`ethereum`, `arbitrum`, `base`, `bitcoin`, `bitcoin-cash`, `solana`). No
 fuzzy matching, raw genesis id, display name, or numeric EVM chain id is accepted - an unrecognized value
 fails with `400 unknown_network`. BiatecMCP's `listSupportedNetworks` tool enumerates the current full set if
 you're integrating outside BiatecMCP and need to discover it programmatically.
@@ -229,6 +229,33 @@ which BiatecMCP's one `submitTransactionToBlockchain` tool submits, via the shar
 explorer respectively, depending on the `network` parameter). No spending-limit enforcement for
 EVM yet (BiatecMCP's `getCryptoBalance` tool queries EVM balances directly against a public RPC, without ever
 involving this API, since that needs no key material).
+
+## Solana support
+
+Every seed also has a Solana identity (ed25519), derived by the `ARC76Account.Solana` package from the same
+mnemonic/email/slot as the other families. `GET /wallet/address/{seedAddress}/{slot?}` returns it as
+`solanaAddress` (base58 public key) and registers it for signing, like the EVM and Bitcoin addresses. The only
+network code is `solana` (Solana mainnet-beta); `POST /wallet/{network}/{seedAddress}/{slot}/activate` is
+rejected for it (Solana has no rekey concept - it is activated automatically when derived).
+
+`POST /wallet/solana/{address}/sign` signs a **native-SOL transfer**. Unlike the other families it does not
+accept a pre-built Solana transaction: pass exactly one `transactions` entry, the base64 of this UTF-8 JSON,
+
+```json
+{ "Recipient": "<base58 address>", "Lamports": 1000000, "RecentBlockhash": "<base58 recent blockhash>" }
+```
+
+and Biatec builds the single System Program transfer itself (the signer is both sender and fee payer; no other
+instruction can be added), signs it, and returns the fully-signed serialized transaction (base64) in
+`signedTransactions[0]`, ready for the Solana RPC `sendTransaction` (BiatecMCP's `submitTransactionToBlockchain`
+does this for you). The blockhash must come from the same cluster you will broadcast to and expires after roughly
+a minute. SPL tokens and arbitrary programs are not supported.
+
+Daily/weekly/monthly spending limits **are** enforced: the transferred SOL is priced in USD (CoinGecko spot
+price, cached ~5 minutes) and checked against the global and per-address limits before signing; a spend that
+can't be priced is refused with `503 asset_valuation_failed`, and exceeding a limit with `403
+spending_limit_exceeded`. A transfer to the signer's own address moves nothing and is not counted. A malformed
+recipient/blockhash or zero `Lamports` is `400 invalid_request`.
 
 See [the supported-chains page](https://oidc.biatec.io/chains.html) for the full capability matrix, and this
 repo's `CLAUDE.md` for the deeper architecture writeup (`IEvmChainRegistry`, `INetworkResolver`, etc., all in

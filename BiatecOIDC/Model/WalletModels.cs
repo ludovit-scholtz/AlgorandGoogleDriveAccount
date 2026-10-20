@@ -208,6 +208,9 @@ namespace BiatecOIDC.Model
         /// <summary>The derived Bitcoin Cash mainnet CashAddr (<c>bitcoincash:q...</c>) address for the same seed/slot.</summary>
         public string BitcoinCashAddress { get; set; } = string.Empty;
 
+        /// <summary>The derived Solana address (base58 ed25519 public key) for the same seed/slot.</summary>
+        public string SolanaAddress { get; set; } = string.Empty;
+
         /// <summary>The seed's identifying (Algorand slot-0) address, echoed back.</summary>
         public string SeedAddress { get; set; } = string.Empty;
 

@@ -90,5 +90,27 @@ namespace BiatecOIDC.BusinessLogic
         /// <exception cref="FormatException">The transaction's implicit fee is unreasonably large, or it could not be built/signed.</exception>
         /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
         Task<byte[]> SignBitcoinTransactionGroupAsync(string email, string provider, BitcoinChainFamily family, BitcoinUnsignedTransaction transaction, string? accessToken, string? seedAddress = null, int slot = 0);
+
+        /// <summary>
+        /// Signs a native-SOL transfer via the shared self-custody signing path
+        /// (<see cref="BiatecSelfCustodyCore.BusinessLogic.IDriveService.SignSolanaTransactionAsync"/>), after pricing
+        /// the transferred amount in USD (<see cref="ISolanaValuationService"/>) and checking it against the caller's
+        /// daily/weekly/monthly limits - the same enforcement Bitcoin gets. A transfer to the signer's own address
+        /// (independently derived here) moves nothing and is not priced. The amount is known exactly because
+        /// <see cref="SolanaUnsignedTransfer"/> is a structured transfer the signing path builds itself - no other
+        /// instruction can be smuggled into the signed message.
+        /// </summary>
+        /// <param name="email">The wallet owner (from the caller's validated OIDC access token).</param>
+        /// <param name="provider">The cloud storage provider the account is stored under.</param>
+        /// <param name="transfer">The unsigned transfer (recipient, lamports, recent blockhash).</param>
+        /// <param name="accessToken">The caller-supplied provider access token used to read/decrypt the self-custody account file and the spending-limit data.</param>
+        /// <param name="seedAddress">Selects which seed signs (<c>null</c> = the vault's current primary seed).</param>
+        /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
+        /// <returns>The fully-signed, serialized transaction.</returns>
+        /// <exception cref="SolanaValuationException">The current SOL-USD spot price could not be determined.</exception>
+        /// <exception cref="SpendingLimitExceededException">The transfer exceeds a configured global or address-specific daily/weekly/monthly limit.</exception>
+        /// <exception cref="FormatException">The transfer could not be built/signed (e.g. an invalid recipient or blockhash).</exception>
+        /// <exception cref="InvalidOperationException"><paramref name="seedAddress"/> is given but no seed in the vault has that address.</exception>
+        Task<byte[]> SignSolanaTransferAsync(string email, string provider, SolanaUnsignedTransfer transfer, string? accessToken, string? seedAddress = null, int slot = 0);
     }
 }

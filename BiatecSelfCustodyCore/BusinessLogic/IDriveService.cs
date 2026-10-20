@@ -34,6 +34,17 @@ namespace BiatecSelfCustodyCore.BusinessLogic
         /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
         Task<byte[]> SignBitcoinTransactionAsync(string email, BitcoinChainFamily family, BitcoinUnsignedTransaction transaction, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0);
 
+        /// <summary>
+        /// Builds and signs a native-SOL transfer (System Program <c>transfer</c>, legacy transaction format) from
+        /// this seed/slot's own Solana account - the signer is both sender and fee payer, and
+        /// <paramref name="transfer"/> is the only instruction in the message, so what is being spent is exactly
+        /// <see cref="SolanaUnsignedTransfer.Lamports"/> (plus the network fee). Returns the fully-signed
+        /// serialized transaction (wire format), ready for <c>sendTransaction</c>.
+        /// </summary>
+        /// <param name="seedAddress">Selects which seed to sign with (<c>null</c> = the vault's current primary seed).</param>
+        /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
+        Task<byte[]> SignSolanaTransactionAsync(string email, SolanaUnsignedTransfer transfer, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0);
+
         /// <param name="seedAddress">Selects which seed to read (<c>null</c> = the vault's current primary seed).</param>
         /// <param name="slot">ARC-76 derivation index within the selected seed.</param>
         Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0);

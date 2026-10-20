@@ -22,6 +22,7 @@ namespace BiatecMCP
             builder.Services.Configure<AlgodConfiguration>(builder.Configuration.GetSection("Algod"));
             builder.Services.Configure<OidcConfiguration>(builder.Configuration.GetSection("Oidc"));
             builder.Services.Configure<McpResourceConfiguration>(builder.Configuration.GetSection("Mcp"));
+            builder.Services.Configure<SolanaConfiguration>(builder.Configuration.GetSection("Solana"));
 
             var oidcConfig = new OidcConfiguration();
             builder.Configuration.GetSection("Oidc").Bind(oidcConfig);
@@ -184,6 +185,13 @@ namespace BiatecMCP
                 client.BaseAddress = new Uri("https://api.blockchair.com/");
             });
             builder.Services.AddScoped<IPublicBitcoinDataSource>(sp => sp.GetRequiredService<BlockchairDataSource>());
+
+            // Solana balance/blockhash/broadcast over raw JSON-RPC (node URL from the "Solana" config section).
+            builder.Services.AddHttpClient<SolanaRpcDataSource>(client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(10);
+            });
+            builder.Services.AddScoped<ISolanaRpcDataSource>(sp => sp.GetRequiredService<SolanaRpcDataSource>());
 
             // Configure MCP Server
             builder.Services.AddMcpServer(options =>

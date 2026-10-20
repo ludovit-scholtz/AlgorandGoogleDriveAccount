@@ -665,5 +665,70 @@ namespace BiatecMCPTests
             public string BuildAuthorizationUrl(string redirectUri, string state) => $"https://example.invalid/authorize?redirect_uri={redirectUri}&state={state}";
             public Task<string?> ExchangeAuthorizationCodeAsync(string code, string redirectUri) => Task.FromResult<string?>(null);
         }
+
+        // ───────────────────────── DeriveSolanaAddressAsync / LoadSolanaAccountAsync ─────────────────────────
+
+        [Test]
+        public async Task DeriveSolanaAddressAsync_IsDeterministicBase58ThirtyTwoByteKey()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var first = await repository.DeriveSolanaAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var second = await repository.DeriveSolanaAddressAsync(TestEmail, "Fake", null, 0, "token");
+
+            Assert.That(second, Is.EqualTo(first));
+            Assert.That(new Solnet.Wallet.PublicKey(first).KeyBytes, Has.Length.EqualTo(32));
+        }
+
+        [Test]
+        public async Task DeriveSolanaAddressAsync_NonZeroSlot_DiffersFromSlotZero()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var slot0 = await repository.DeriveSolanaAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var slot1 = await repository.DeriveSolanaAddressAsync(TestEmail, "Fake", null, 1, "token");
+
+            Assert.That(slot1, Is.Not.EqualTo(slot0));
+        }
+
+        [Test]
+        public async Task DeriveSolanaAddressAsync_DiffersBetweenSeeds()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+            var secondSeed = await repository.CreateSeedAsync(TestEmail, "Fake", "token");
+
+            var primary = await repository.DeriveSolanaAddressAsync(TestEmail, "Fake", null, 0, "token");
+            var second = await repository.DeriveSolanaAddressAsync(TestEmail, "Fake", secondSeed.SeedAddress, 0, "token");
+
+            Assert.That(second, Is.Not.EqualTo(primary));
+        }
+
+        [Test]
+        public async Task LoadSolanaAccountAsync_ReturnsAccountMatchingDerivedAddress()
+        {
+            var repository = CreateRepository();
+            await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+
+            var account = await repository.LoadSolanaAccountAsync(TestEmail, 3, "Fake", "token");
+            var derived = await repository.DeriveSolanaAddressAsync(TestEmail, "Fake", null, 3, "token");
+
+            Assert.That(account.PublicKey.Key, Is.EqualTo(derived));
+        }
+
+        [Test]
+        public void DeriveSolanaAddressAsync_UnknownSeed_ThrowsInvalidOperationException()
+        {
+            var repository = CreateRepository();
+
+            Assert.That(async () =>
+                {
+                    await repository.LoadAccountAsync(TestEmail, 0, "Fake", "token");
+                    await repository.DeriveSolanaAddressAsync(TestEmail, "Fake", "NOTAREALADDRESS", 0, "token");
+                },
+                Throws.InvalidOperationException);
+        }
     }
 }

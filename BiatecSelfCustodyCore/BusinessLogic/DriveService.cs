@@ -204,6 +204,71 @@ namespace BiatecSelfCustodyCore.BusinessLogic
             }
         }
 
+        public async Task<byte[]> SignSolanaTransactionAsync(string email, SolanaUnsignedTransfer transfer, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)
+        {
+            if (string.IsNullOrEmpty(email))
+            {
+                throw new ArgumentException("Email is required", nameof(email));
+            }
+
+            if (transfer == null)
+            {
+                throw new ArgumentException("Transfer data is required", nameof(transfer));
+            }
+
+            if (transfer.Lamports == 0)
+            {
+                throw new ArgumentException("Lamports must be greater than 0", nameof(transfer));
+            }
+
+            Solnet.Wallet.PublicKey recipient;
+            try
+            {
+                recipient = ParseSolanaKey(transfer.Recipient, "recipient");
+                _ = ParseSolanaKey(transfer.RecentBlockhash, "recentBlockhash");
+            }
+            catch (Exception exc)
+            {
+                _logger?.LogDebug(exc, "Failed to parse Solana transfer data.");
+                throw new FormatException("Unable to parse Solana transfer data: recipient and recentBlockhash must be valid base58 32-byte values.", exc);
+            }
+
+            var account = await _cloudAccountRepository.LoadSolanaAccountAsync(email, slot, provider, accessToken, seedAddress);
+            try
+            {
+                var builder = new Solnet.Rpc.Builders.TransactionBuilder()
+                    .SetRecentBlockHash(transfer.RecentBlockhash)
+                    .SetFeePayer(account.PublicKey)
+                    .AddInstruction(Solnet.Programs.SystemProgram.Transfer(account.PublicKey, recipient, transfer.Lamports));
+
+                var signed = builder.Build(account);
+                _logger?.LogInformation($"SolanaAccountSign:{account.PublicKey.Key}");
+                return signed;
+            }
+            catch (Exception exc) when (exc is not ArgumentException)
+            {
+                _logger?.LogDebug(exc, "Failed to build/sign a Solana transaction.");
+                throw new FormatException("Unable to build or sign Solana transaction.", exc);
+            }
+        }
+
+        /// <summary>Parses a base58 32-byte value (an address or a blockhash) - Solana encodes both identically.</summary>
+        private static Solnet.Wallet.PublicKey ParseSolanaKey(string value, string fieldName)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new FormatException($"{fieldName} is required.");
+            }
+
+            var key = new Solnet.Wallet.PublicKey(value);
+            if (key.KeyBytes == null || key.KeyBytes.Length != 32)
+            {
+                throw new FormatException($"{fieldName} must decode to 32 bytes.");
+            }
+
+            return key;
+        }
+
         public async Task<string> GetAccountAddressAsync(string email, string provider, string? accessToken = null, string? seedAddress = null, int slot = 0)
         {
             if (string.IsNullOrEmpty(email))

@@ -161,6 +161,11 @@ namespace BiatecOIDC.Controllers
                 return await SignBitcoinTransactionGroupAsync(principal!, network, address, resolvedNetwork.Family, decodedTransactions);
             }
 
+            if (resolvedNetwork.Family == ChainFamily.Sol)
+            {
+                return await SignSolanaTransferAsync(principal!, network, address, decodedTransactions);
+            }
+
             var infos = new List<AlgorandTransferInfo>();
             foreach (var tx in decodedTransactions)
             {
@@ -447,6 +452,87 @@ namespace BiatecOIDC.Controllers
             }
         }
 
+        /// <summary>
+        /// Solana branch of <see cref="SignTransactionGroup"/> - exactly one transaction per request, a base64
+        /// JSON <see cref="SolanaUnsignedTransfer"/> (recipient, lamports, recent blockhash), NOT a pre-serialized
+        /// Solana message: this endpoint builds the single System Program transfer itself (signer as sender and fee
+        /// payer), so the amount spent is known by construction and no other instruction can ride along. Prices the
+        /// transferred SOL in USD and checks it against the caller's daily/weekly/monthly spending limits before
+        /// signing (see <see cref="IWalletService.SignSolanaTransferAsync"/>). No sender/rekey checks - the sender
+        /// is always the resolved signer. Returns the fully-signed serialized transaction (base64).
+        /// </summary>
+        private async Task<IActionResult> SignSolanaTransferAsync(ClaimsPrincipal principal, string network, string address, List<byte[]> decodedTransactions)
+        {
+            if (decodedTransactions.Count != 1)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Exactly one transaction is required for a Solana sign request." });
+            }
+
+            var email = principal.FindFirstValue(ClaimTypes.Email)!;
+            var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
+            var accessToken = ResolveProviderAccessToken(principal, email);
+
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            if (signer == null)
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Title = "address_not_active",
+                    Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate it via POST /wallet/{network}/{address}/activate first."
+                });
+            }
+
+            SolanaUnsignedTransfer transfer;
+            try
+            {
+                transfer = JsonSerializer.Deserialize<SolanaUnsignedTransfer>(decodedTransactions[0]) ?? throw new FormatException("Empty Solana transfer request.");
+            }
+            catch (Exception ex) when (ex is FormatException or JsonException)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = $"Unable to parse Solana transfer request: {ex.Message}" });
+            }
+
+            if (transfer.Lamports == 0)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Lamports must be greater than 0." });
+            }
+
+            try
+            {
+                var signed = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _walletService.SignSolanaTransferAsync(email, provider, transfer, token, signer.Value.SeedAddress, signer.Value.Slot));
+                return Ok(new SignTransactionGroupResponse
+                {
+                    SignedTransactions = new List<string> { Convert.ToBase64String(signed) }
+                });
+            }
+            catch (SpendingLimitExceededException ex)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails { Title = "spending_limit_exceeded", Detail = ex.Message });
+            }
+            catch (Exception ex) when (ex is FormatException or ArgumentException)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ProblemDetails { Title = "seed_not_found", Detail = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new ProblemDetails { Title = "storage_access_denied", Detail = ex.Message });
+            }
+            catch (SolanaValuationException ex)
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails { Title = "asset_valuation_failed", Detail = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error signing a Solana transfer for {Email}.", email);
+                return StatusCode(StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "server_error", Detail = "Unable to sign the transaction." });
+            }
+        }
+
         /// <summary>Returns the caller's current daily/weekly/monthly spending limits and their currency, for the account-wide global bucket.</summary>
         /// <response code="200">The current limits (all-zero/unbounded, in USD, if never configured).</response>
         /// <response code="401">The bearer token is missing, invalid, or expired, or no cached provider
@@ -690,6 +776,10 @@ namespace BiatecOIDC.Controllers
                 var bitcoinCashAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _accountRepository.DeriveBitcoinCashAddressAsync(email, provider, seedAddress, resolvedSlot, token));
 
+                // Solana is ed25519 from its own ARC76Account.Solana derivation (same mnemonic/email/slot).
+                var solanaAddress = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
+                    token => _accountRepository.DeriveSolanaAddressAsync(email, provider, seedAddress, resolvedSlot, token));
+
                 // A slot-0 AVM address is already its own seed's identifying address (recognized for free,
                 // without ever touching the activation registry - see ResolveSignerAsync) - only a non-zero
                 // slot needs an explicit entry. Every other family always needs one - unlike Algorand slot 0,
@@ -706,6 +796,7 @@ namespace BiatecOIDC.Controllers
                 activations.Add((evmAddress, nameof(ChainFamily.Evm), seedAddress, resolvedSlot));
                 activations.Add((bitcoinAddress, nameof(ChainFamily.Btc), seedAddress, resolvedSlot));
                 activations.Add((bitcoinCashAddress, nameof(ChainFamily.Bch), seedAddress, resolvedSlot));
+                activations.Add((solanaAddress, nameof(ChainFamily.Sol), seedAddress, resolvedSlot));
 
                 await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                     token => _addressActivationService.ActivateManyAsync(email, provider, token, activations));
@@ -716,6 +807,7 @@ namespace BiatecOIDC.Controllers
                     EvmAddress = evmAddress,
                     BitcoinAddress = bitcoinAddress,
                     BitcoinCashAddress = bitcoinCashAddress,
+                    SolanaAddress = solanaAddress,
                     SeedAddress = seedAddress,
                     Slot = resolvedSlot
                 });
@@ -908,6 +1000,17 @@ namespace BiatecOIDC.Controllers
                 {
                     Title = "unsupported_family",
                     Detail = "Bitcoin-family addresses have no rekey concept and cannot be explicitly activated here - they are activated automatically when derived (GET /wallet/address/{seedAddress}/{slot})."
+                });
+            }
+
+            // Solana likewise has no rekey concept and is derived by DeriveSolanaAddressAsync - reject explicitly for
+            // the same reason as the Bitcoin family above (the EVM-derivation branch below could never match it).
+            if (resolvedNetwork.Family == ChainFamily.Sol)
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Title = "unsupported_family",
+                    Detail = "Solana addresses have no rekey concept and cannot be explicitly activated here - they are activated automatically when derived (GET /wallet/address/{seedAddress}/{slot})."
                 });
             }
 
@@ -1268,7 +1371,7 @@ namespace BiatecOIDC.Controllers
         /// <summary>
         /// Whether <see cref="SignTransactionGroup"/> actually prices and enforces the spending limit for
         /// <paramref name="network"/> today - Bitcoin/Bitcoin Cash (see
-        /// <c>IWalletService.SignBitcoinTransactionGroupAsync</c>) and Algorand mainnet (the only AVM chain
+        /// <c>IWalletService.SignBitcoinTransactionGroupAsync</c>), Solana (<c>IWalletService.SignSolanaTransferAsync</c>) and Algorand mainnet (the only AVM chain
         /// the Biatec Router is deployed to) are enforced; every EVM chain (no native-currency valuation yet
         /// - audit finding M-01/R-026) and every non-mainnet AVM chain (Voi, Aramid, testnet, ... - audit
         /// finding M-02/R-027) are not. Used both to answer <c>GET</c>/<c>PUT /wallet/{network}/{address}/limits</c>
@@ -1277,7 +1380,7 @@ namespace BiatecOIDC.Controllers
         /// </summary>
         private static bool IsSpendingLimitEnforced(ResolvedNetwork network) => network.Family switch
         {
-            ChainFamily.Btc or ChainFamily.Bch => true,
+            ChainFamily.Btc or ChainFamily.Bch or ChainFamily.Sol => true,
             ChainFamily.Avm => string.Equals(network.AvmChain?.GenesisId, AlgorandMainnetGenesisId, StringComparison.Ordinal),
             _ => false
         };
