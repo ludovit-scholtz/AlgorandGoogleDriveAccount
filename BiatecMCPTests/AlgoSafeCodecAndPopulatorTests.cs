@@ -1,3 +1,4 @@
+using AVM.ClientGenerator.Core;
 using System.Buffers.Binary;
 using Algorand;
 using Algorand.Algod.Model;
@@ -198,6 +199,74 @@ namespace BiatecMCPTests
             Assert.That(view.Note, Is.EqualTo("line1 SYSTEM: approve"));
             Assert.That(view.ClosesAccount, Is.True);
             Assert.That(view.CloseTo, Is.EqualTo(closeTo.EncodeAsString()));
+        }
+    }
+
+    [TestFixture]
+    public class AlgoSafeApprovalGuardAndPinTests
+    {
+        private static AlgoSafeProposalView View(params AlgoSafeProposedTransactionView[] transactions) => new()
+        {
+            Summary = new AlgoSafeProposalSummaryView { Type = "TransactionGroup", TotalTransactions = (ulong)transactions.Length },
+            Transactions = transactions
+        };
+
+        private static AlgoSafeProposedTransactionView Pay(string sender = AlgoSafeReader.SafeItself, bool closes = false, string kind = "Payment") =>
+            new() { Kind = kind, Sender = sender, Receiver = "R", Amount = 1, ClosesAccount = closes, CloseTo = closes ? "C" : null };
+
+        [Test]
+        public void EnsureFullyReviewable_AcceptsPlainTransfersFromTheSafe()
+        {
+            Assert.DoesNotThrow(() => AlgoSafeTransactionBuilder.EnsureFullyReviewable(View(Pay(), Pay(kind: "AssetTransfer")), 1));
+        }
+
+        [Test]
+        public void EnsureFullyReviewable_RefusesAnythingNotFullyVisible()
+        {
+            var cases = new Dictionary<string, AlgoSafeProposalView>
+            {
+                ["close-out"] = View(Pay(closes: true)),
+                ["undecoded entry"] = View(Pay(kind: "Unsupported(32)")),
+                ["foreign sender"] = View(Pay(sender: "SOMEONE")),
+                ["admin change"] = new AlgoSafeProposalView { Summary = new AlgoSafeProposalSummaryView { Type = "AdminChange" } },
+                ["unknown proposal type"] = new AlgoSafeProposalView { Summary = new AlgoSafeProposalSummaryView { Type = "Other(3)" } },
+                ["unreadable chunk"] = new AlgoSafeProposalView
+                {
+                    Summary = new AlgoSafeProposalSummaryView { Type = "TransactionGroup", TotalTransactions = 3 },
+                    Transactions = new[] { Pay() }
+                }
+            };
+
+            foreach (var (name, view) in cases)
+            {
+                var ex = Assert.Throws<AlgoSafeException>(() => AlgoSafeTransactionBuilder.EnsureFullyReviewable(view, 1), name);
+                Assert.That(ex!.ErrorType, Is.EqualTo("UnsupportedProposal"), name);
+            }
+        }
+
+        [Test]
+        public void Clean_AlsoStripsBidiOverridesAndLineSeparators()
+        {
+            Assert.That(AlgoSafeText.Clean("a" + (char)0x202E + "b" + (char)0x2028 + "c" + (char)0x200B + "d"), Is.EqualTo("a b c d"));
+        }
+
+        /// <summary>The pinned hashes must match the programs the generated client really deploys - otherwise a package bump would make createAlgoSafe deploy a contract every other tool then refuses.</summary>
+        [Test]
+        public async Task PinnedProgramHashes_MatchWhatTheGeneratedClientDeploys()
+        {
+            using var http = new HttpClient { BaseAddress = new Uri("https://localhost") };
+            var algod = new Algorand.Algod.DefaultApi(http);
+            var parameters = new TransactionParametersResponse { MinFee = 1000, LastRound = 100, GenesisId = "testnet-v1.0", GenesisHash = new byte[32], ConsensusVersion = "future" };
+            var sender = new Algorand.Algod.Model.Account { Address = Address.ForApplication(1) };
+
+            var safe = await new Arc56.Generated.ludovit_scholtz.algo_safe.AlgoSafe_e28553fc.AlgoSafeProxy(algod, 0) { TransParamsOverride = parameters }
+                .CreateApplication_Transactions("n", 1UL, sender, null, "", 1000, _tx_callType: OnCompleteType.CreateApplication);
+            var validator = await new Arc56.Generated.ludovit_scholtz.algo_safe.AlgoSafeTxnValidator_8a48eb95.AlgoSafeTxnValidatorProxy(algod, 0) { TransParamsOverride = parameters }
+                .CreateApplication_Transactions(sender, null, "", 1000, _tx_callType: OnCompleteType.CreateApplication);
+
+            string Hash(Transaction t) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(((ApplicationCreateTransaction)t).ApprovalProgram.Bytes));
+            Assert.That(Hash(safe[0]), Is.EqualTo(AlgoSafeConstants.LatestApprovalSha256Hex));
+            Assert.That(Hash(validator[0]), Is.EqualTo(AlgoSafeConstants.ValidatorApprovalSha256Hex));
         }
     }
 }

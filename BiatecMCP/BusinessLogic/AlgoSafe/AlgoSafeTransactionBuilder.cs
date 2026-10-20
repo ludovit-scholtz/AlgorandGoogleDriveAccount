@@ -34,6 +34,8 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// <summary>Box references per call are scarce (max 8 in total), and every member is one box.</summary>
         internal const int MaxBootstrapMembers = 6;
 
+        private const int MaxNameChars = 64;
+
         /// <summary>Algorand's own transaction note limit.</summary>
         private const int MaxNoteBytes = 1024;
 
@@ -227,27 +229,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         {
             var view = await _reader.GetProposalAsync(appId, proposalId, sender, cancellationToken);
             var summary = view.Summary;
-            if (summary.Type != "TransactionGroup")
-            {
-                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} is a governance (admin) change, whose content this server cannot show; approve it in the AlgoSafe app instead.");
-            }
-
-            if (view.Transactions.Count != (int)summary.TotalTransactions)
-            {
-                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} should contain {summary.TotalTransactions} transaction(s) but only {view.Transactions.Count} could be read; approving something not fully reviewed is refused.");
-            }
-
-            var closeOuts = view.Transactions.Where(t => t.ClosesAccount).ToList();
-            if (closeOuts.Count > 0)
-            {
-                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} contains {closeOuts.Count} close-out transaction(s) that sweep the safe's ENTIRE remaining balance to {closeOuts[0].CloseTo}; approving that is refused here - review and approve it in the AlgoSafe app instead.");
-            }
-
-            var undecoded = view.Transactions.Where(t => t.Kind.StartsWith("Unsupported", StringComparison.Ordinal)).ToList();
-            if (undecoded.Count > 0)
-            {
-                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} contains {undecoded.Count} transaction(s) this server cannot decode (e.g. app calls, key registration, asset configuration or rekeys); approving blind is refused - review and approve it in the AlgoSafe app instead.");
-            }
+            EnsureFullyReviewable(view, proposalId);
 
             if (view.CallerIsMember != true)
             {
@@ -321,6 +303,43 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         }
 
         // ───────────────────────── helpers ─────────────────────────
+
+        /// <summary>
+        /// An approval is bound only to the payload's version, so it is built only for a proposal whose every transaction this server decoded and
+        /// can show: a governance change, a partly unreadable payload, a close-out, a spend from a non-safe sender, or an entry kind it doesn't
+        /// decode (app call, key registration, asset config, rekey) is refused - those get approved where the full content is visible.
+        /// </summary>
+        internal static void EnsureFullyReviewable(AlgoSafeProposalView view, ulong proposalId)
+        {
+            var summary = view.Summary;
+            if (summary.Type != "TransactionGroup")
+            {
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} is a governance or other non-transfer change ({summary.Type}), whose content this server cannot show; approve it in the AlgoSafe app instead.");
+            }
+
+            if (view.Transactions.Count != (int)summary.TotalTransactions)
+            {
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} should contain {summary.TotalTransactions} transaction(s) but only {view.Transactions.Count} could be read; approving something not fully reviewed is refused.");
+            }
+
+            var closeOuts = view.Transactions.Where(t => t.ClosesAccount).ToList();
+            if (closeOuts.Count > 0)
+            {
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} contains {closeOuts.Count} close-out transaction(s) that sweep the sender's ENTIRE remaining balance to {closeOuts[0].CloseTo}; approving that is refused here - review and approve it in the AlgoSafe app instead.");
+            }
+
+            var undecoded = view.Transactions.Where(t => t.Kind.StartsWith("Unsupported", StringComparison.Ordinal)).ToList();
+            if (undecoded.Count > 0)
+            {
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} contains {undecoded.Count} transaction(s) this server cannot decode (e.g. app calls, key registration, asset configuration or rekeys); approving blind is refused - review and approve it in the AlgoSafe app instead.");
+            }
+
+            var foreignSender = view.Transactions.FirstOrDefault(t => t.Sender != AlgoSafeReader.SafeItself);
+            if (foreignSender != null)
+            {
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} spends from another account ({foreignSender.Sender}) rather than the safe's own; approving that is refused here - review and approve it in the AlgoSafe app instead.");
+            }
+        }
 
         private static string DescribeTransfers(IReadOnlyList<AlgoSafeProposedTransactionView> transactions) =>
             string.Join("; ", transactions.Select(t => t.AssetId == 0
@@ -415,9 +434,19 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 parsed.Add((address, 1, label ?? string.Empty));
             }
 
+            if (plan.GroupName.Trim().Length > MaxNameChars || parsed.Any(m => m.Label.Length > MaxNameChars))
+            {
+                throw new AlgoSafeException("InvalidRequest", $"The group name and every member label can be at most {MaxNameChars} characters.");
+            }
+
             // The bootstrap group must be able to govern: finalizeBootstrap requires an active group with the group-management privilege.
             var seed = AlgoSafePayloadCodec.EncodeGroupSeed(
                 plan.GroupName.Trim(), plan.Threshold, AlgoSafeConstants.PrivAll, plan.AllowedActions, plan.LimitAssetId, plan.DailyLimit, plan.MonthlyLimit, plan.CooldownRounds, AlgoSafeConstants.GroupTypeStandard);
+            if (seed.Length + AlgoSafePayloadCodec.EncodeMembersArray(parsed).Length > AlgoSafeConstants.MaxPayloadArgumentBytes)
+            {
+                throw new AlgoSafeException("InvalidRequest", "The group definition is too large for one call; use shorter names/labels or fewer members.");
+            }
+
             return (seed, parsed);
         }
 

@@ -143,7 +143,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         public async Task<AlgoSafeProposalView> GetProposalAsync(ulong appId, ulong proposalId, Address? caller, CancellationToken cancellationToken = default)
         {
-            await RequireSupportedAsync(appId, cancellationToken);
+            var app = await RequireSupportedAsync(appId, cancellationToken);
             var proposal = await ReadProposalAsync(appId, proposalId, cancellationToken)
                 ?? throw new AlgoSafeException("ProposalNotFound", $"Proposal {proposalId} does not exist in safe {appId} (it may have been pruned after execution or cancellation).");
             var currentRound = (await _chain.GetTransactionParamsAsync(cancellationToken)).LastRound;
@@ -171,7 +171,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 Summary = summary,
                 Approvers = approvers,
                 ApproversComplete = approversComplete,
-                CanExecute = proposal.Status == AlgoSafeConstants.StatusReady && !summary.Expired
+                CanExecute = proposal.Status == AlgoSafeConstants.StatusReady && !summary.Expired && ParseGlobalState(app).GetUInt("paused") == 0
             };
 
             if (proposal.PayloadType == AlgoSafeConstants.PayloadTypeTransactionGroup)
@@ -287,10 +287,13 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             return transactions;
         }
 
+        /// <summary>What a proposed transaction's sender reads as when it is the safe's own account (the zero address on the wire).</summary>
+        internal const string SafeItself = "(the safe itself)";
+
         internal static AlgoSafeProposedTransactionView DescribeEntry(AlgoSafePayloadEntry entry)
         {
             var zero = AlgoSafePayloadCodec.ZeroAddress;
-            string SenderText(Address sender) => sender.Equals(zero) ? "(the safe itself)" : sender.EncodeAsString();
+            string SenderText(Address sender) => sender.Equals(zero) ? SafeItself : sender.EncodeAsString();
 
             switch (entry.TxType)
             {
@@ -328,7 +331,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
                 default:
                     // App calls, key registration, asset config and rekey are valid proposal entries this server doesn't decode.
-                    return new AlgoSafeProposedTransactionView { Kind = $"Unsupported({entry.TxType})", Sender = "(the safe itself)" };
+                    return new AlgoSafeProposedTransactionView { Kind = $"Unsupported({entry.TxType})", Sender = SafeItself };
             }
         }
 
@@ -359,7 +362,12 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             ProposalId = proposalId,
             GroupId = proposal.GroupId,
             Status = AlgoSafeConstants.StatusName(proposal.Status),
-            Type = proposal.PayloadType == AlgoSafeConstants.PayloadTypeAdmin ? "AdminChange" : "TransactionGroup",
+            Type = proposal.PayloadType switch
+            {
+                AlgoSafeConstants.PayloadTypeTransactionGroup => "TransactionGroup",
+                AlgoSafeConstants.PayloadTypeAdmin => "AdminChange",
+                var other => $"Other({other})"
+            },
             ApprovalsCount = proposal.ApprovalsCount,
             Threshold = proposal.Threshold,
             ExpiryRound = proposal.ExpiryRound,

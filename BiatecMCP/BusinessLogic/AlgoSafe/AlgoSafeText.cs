@@ -9,6 +9,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
     {
         private const int MaxLength = 120;
 
+        private static bool IsInvisible(char c) =>
+            char.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.Format
+                or System.Globalization.UnicodeCategory.LineSeparator
+                or System.Globalization.UnicodeCategory.ParagraphSeparator;
+
         public static string Clean(string? text)
         {
             if (string.IsNullOrEmpty(text))
@@ -16,7 +21,8 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 return string.Empty;
             }
 
-            var cleaned = new string(text.Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
+            // Control characters, line/paragraph separators and invisible format characters (bidi overrides, zero-width) can fake layout or reorder text.
+            var cleaned = new string(text.Select(c => char.IsControl(c) || IsInvisible(c) ? ' ' : c).ToArray()).Trim();
             return cleaned.Length <= MaxLength ? cleaned : cleaned[..MaxLength] + "…";
         }
     }
