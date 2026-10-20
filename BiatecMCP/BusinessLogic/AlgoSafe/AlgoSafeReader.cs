@@ -186,12 +186,23 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 CanExecute = proposal.Status == AlgoSafeConstants.StatusReady && !summary.Expired && proposal.PayloadType == AlgoSafeConstants.PayloadTypeTransactionGroup && ParseGlobalState(app).GetUInt("paused") == 0
             };
 
+            string? payloadProblem = null;
             if (proposal.PayloadType == AlgoSafeConstants.PayloadTypeTransactionGroup)
             {
-                view.Transactions = await ReadProposedTransactionsAsync(appId, proposalId, proposal.NumPayloads, cancellationToken);
+                try
+                {
+                    view.Transactions = await ReadProposedTransactionsAsync(appId, proposalId, proposal.NumPayloads, cancellationToken);
+                }
+                catch (AlgoSafeException ex) when (ex.ErrorType == "UnreadablePayload")
+                {
+                    // A malformed chunk must not hide the rest of the proposal (status, approvals) from a read-only caller.
+                    payloadProblem = "its payload is malformed and cannot be shown";
+                }
             }
 
-            view.ReviewBlocker = ReviewBlocker(view);
+            // Only an open proposal can still be approved or executed; a finished one's payload boxes may legitimately be gone.
+            var open = proposal.Status is AlgoSafeConstants.StatusActive or AlgoSafeConstants.StatusReady;
+            view.ReviewBlocker = payloadProblem ?? (open ? ReviewBlocker(view) : null);
             view.CanExecute &= view.ReviewBlocker == null;
 
             if (caller != null)

@@ -252,7 +252,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 parameters,
                 summary,
                 cancellationToken);
-            executed.Warning = NoLimitWarning(group);
+            executed.Warning = NoLimitWarning(group, transfers.Select(t => t.AssetId));
             return executed;
         }
 
@@ -338,15 +338,19 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 $"Execute proposal {proposalId} of safe {appId}: the safe sends {view.Transactions.Count} transaction(s) from its own account: {DescribeTransfers(view.Transactions)}",
                 cancellationToken);
             var proposalGroup = await _reader.ReadGroupAsync(appId, summary.GroupId, cancellationToken);
-            executed.Warning = proposalGroup == null ? string.Empty : NoLimitWarning(proposalGroup);
+            executed.Warning = proposalGroup == null ? string.Empty : NoLimitWarning(proposalGroup, view.Transactions.Select(t => t.AssetId));
             return executed;
         }
 
         /// <summary>The safe's own transfers bypass Biatec's wallet spending limits; the group's limits are then the only cap.</summary>
-        private static string NoLimitWarning(AlgoSafeProxy.Structs.SignerGroup group) =>
-            group.DailyLimit == 0 && group.MonthlyLimit == 0
-                ? "This signer group has NO spending limit, and Biatec's own wallet spending limits do not apply to transfers a safe makes from its own account - confirm the amounts with the user before signing."
+        private static string NoLimitWarning(AlgoSafeProxy.Structs.SignerGroup group, IEnumerable<ulong> transferAssetIds)
+        {
+            // A group limit only counts its own asset (0 = ALGO); a transfer of any other asset is uncapped even when a limit is set.
+            var uncapped = (group.DailyLimit == 0 && group.MonthlyLimit == 0) || transferAssetIds.Any(asset => asset != group.LimitAssetId);
+            return uncapped
+                ? "Part of this is NOT covered by any spending limit (the signer group has no limit for it), and Biatec's own wallet spending limits do not apply to transfers a safe makes from its own account - confirm the amounts with the user before signing."
                 : string.Empty;
+        }
 
         // ───────────────────────── helpers ─────────────────────────
 
@@ -357,7 +361,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// </summary>
         internal static void EnsureFullyReviewable(AlgoSafeProposalView view, ulong proposalId)
         {
-            var blocker = AlgoSafeReader.ReviewBlocker(view);
+            var blocker = view.ReviewBlocker ?? AlgoSafeReader.ReviewBlocker(view);
             if (blocker != null)
             {
                 throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} cannot be handled here: {blocker}. Review it and act on it in the AlgoSafe app instead.");

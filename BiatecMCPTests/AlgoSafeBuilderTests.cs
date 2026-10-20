@@ -285,7 +285,7 @@ namespace BiatecMCPTests
 
             var step = await BuilderFor(chain).BuildExecuteAsync(FakeAlgoSafeChain.Member1, FakeAlgoSafeChain.AppId, 1);
 
-            Assert.That(step.Warning, Does.Contain("NO spending limit"));
+            Assert.That(step.Warning, Does.Contain("NOT covered by any spending limit"));
         }
 
         [Test]
