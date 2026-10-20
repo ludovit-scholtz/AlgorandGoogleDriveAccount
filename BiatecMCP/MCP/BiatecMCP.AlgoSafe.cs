@@ -147,9 +147,9 @@ namespace BiatecMCP.MCP
                     var callerText = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
                     caller = string.IsNullOrWhiteSpace(callerText) ? null : new Address(callerText);
                 }
-                catch (Exception ex) when (ex is WalletApiException or UnauthorizedAccessException or ArgumentException)
+                catch (Exception ex) when (seedAddress == null && ex is WalletApiException or UnauthorizedAccessException)
                 {
-                    // fall through with no caller
+                    // fall through with no caller (an explicitly requested seed that can't be resolved is a real error and surfaces instead)
                 }
 
                 return new GetAlgoSafeProposalResponse { Proposal = await new AlgoSafeReader(chain).GetProposalAsync(appId, proposalId, caller) };
@@ -201,7 +201,7 @@ namespace BiatecMCP.MCP
             [Description("The network the safe lives on - an exact code from listSupportedNetworks.")] string network = "algorand-mainnet",
             [Description("The group's members (max 6). Omit for the simple 1-of-1 group with you as the only member.")] List<AlgoSafeMemberInput>? members = null,
             [Description("How many members must approve a proposal. Ignored without 'members' (always 1).")] ulong threshold = 1,
-            [Description("Optional cap, in microAlgo, on what the group can send per day (0 = unlimited). Strongly recommended for a safe an AI agent can propose to: Biatec's own spending limits do NOT see transfers a safe makes from its own account.")] ulong dailyLimitMicroAlgo = 0,
+            [Description("Optional cap, in microAlgo, on the ALGO the group can send per day (0 = unlimited; asset transfers are not counted by it). Recommended for a safe an AI agent can propose to: Biatec's own spending limits do NOT see transfers a safe makes from its own account.")] ulong dailyLimitMicroAlgo = 0,
             [Description("Optional cap, in microAlgo, on what the group can send per month (0 = unlimited).")] ulong monthlyLimitMicroAlgo = 0,
             [Description("A specific seed's identifying address to act as instead of the primary seed (must be the safe's creator).")] string? seedAddress = null,
             [Description("ARC-76 derivation slot to act as. Defaults to 0.")] int slot = 0) =>

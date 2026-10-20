@@ -70,6 +70,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("InvalidRequest", "A safe name is required.");
             }
 
+            if (System.Text.Encoding.UTF8.GetByteCount(name.Trim()) > MaxNameChars)
+            {
+                throw new AlgoSafeException("InvalidRequest", $"The safe name can be at most {MaxNameChars} bytes.");
+            }
+
             await VerifyValidatorAsync(validatorAppId, cancellationToken);
             var parameters = await _chain.GetTransactionParamsAsync(cancellationToken);
             var proxy = new AlgoSafeProxy(_chain.Algod, 0) { TransParamsOverride = parameters };
@@ -117,7 +122,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             List<Transaction> transactions;
             string summary;
-            if (plan.GroupName.Trim().Length > MaxNameChars || System.Text.Encoding.UTF8.GetByteCount(plan.GroupName.Trim()) > MaxNameChars)
+            if (System.Text.Encoding.UTF8.GetByteCount(plan.GroupName.Trim()) > MaxNameChars)
             {
                 throw new AlgoSafeException("InvalidRequest", $"The group name can be at most {MaxNameChars} bytes.");
             }
@@ -139,9 +144,19 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 }
 
                 var (encodedSeed, members) = ValidatePlan(plan);
-                transactions = await proxy.BuildBootstrapGroupAsync(encodedSeed, members, 0, AsAccount(sender), preTransactions);
-                transactions = await proxy.FinalizeBootstrap_Transactions(AsAccount(sender), null, string.Empty, 1000, _tx_transactions: transactions);
                 summary = $"Fund the safe with {FormatAlgo(depositMicroAlgo)} ALGO, create group '{plan.GroupName.Trim()}' ({plan.Threshold}-of-{plan.Members!.Count}) and finalize the bootstrap.";
+
+                // Writing the group and up to six member boxes can need more opcode budget than the base call: escalate only if the node says so.
+                return await WithBudgetsAsync(
+                    async budget =>
+                    {
+                        var group = await proxy.BuildBootstrapGroupAsync(encodedSeed, members, budget, AsAccount(sender), new List<Transaction> { deposit });
+                        return await proxy.FinalizeBootstrap_Transactions(AsAccount(sender), null, string.Empty, 1000, _tx_transactions: group);
+                    },
+                    parameters,
+                    summary,
+                    cancellationToken,
+                    ApprovalBudgets);
             }
 
             return await FinishAsync(transactions, parameters, summary, cancellationToken);

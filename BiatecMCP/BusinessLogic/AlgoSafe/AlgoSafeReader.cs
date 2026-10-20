@@ -178,7 +178,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 Summary = summary,
                 Approvers = approvers,
                 ApproversComplete = approversComplete,
-                CanExecute = proposal.Status == AlgoSafeConstants.StatusReady && !summary.Expired && ParseGlobalState(app).GetUInt("paused") == 0
+                CanExecute = proposal.Status == AlgoSafeConstants.StatusReady && !summary.Expired && proposal.PayloadType == AlgoSafeConstants.PayloadTypeTransactionGroup && ParseGlobalState(app).GetUInt("paused") == 0
             };
 
             if (proposal.PayloadType == AlgoSafeConstants.PayloadTypeTransactionGroup)
