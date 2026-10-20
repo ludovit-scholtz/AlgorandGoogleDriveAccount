@@ -39,6 +39,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         private const int MaxNameChars = 64;
 
+        /// <summary>Distinct receivers + assets one execution call can comfortably reference (8 references total, about 5 of which the safe's own boxes use).</summary>
+        private const int MaxComfortableReferences = 3;
+
         /// <summary>Algorand's own transaction note limit.</summary>
         private const int MaxNoteBytes = 1024;
 
@@ -244,7 +247,15 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             if (!executeNow)
             {
                 var transactions = await NewProxy(appId, parameters).BuildProposeTransactionGroupAsync(groupId, payload, expiryRound, false, 0, AsAccount(sender));
-                return await FinishAsync(transactions, parameters, summary, cancellationToken);
+                var proposed = await FinishAsync(transactions, parameters, summary, cancellationToken);
+
+                // Executing is one app call that must reference every receiver and asset (alongside the safe's own boxes), and a call can carry
+                // only 8 references: a proposal touching many distinct ones may be approvable yet impossible to execute.
+                var distinctReferences = transfers.Select(t => t.Receiver).Distinct().Count() + transfers.Where(t => t.AssetId != 0).Select(t => t.AssetId).Distinct().Count();
+                proposed.Warning = distinctReferences > MaxComfortableReferences
+                    ? $"This proposal touches {distinctReferences} distinct receivers/assets; a single execution call can reference only a few, so it may be impossible to execute. Prefer proposals with at most {MaxComfortableReferences} distinct receivers and assets combined."
+                    : string.Empty;
+                return proposed;
             }
 
             var executed = await WithBudgetsAsync(

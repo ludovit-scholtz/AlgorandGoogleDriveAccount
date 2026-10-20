@@ -41,6 +41,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 transaction.Fee = Math.Max(transaction.Fee, minFee);
             }
 
+            // If trimming a fee to the traced inner-transaction count makes the node say "fee too small" (a trace that under-counts), the
+            // pre-trim fee is restored and trimming stops - the last fee that simulated successfully is kept rather than fighting over it.
+            var preTrimFees = new Dictionary<int, ulong>();
+            var trimDisabled = false;
+
             while (attempts++ < MaxResourceAttempts + 12)
             {
                 AssignGroupId(group);
@@ -48,6 +53,18 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
                 if (!string.IsNullOrEmpty(result.FailureMessage))
                 {
+                    if (IsFeeTooSmall(result.FailureMessage) && preTrimFees.Count > 0)
+                    {
+                        foreach (var (index, fee) in preTrimFees)
+                        {
+                            group[index].Fee = fee;
+                        }
+
+                        preTrimFees.Clear();
+                        trimDisabled = true;
+                        continue;
+                    }
+
                     // A call that spawns inner transactions can't even be traced until its fee covers them: escalate and retry.
                     if (IsFeeTooSmall(result.FailureMessage) && feeMultiple < MaxFeeMultiple)
                     {
@@ -83,11 +100,12 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                     innerCount += inner;
 
                     // Without a trace there is nothing to trim against: keep the fee that just simulated successfully.
-                    if (appCall is not ApplicationCreateTransaction && results[i].ExecTrace != null)
+                    if (!trimDisabled && appCall is not ApplicationCreateTransaction && results[i].ExecTrace != null)
                     {
                         var exactFee = minFee * (ulong)(1 + inner);
                         if (appCall.Fee != exactFee)
                         {
+                            preTrimFees[i] = appCall.Fee;
                             appCall.Fee = exactFee;
                             changed = true;
                         }

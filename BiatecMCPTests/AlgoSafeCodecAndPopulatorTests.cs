@@ -160,6 +160,22 @@ namespace BiatecMCPTests
             Assert.That(ex.Message, Does.Contain("assert failed"));
         }
 
+        [Test]
+        public async Task ATraceThatUnderCountsInnerTransactions_DoesNotMakeTheFeeOscillate()
+        {
+            var call = NewCall(55);
+            var chain = new Mock<IAlgoSafeChainClient>();
+            chain.Setup(c => c.SimulateAsync(It.IsAny<IReadOnlyList<Transaction>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => call.Fee < 4000
+                    ? new SimulateTransactionGroupResult { FailureMessage = "fee 1000 too small (needs 3000 more)" }
+                    : Succeeded(innerTransactions: 1)); // really needs 4000, but the trace shows only one inner transaction
+
+            var result = await AlgoSafeResourcePopulator.PopulateAsync(chain.Object, new List<Transaction> { call }, 1000);
+
+            Assert.That(call.Fee, Is.EqualTo(4000UL), "the last fee that simulated successfully is kept");
+            Assert.That(result.TotalFeeMicroAlgo, Is.EqualTo(4000UL));
+        }
+
         private static SimulateTransactionGroupResult Succeeded(int innerTransactions, SimulateUnnamedResourcesAccessed? accessed = null) => new()
         {
             TxnResults = new List<SimulateTransactionResult>

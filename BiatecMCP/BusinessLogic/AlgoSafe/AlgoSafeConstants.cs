@@ -46,6 +46,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// <summary>Payload chunk boxes are keyed <c>proposalId * TxgKeyMultiplier + chunkIndex</c> (chunks 1-6).</summary>
         public const ulong TxgKeyMultiplier = 7;
 
+        /// <summary>A proposal's payload is split over at most six chunk boxes.</summary>
+        public const ulong MaxPayloadChunks = 6;
+
         public const int MaxGroupTransactions = 16;
 
         /// <summary>The contract (v3.4.0) rejects <c>expiryRound &gt; Global.round + this</c>.</summary>

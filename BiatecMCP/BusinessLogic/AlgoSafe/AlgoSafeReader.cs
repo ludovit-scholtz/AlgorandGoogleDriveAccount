@@ -118,10 +118,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         public async Task<(IReadOnlyList<AlgoSafeProposalSummaryView> Proposals, bool Truncated)> ListProposalsAsync(ulong appId, string? statusFilter, int limit, CancellationToken cancellationToken = default)
         {
+            var wanted = ParseStatusFilter(statusFilter); // validate the input before any node round trip
             var app = await RequireSupportedAsync(appId, cancellationToken);
             var nextProposalId = ParseGlobalState(app).GetUInt("npid");
             var currentRound = (await _chain.GetTransactionParamsAsync(cancellationToken)).LastRound;
-            var wanted = ParseStatusFilter(statusFilter);
 
             var results = new List<AlgoSafeProposalSummaryView>();
             var scanned = 0;
@@ -303,6 +303,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         private async Task<IReadOnlyList<AlgoSafeProposedTransactionView>> ReadProposedTransactionsAsync(ulong appId, ulong proposalId, ulong numPayloads, CancellationToken cancellationToken)
         {
             var transactions = new List<AlgoSafeProposedTransactionView>();
+            if (numPayloads > AlgoSafeConstants.MaxPayloadChunks)
+            {
+                throw new AlgoSafeException("UnreadablePayload", $"Proposal {proposalId} claims {numPayloads} payload parts (the contract allows at most {AlgoSafeConstants.MaxPayloadChunks}); it should not be approved here.");
+            }
+
             for (ulong chunk = 1; chunk <= numPayloads; chunk++)
             {
                 var bytes = await _chain.GetBoxAsync(appId, AlgoSafeBoxNames.TransactionGroup(proposalId, chunk), cancellationToken);
