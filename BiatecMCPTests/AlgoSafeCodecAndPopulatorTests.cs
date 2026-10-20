@@ -60,6 +60,20 @@ namespace BiatecMCPTests
         }
 
         [Test]
+        public void NonCanonicalPayloads_AreRefusedNotReadAmbiguously()
+        {
+            var payment = AlgoSafePayloadCodec.EncodePayment(AlgoSafePayloadCodec.ZeroAddress, Bob, 1, 0, AlgoSafePayloadCodec.ZeroAddress, "n");
+            var envelope = AlgoSafePayloadCodec.EncodeEnvelopeArray(new List<AlgoSafePayloadEntry> { new(1, payment) });
+
+            Assert.Throws<FormatException>(() => AlgoSafePayloadCodec.DecodeEnvelopeArray(envelope.Concat(new byte[] { 0 }).ToArray()), "trailing bytes in the chunk");
+            Assert.Throws<FormatException>(() => AlgoSafePayloadCodec.DecodePayment(payment.Concat(new byte[] { 0 }).ToArray()), "trailing bytes in the payment");
+
+            var redirected = (byte[])envelope.Clone();
+            redirected[3] = (byte)(redirected[3] + 1); // first element offset no longer points at the canonical position
+            Assert.Throws<FormatException>(() => AlgoSafePayloadCodec.DecodeEnvelopeArray(redirected));
+        }
+
+        [Test]
         public void MembersArray_UsesArc4DynamicTupleLayout()
         {
             var encoded = AlgoSafePayloadCodec.EncodeMembersArray(new List<(Address, ulong, string)> { (Alice, 1, "alice"), (Bob, 1, "bob") });

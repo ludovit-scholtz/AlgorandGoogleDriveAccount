@@ -79,6 +79,9 @@ namespace BiatecMCP.MCP
         public class GetAlgoSafeProposalResponse
         {
             public AlgoSafeProposalView? Proposal { get; set; }
+
+            /// <summary>Set when the signed-in account's address could not be resolved, so the Caller* flags are missing - retry rather than assuming you cannot approve.</summary>
+            public string Warning { get; set; } = string.Empty;
             public string Error { get; set; } = string.Empty;
             public string ErrorType { get; set; } = string.Empty;
         }
@@ -145,6 +148,7 @@ namespace BiatecMCP.MCP
                 using var chain = await CreateAlgoSafeChainAsync(network);
                 // The proposal can be read without knowing who is asking; the caller flags are just left out if the address can't be resolved.
                 Address? caller = null;
+                var callerWarning = string.Empty;
                 try
                 {
                     var callerText = await ResolveAlgorandAddressAsync(slot: slot, seedAddress: seedAddress);
@@ -153,9 +157,10 @@ namespace BiatecMCP.MCP
                 catch (Exception ex) when (seedAddress == null && slot == 0 && ex is WalletApiException or UnauthorizedAccessException)
                 {
                     // fall through with no caller (an explicitly requested seed that can't be resolved is a real error and surfaces instead)
+                    callerWarning = "Your own address could not be resolved just now, so CallerIsMember/CallerHasApproved/CallerCanApprove are missing - this does NOT mean you cannot approve. Retry.";
                 }
 
-                return new GetAlgoSafeProposalResponse { Proposal = await new AlgoSafeReader(chain).GetProposalAsync(appId, proposalId, caller) };
+                return new GetAlgoSafeProposalResponse { Proposal = await new AlgoSafeReader(chain).GetProposalAsync(appId, proposalId, caller), Warning = callerWarning };
             }
             catch (Exception ex)
             {

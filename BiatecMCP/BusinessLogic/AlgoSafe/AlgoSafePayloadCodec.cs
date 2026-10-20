@@ -130,7 +130,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         }
 
         /// <summary>ARC-4 dynamic array of dynamic elements: uint16 count, one uint16 offset per element (from the first byte after the count), then the elements.</summary>
-        private static byte[] EncodeDynamicArray(IReadOnlyList<byte[]> elements)
+        private static byte[] EncodeDynamicArray(List<byte[]> elements)
         {
             var headLength = 2 * elements.Count;
             var total = 2 + headLength + elements.Sum(e => e.Length);
@@ -189,6 +189,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             var count = BinaryPrimitives.ReadUInt16BigEndian(data);
             var body = data[2..];
             var entries = new List<AlgoSafePayloadEntry>(count);
+
+            // Only the canonical ARC-4 layout is accepted (elements back to back, in order, nothing left over): a payload that the contract
+            // and this decoder could read differently - overlapping elements, redirected offsets, trailing bytes - is refused, not guessed at.
+            var expectedOffset = 2 * count;
             for (var i = 0; i < count; i++)
             {
                 if (body.Length < (i + 1) * 2)
@@ -197,6 +201,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 }
 
                 var elementOffset = BinaryPrimitives.ReadUInt16BigEndian(body[(i * 2)..]);
+                if (elementOffset != expectedOffset)
+                {
+                    throw new FormatException("Payload entry is not laid out canonically.");
+                }
+
                 if (elementOffset + 10 > body.Length)
                 {
                     throw new FormatException("Payload entry is truncated.");
@@ -205,6 +214,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 var element = body[elementOffset..];
                 var txType = BinaryPrimitives.ReadUInt64BigEndian(element);
                 var bytesOffset = BinaryPrimitives.ReadUInt16BigEndian(element[8..]);
+                if (bytesOffset != 10)
+                {
+                    throw new FormatException("Payload entry is not laid out canonically.");
+                }
+
                 if (bytesOffset + 2 > element.Length)
                 {
                     throw new FormatException("Payload entry bytes offset is out of range.");
@@ -217,6 +231,12 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 }
 
                 entries.Add(new AlgoSafePayloadEntry(txType, element.Slice(bytesOffset + 2, length).ToArray()));
+                expectedOffset += 8 + 2 + 2 + length;
+            }
+
+            if (expectedOffset != body.Length)
+            {
+                throw new FormatException("Payload chunk has trailing or missing bytes.");
             }
 
             return entries;
@@ -274,6 +294,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             var stringOffset = BinaryPrimitives.ReadUInt16BigEndian(data[offset..]);
             offset += 2;
+            if (stringOffset != offset)
+            {
+                throw new FormatException("Payload entry is not laid out canonically.");
+            }
+
             if (stringOffset + 2 > data.Length)
             {
                 throw new FormatException("Payload entry string offset is out of range.");
@@ -283,6 +308,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             if (stringOffset + 2 + length > data.Length)
             {
                 throw new FormatException("Payload entry string is truncated.");
+            }
+
+            if (stringOffset + 2 + length != data.Length)
+            {
+                throw new FormatException("Payload entry has trailing bytes.");
             }
 
             return Encoding.UTF8.GetString(data.Slice(stringOffset + 2, length));
