@@ -875,8 +875,10 @@ setup stage needs.
   lamports are priced via `ISolanaValuationService`/`CoinGeckoSolanaValuationService` (CoinGecko SOL-USD, its own
   `SolanaValuation` config section and `oidc:fx:coingecko-sol-usd` cache key, deliberately independent of the
   BTC/BCH pair so a deployment overriding `BitcoinValuation:CoinGeckoSimplePriceUrl` needs no change), checked
-  against the same global + per-address windows, and recorded to the ledger (`Kind = "Solana"`). A transfer to
-  the signer's *own* independently-derived address is free (never trusts caller claims); an unpriceable spend
+  against the same global + per-address windows, and recorded to the ledger (`Kind = "Solana"`). Every transfer
+  also counts the fixed 5,000-lamport network fee (legacy one-signature message, no priority fee), so many tiny
+  transfers can't push real outflow past a limit unseen; a transfer to the signer's *own* independently-derived
+  address moves no principal (never trusts caller claims) but still costs the fee; an unpriceable spend
   fails closed (`SolanaValuationException` -> 503 `asset_valuation_failed`).
 
   `BiatecMCP` side: `ISolanaRpcDataSource`/`SolanaRpcDataSource` (raw JSON-RPC over a typed `HttpClient`, node URL
@@ -888,7 +890,8 @@ setup stage needs.
   connection/5xx is reported as `BroadcastOutcomeUnknown` with the signature computed locally from the signed bytes
   (`SolanaAddressValidator.TryComputeSignature`) and an explorer link - the transaction may have been accepted, so an
   agent must check before building and signing a *new* transfer (resubmitting the identical signed transaction can
-  never execute twice). `getCryptoAddress`/`getCryptoBalance` gained Solana branches (native
+  never execute twice - and if the first attempt did land, the node's "already processed" answer to that resubmission is
+  mapped to success with the locally computed signature, never to a failed transfer an agent might rebuild). `getCryptoAddress`/`getCryptoBalance` gained Solana branches (native
   SOL only, balance as lamports string + SOL), `createSolanaTransaction` (build-only, no `sign` claim: validates the
   receiver via `SolanaAddressValidator` before any RPC call, best-effort balance pre-check against amount + the
   5,000-lamport base fee, fetches a finalized blockhash, returns the wire JSON), `signTransaction` needs no

@@ -137,6 +137,26 @@ namespace BiatecMCPTests
             Assert.That(result.Error, Does.Contain("InstructionError"));
         }
 
+        [TestCase("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32002,\"message\":\"Transaction simulation failed: This transaction has already been processed\",\"data\":{\"err\":\"AlreadyProcessed\"}},\"id\":1}")]
+        [TestCase("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32002,\"message\":\"Transaction simulation failed\",\"data\":{\"err\":\"AlreadyProcessed\",\"logs\":[]}},\"id\":1}")]
+        public async Task SendTransactionAsync_AlreadyProcessed_IsSuccessWithTheLocallyComputedSignature(string body)
+        {
+            // The advertised safe retry after an outcome-unknown broadcast: if the first attempt landed, resubmitting the same
+            // signed bytes must read as success (never as a failed transfer an agent might rebuild and send twice).
+            var handler = new StubHandler(_ => Json(body));
+            var signed = new byte[1 + 64 + 10];
+            signed[0] = 1;
+            for (var i = 1; i <= 64; i++)
+            {
+                signed[i] = (byte)(i * 3);
+            }
+
+            var result = await Create(handler).SendTransactionAsync(signed);
+
+            Assert.That(result.Error, Is.Null);
+            Assert.That(result.Signature, Is.EqualTo(SolanaAddressValidator.TryComputeSignature(signed)));
+        }
+
         [Test]
         public async Task SendTransactionAsync_Unreachable_ReturnsGenericError()
         {

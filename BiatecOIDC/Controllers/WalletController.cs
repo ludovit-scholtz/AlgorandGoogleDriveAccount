@@ -468,6 +468,19 @@ namespace BiatecOIDC.Controllers
                 return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Exactly one transaction is required for a Solana sign request." });
             }
 
+            // Parse and validate the transfer first - cheap, and it must not cost a vault/activation-registry read from the
+            // caller's cloud drive (or be masked by a storage error) just to answer a plain 400.
+            SolanaUnsignedTransfer transfer;
+            try
+            {
+                transfer = JsonSerializer.Deserialize<SolanaUnsignedTransfer>(decodedTransactions[0]) ?? throw new FormatException("Empty Solana transfer request.");
+                transfer.Validate();
+            }
+            catch (Exception ex) when (ex is FormatException or JsonException)
+            {
+                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = $"Unable to parse Solana transfer request: {ex.Message}" });
+            }
+
             var email = principal.FindFirstValue(ClaimTypes.Email)!;
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
@@ -480,21 +493,6 @@ namespace BiatecOIDC.Controllers
                     Title = "address_not_active",
                     Detail = $"'{address}' is not a known address for this account. Derive it via GET /wallet/address/{{seedAddress}}/{{slot}}, or activate it via POST /wallet/{network}/{address}/activate first."
                 });
-            }
-
-            SolanaUnsignedTransfer transfer;
-            try
-            {
-                transfer = JsonSerializer.Deserialize<SolanaUnsignedTransfer>(decodedTransactions[0]) ?? throw new FormatException("Empty Solana transfer request.");
-            }
-            catch (Exception ex) when (ex is FormatException or JsonException)
-            {
-                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = $"Unable to parse Solana transfer request: {ex.Message}" });
-            }
-
-            if (transfer.Lamports == 0)
-            {
-                return BadRequest(new ProblemDetails { Title = "invalid_request", Detail = "Lamports must be greater than 0." });
             }
 
             try

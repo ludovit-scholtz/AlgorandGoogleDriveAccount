@@ -20,6 +20,9 @@ namespace BiatecOIDC.BusinessLogic
         /// <summary>See <see cref="MaxReasonableFeeSatoshis"/>.</summary>
         private const decimal MaxReasonableFeeFractionOfSpend = 0.10m;
 
+        /// <summary>Solana's base fee for a one-signature transaction (5,000 lamports); this wallet adds no priority fee.</summary>
+        private const ulong SolanaBaseFeeLamports = 5000;
+
         private readonly IDriveService _driveService;
         private readonly ISpendingLimitService _spendingLimitService;
         private readonly IAssetValuationService _valuationService;
@@ -225,10 +228,7 @@ namespace BiatecOIDC.BusinessLogic
                 throw new ArgumentException("Email is required.", nameof(email));
             }
 
-            if (transfer == null || transfer.Lamports == 0)
-            {
-                throw new ArgumentException("A transfer of more than 0 lamports is required.", nameof(transfer));
-            }
+            ArgumentNullException.ThrowIfNull(transfer);
 
             // Validate before anything external happens (vault read, CoinGecko, limit file) so a malformed request is a
             // clean 400 instead of being masked by a valuation outage or an already-exhausted limit.
@@ -249,9 +249,14 @@ namespace BiatecOIDC.BusinessLogic
             {
                 throw new FormatException($"'{senderAddress}' is not the Solana address of the resolved seed/slot ({signerAddress}). Sign as the Solana address returned by GET /wallet/address/{{seedAddress}}/{{slot}}.");
             }
-            var spendLamports = string.Equals(transfer.Recipient, signerAddress, StringComparison.Ordinal) ? 0UL : transfer.Lamports;
+            var principalLamports = string.Equals(transfer.Recipient, signerAddress, StringComparison.Ordinal) ? 0UL : transfer.Lamports;
 
-            var totalUsd = spendLamports > 0 ? await _solanaValuationService.GetUsdValueAsync(spendLamports) : 0m;
+            // The network fee leaves the account too: the transaction is a legacy one-signature message with no priority-fee
+            // instruction, so the fee is exactly SolanaBaseFeeLamports - counted, so many tiny transfers (or self-transfers)
+            // can't push real outflow past the limit unseen.
+            var spendLamports = principalLamports + SolanaBaseFeeLamports;
+
+            var totalUsd = await _solanaValuationService.GetUsdValueAsync(spendLamports);
 
             if (totalUsd > 0m)
             {

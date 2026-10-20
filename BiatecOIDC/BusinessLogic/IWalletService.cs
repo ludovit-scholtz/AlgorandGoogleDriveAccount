@@ -95,8 +95,8 @@ namespace BiatecOIDC.BusinessLogic
         /// Signs a native-SOL transfer via the shared self-custody signing path
         /// (<see cref="BiatecSelfCustodyCore.BusinessLogic.IDriveService.SignSolanaTransactionAsync"/>), after pricing
         /// the transferred amount in USD (<see cref="ISolanaValuationService"/>) and checking it against the caller's
-        /// daily/weekly/monthly limits - the same enforcement Bitcoin gets. A transfer to the signer's own address
-        /// (independently derived here) moves nothing and is not priced. The amount is known exactly because
+        /// daily/weekly/monthly limits - the same enforcement Bitcoin gets - together with the transaction's fixed 5,000-lamport network
+        /// fee. A transfer to the signer's own address (independently derived here) moves no principal, but still costs the fee. The amount is known exactly because
         /// <see cref="SolanaUnsignedTransfer"/> is a structured transfer the signing path builds itself - no other
         /// instruction can be smuggled into the signed message.
         /// </summary>

@@ -216,11 +216,6 @@ namespace BiatecSelfCustodyCore.BusinessLogic
                 throw new ArgumentException("Transfer data is required", nameof(transfer));
             }
 
-            if (transfer.Lamports == 0)
-            {
-                throw new ArgumentException("Lamports must be greater than 0", nameof(transfer));
-            }
-
             var recipient = transfer.Validate();
 
             var account = await _cloudAccountRepository.LoadSolanaAccountAsync(email, slot, provider, accessToken, seedAddress);

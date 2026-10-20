@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace BiatecSelfCustodyCore.Model
 {
     /// <summary>
@@ -7,31 +9,41 @@ namespace BiatecSelfCustodyCore.Model
     /// so a pre-serialized blob could hide spend (or an authority change) that nothing here could price or
     /// limit. <c>DriveService.SignSolanaTransactionAsync</c> instead builds the one System Program transfer
     /// itself, with the signer as fee payer and sender, so exactly what is being spent is known by construction.
-    /// SPL tokens and arbitrary programs are deliberately not supported.
+    /// SPL tokens and arbitrary programs are deliberately not supported. The JSON property names are pinned with
+    /// <c>[JsonPropertyName]</c> because this is a wire contract with BiatecMCP's own identical DTO (no shared code).
     /// </summary>
     public sealed class SolanaUnsignedTransfer
     {
         /// <summary>Recipient's base58 public key (the Solana address).</summary>
+        [JsonPropertyName("Recipient")]
         public string Recipient { get; set; } = string.Empty;
 
         /// <summary>Amount to send, in lamports (1 SOL = 1,000,000,000 lamports). Must be greater than 0.</summary>
+        [JsonPropertyName("Lamports")]
         public ulong Lamports { get; set; }
 
         /// <summary>
         /// A recent blockhash (base58) from the target cluster - bounds the transaction's lifetime (~150 slots,
         /// roughly 1-2 minutes) and is the only thing that ties the signed transaction to a particular cluster.
         /// </summary>
+        [JsonPropertyName("RecentBlockhash")]
         public string RecentBlockhash { get; set; } = string.Empty;
 
         /// <summary>
-        /// Checks <see cref="Recipient"/> and <see cref="RecentBlockhash"/> are base58 32-byte values and returns the
-        /// parsed recipient. Called both before pricing/limit-checking (<c>WalletService</c>, so a malformed request
-        /// is a clean 400 rather than being masked by a valuation outage or an exhausted limit) and again where the
-        /// transaction is built (<c>DriveService</c>).
+        /// The one validation of the transfer: <see cref="Lamports"/> must be positive and
+        /// <see cref="Recipient"/>/<see cref="RecentBlockhash"/> must be base58 32-byte values. Returns the parsed
+        /// recipient. The sign endpoint calls it before reading any cloud storage (so a malformed request is a clean 400
+        /// rather than being masked by a storage error, a valuation outage or an exhausted limit), <c>WalletService</c>
+        /// again before pricing, and <c>DriveService</c> where the transaction is built.
         /// </summary>
-        /// <exception cref="FormatException">Either value is missing or not a base58 32-byte value.</exception>
+        /// <exception cref="FormatException">Lamports is zero, or either key is missing or not a base58 32-byte value.</exception>
         public Solnet.Wallet.PublicKey Validate()
         {
+            if (Lamports == 0)
+            {
+                throw new FormatException("Lamports must be greater than 0.");
+            }
+
             try
             {
                 var recipient = ParseKey(Recipient, "recipient");

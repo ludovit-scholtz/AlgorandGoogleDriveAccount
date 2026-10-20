@@ -72,9 +72,9 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public void SignSolanaTransactionAsync_ZeroLamports_ThrowsArgumentExceptionWithoutLoadingTheKey()
+        public void SignSolanaTransactionAsync_ZeroLamports_ThrowsFormatExceptionWithoutLoadingTheKey()
         {
-            Assert.That(async () => await _service.SignSolanaTransactionAsync(TestEmail, Transfer(lamports: 0), TestProvider), Throws.ArgumentException);
+            Assert.That(async () => await _service.SignSolanaTransactionAsync(TestEmail, Transfer(lamports: 0), TestProvider), Throws.TypeOf<FormatException>());
             _repository.Verify(r => r.LoadSolanaAccountAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
         }
 

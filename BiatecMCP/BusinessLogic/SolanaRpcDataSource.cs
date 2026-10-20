@@ -79,6 +79,14 @@ namespace BiatecMCP.BusinessLogic
 
             if (response.Error != null)
             {
+                // Resubmitting the exact same signed bytes after an outcome-unknown broadcast is the advertised safe retry. If
+                // the first attempt did land, the node answers "already processed" - which is a SUCCESS (same signature), not a
+                // failed transfer an agent might then rebuild and send twice.
+                if (IsAlreadyProcessed(response.Error) && SolanaAddressValidator.TryComputeSignature(signedTransaction) is { } processedSignature)
+                {
+                    return new SolanaSendResult(processedSignature, null);
+                }
+
                 // A preflight failure's useful detail (e.g. "AccountNotFound", "InsufficientFundsForFee") is in
                 // error.data.err, not in the generic "Transaction simulation failed" message.
                 var message = response.Error.Message ?? "The Solana RPC node rejected the transaction.";
@@ -91,6 +99,13 @@ namespace BiatecMCP.BusinessLogic
                 ? new SolanaSendResult(signature.GetString(), null)
                 : new SolanaSendResult(null, "The Solana RPC node returned no transaction signature.");
         }
+
+        private static bool IsAlreadyProcessed(JsonRpcError error) =>
+            (error.Message?.Contains("already been processed", StringComparison.OrdinalIgnoreCase) ?? false)
+            || (error.Data is { ValueKind: JsonValueKind.Object } data
+                && data.TryGetProperty("err", out var err)
+                && err.ValueKind == JsonValueKind.String
+                && string.Equals(err.GetString(), "AlreadyProcessed", StringComparison.OrdinalIgnoreCase));
 
         private async Task<JsonRpcResponse?> TryCallAsync(string method, object[] parameters, CancellationToken cancellationToken, Action<int>? onHttpError = null)
         {

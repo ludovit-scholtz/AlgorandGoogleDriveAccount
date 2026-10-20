@@ -469,7 +469,7 @@ namespace BiatecOIDCTests
         {
             var transfer = BuildSolanaTransfer();
             _mockSolanaValuationService
-                .Setup(v => v.GetUsdValueAsync(2_000_000_000UL, It.IsAny<CancellationToken>()))
+                .Setup(v => v.GetUsdValueAsync(2_000_005_000UL, It.IsAny<CancellationToken>())) // 2 SOL + the 5,000-lamport network fee
                 .ReturnsAsync(300m);
             _mockDriveService
                 .Setup(d => d.SignSolanaTransactionAsync(TestEmail, transfer, TestProvider, It.IsAny<string?>(), ResolvedAddress, 0))
@@ -502,15 +502,16 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task SignSolanaTransferAsync_TransferToOwnAddress_IsNotPricedOrRecorded()
+        public async Task SignSolanaTransferAsync_TransferToOwnAddress_OnlyThePrincipalIsFreeTheFeeStillCounts()
         {
             // "4nrWTvCH3vGghq2FXd22mifh3rKrKAXHw8xWJxt6tZ4H" is what the repository derives for the signer - a self-transfer moves nothing.
             var transfer = BuildSolanaTransfer(recipient: "4nrWTvCH3vGghq2FXd22mifh3rKrKAXHw8xWJxt6tZ4H");
 
             await _service.SignSolanaTransferAsync(TestEmail, TestProvider, transfer, "4nrWTvCH3vGghq2FXd22mifh3rKrKAXHw8xWJxt6tZ4H", null);
 
-            _mockSolanaValuationService.Verify(v => v.GetUsdValueAsync(It.IsAny<ulong>(), It.IsAny<CancellationToken>()), Times.Never);
-            _mockSpendingLimitService.Verify(s => s.EnsureWithinLimitsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            // No principal moves, but the 5,000-lamport network fee still leaves the account and is priced.
+            _mockSolanaValuationService.Verify(v => v.GetUsdValueAsync(5000UL, It.IsAny<CancellationToken>()), Times.Once);
+            _mockSolanaValuationService.Verify(v => v.GetUsdValueAsync(It.Is<ulong>(l => l != 5000UL), It.IsAny<CancellationToken>()), Times.Never);
             _mockDriveService.Verify(d => d.SignSolanaTransactionAsync(TestEmail, transfer, TestProvider, It.IsAny<string?>(), ResolvedAddress, 0), Times.Once);
         }
 
@@ -530,7 +531,7 @@ namespace BiatecOIDCTests
         [Test]
         public async Task SignSolanaTransferAsync_ZeroLamports_Throws()
         {
-            await Assert.ThrowsAsync<ArgumentException>(
+            await Assert.ThrowsAsync<FormatException>(
                 async () => await _service.SignSolanaTransferAsync(TestEmail, TestProvider, BuildSolanaTransfer(lamports: 0), "4nrWTvCH3vGghq2FXd22mifh3rKrKAXHw8xWJxt6tZ4H", null));
         }
 

@@ -1597,6 +1597,22 @@ namespace BiatecOIDCTests
             _mockWalletService.Verify(s => s.SignSolanaTransferAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SolanaUnsignedTransfer>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>()), Times.Never);
         }
 
+        [TestCase("not-a-key")]
+        [TestCase("")]
+        public async Task SignTransactionGroup_Solana_MalformedTransfer_IsA400WithoutAnyCloudStorageRead(string recipient)
+        {
+            SetBearerHeader("valid-token");
+            SetupValidToken("valid-token", new Claim("sign", "true"));
+            SetupSolanaNetwork();
+
+            var result = await Sign(SolanaSignRequest(recipient: recipient), "solana");
+
+            Assert.That((result as ObjectResult)!.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            // No seed-list / activation-registry read from the user's cloud drive just to answer a plain 400.
+            _mockAccountRepository.Verify(r => r.ListSeedsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            _mockAddressActivationService.Verify(s => s.TryResolveAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
         [Test]
         public async Task SignTransactionGroup_Solana_UnknownAddress_ReturnsAddressNotActive()
         {

@@ -19,7 +19,7 @@ namespace BiatecMCP.BusinessLogic
         /// <summary>The address's native balance in lamports, or <c>null</c> if the node is unreachable/errors.</summary>
         Task<ulong?> TryGetBalanceAsync(string address, CancellationToken cancellationToken = default);
 
-        /// <summary>A recent finalized blockhash (base58), or <c>null</c> if the node is unreachable/errors.</summary>
+        /// <summary>A recent blockhash (base58) at <c>confirmed</c> commitment - the same level the balance pre-check and broadcast preflight use - or <c>null</c> if the node is unreachable/errors.</summary>
         Task<string?> TryGetLatestBlockhashAsync(CancellationToken cancellationToken = default);
 
         /// <summary>Broadcasts a fully-signed serialized transaction; returns its signature, or the node's error message (or an outcome-unknown result - see <see cref="SolanaSendResult"/>).</summary>
