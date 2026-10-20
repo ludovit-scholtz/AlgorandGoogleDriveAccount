@@ -63,29 +63,33 @@ namespace BiatecSelfCustodyCore.Model
                 throw new FormatException($"Lamports must not exceed {MaxLamports}.");
             }
 
-            try
-            {
-                var recipient = ParseKey(Recipient, "recipient");
-                _ = ParseKey(RecentBlockhash, "recentBlockhash");
-                return recipient;
-            }
-            catch (Exception exc)
-            {
-                throw new FormatException("Unable to parse Solana transfer data: recipient and recentBlockhash must be valid base58 32-byte values.", exc);
-            }
+            // Each field fails with its own name in the message, so a caller with an expired/garbled blockhash isn't left
+            // guessing whether the recipient is the problem.
+            var recipient = ParseKey(Recipient, "recipient");
+            _ = ParseKey(RecentBlockhash, "recentBlockhash");
+            return recipient;
         }
 
         private static Solnet.Wallet.PublicKey ParseKey(string? value, string fieldName)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
-                throw new FormatException($"{fieldName} is required.");
+                throw new FormatException($"Unable to parse Solana transfer data: {fieldName} is required.");
             }
 
-            var key = new Solnet.Wallet.PublicKey(value);
+            Solnet.Wallet.PublicKey key;
+            try
+            {
+                key = new Solnet.Wallet.PublicKey(value);
+            }
+            catch (Exception exc)
+            {
+                throw new FormatException($"Unable to parse Solana transfer data: {fieldName} is not a valid base58 32-byte value.", exc);
+            }
+
             if (key.KeyBytes == null || key.KeyBytes.Length != 32)
             {
-                throw new FormatException($"{fieldName} must decode to 32 bytes.");
+                throw new FormatException($"Unable to parse Solana transfer data: {fieldName} must decode to 32 bytes.");
             }
 
             return key;

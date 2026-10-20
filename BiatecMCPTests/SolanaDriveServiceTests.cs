@@ -139,5 +139,31 @@ namespace BiatecMCPTests
 
             Assert.That(BitConverter.ToUInt64(Solnet.Rpc.Models.Transaction.Deserialize(signed).Instructions[0].Data, 4), Is.EqualTo(SolanaUnsignedTransfer.MaxLamports));
         }
+
+        [Test]
+        public void Validate_BadRecipient_NamesTheRecipientField()
+        {
+            var ex = Assert.Throws<FormatException>(() => Transfer(recipient: "not-a-key").Validate())!;
+
+            Assert.That(ex.Message, Does.Contain("recipient").And.Not.Contain("recentBlockhash"));
+        }
+
+        [Test]
+        public void Validate_BadBlockhash_NamesTheBlockhashFieldNotTheRecipient()
+        {
+            var ex = Assert.Throws<FormatException>(() => Transfer(blockhash: "garbled!").Validate())!;
+
+            Assert.That(ex.Message, Does.Contain("recentBlockhash"));
+            Assert.That(ex.Message, Does.Not.Contain("recipient"));
+        }
+
+        [TestCase("")]
+        [TestCase("   ")]
+        public void Validate_MissingBlockhash_SaysItIsRequired(string blockhash)
+        {
+            var ex = Assert.Throws<FormatException>(() => Transfer(blockhash: blockhash).Validate())!;
+
+            Assert.That(ex.Message, Does.Contain("recentBlockhash is required"));
+        }
     }
 }

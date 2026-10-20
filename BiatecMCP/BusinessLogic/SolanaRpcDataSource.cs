@@ -71,8 +71,10 @@ namespace BiatecMCP.BusinessLogic
 
             if (response == null)
             {
-                // A 4xx (rate limit, forbidden, ...) is a definitive "not accepted" - the node refused to even look at it.
-                if (httpStatus is >= 400 and < 500)
+                // Only statuses that clearly mean "refused before looking at it" are a definitive "not accepted": bad request,
+                // unauthorized, forbidden, payload too large, rate limited. Anything else - 408/425, other 4xx an intermediary
+                // may emit AFTER forwarding the request, 5xx, timeouts - proves nothing about whether the node queued it.
+                if (httpStatus is 400 or 401 or 403 or 413 or 429)
                 {
                     return new SolanaSendResult(null, $"The Solana RPC node refused the request (HTTP {httpStatus}, most likely rate limiting). The transaction was not accepted - submit the same signed transaction again shortly.");
                 }

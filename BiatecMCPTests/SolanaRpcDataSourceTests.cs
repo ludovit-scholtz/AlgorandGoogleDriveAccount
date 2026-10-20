@@ -325,8 +325,24 @@ namespace BiatecMCPTests
             Assert.That(result.OutcomeUnknown, Is.True);
         }
 
+        [TestCase(HttpStatusCode.RequestTimeout)]
+        [TestCase(HttpStatusCode.NotFound)]
+        [TestCase((HttpStatusCode)425)]
+        public async Task SendTransactionAsync_AmbiguousClientErrorStatus_IsOutcomeUnknownBecauseAProxyMayHaveForwardedIt(HttpStatusCode status)
+        {
+            var handler = new StubHandler(_ => Json("proxy says no", status));
+
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
+
+            Assert.That(result.OutcomeUnknown, Is.True);
+            Assert.That(result.ExpectedSignature, Is.Not.Null);
+        }
+
         [TestCase(HttpStatusCode.TooManyRequests)]
         [TestCase(HttpStatusCode.Forbidden)]
+        [TestCase(HttpStatusCode.BadRequest)]
+        [TestCase(HttpStatusCode.Unauthorized)]
+        [TestCase(HttpStatusCode.RequestEntityTooLarge)]
         public async Task SendTransactionAsync_ClientErrorStatus_IsADefiniteNotAcceptedSoRetryingTheSameBytesIsSafe(HttpStatusCode status)
         {
             var handler = new StubHandler(_ => Json("rate limited", status));

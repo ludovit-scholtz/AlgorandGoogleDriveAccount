@@ -888,7 +888,8 @@ setup stage needs.
 
   `BiatecMCP` side: `ISolanaRpcDataSource`/`SolanaRpcDataSource` (raw JSON-RPC over a typed `HttpClient`, node URL
   from the `Solana:RpcUrl` config section - default Solana's rate-limited public endpoint, point it at a real RPC
-  provider for production traffic; every method fails soft, `sendTransaction` returns the node's error text incl.
+  provider for production traffic - it must be mainnet-beta, since OIDC prices/limits every Solana transfer as mainnet SOL
+  and nothing detects a devnet URL; every method fails soft, `sendTransaction` returns the node's error text incl.
   `error.data.err` such as `AccountNotFound`). Blockhash, balance pre-check and broadcast preflight all use `confirmed`
   commitment so they agree (a `finalized` blockhash is already ~13s into its ~60s life). A 4xx from `sendTransaction`
   (rate limit) is a definite "not accepted" - resubmitting the same signed bytes is safe; a timeout/dropped
