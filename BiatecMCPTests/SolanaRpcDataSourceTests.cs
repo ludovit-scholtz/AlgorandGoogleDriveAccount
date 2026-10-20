@@ -30,6 +30,14 @@ namespace BiatecMCPTests
             }
         }
 
+        /// <summary>Answers by JSON-RPC method (the request body is read into <see cref="StubHandler.LastBody"/> before the responder runs).</summary>
+        private static StubHandler Routed(params (string Method, string Body)[] routes)
+        {
+            StubHandler? handler = null;
+            handler = new StubHandler(_ => Json(routes.First(r => handler!.LastBody!.Contains($"\"method\":\"{r.Method}\"")).Body));
+            return handler;
+        }
+
         private static HttpResponseMessage Json(string body, HttpStatusCode status = HttpStatusCode.OK) =>
             new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
@@ -137,13 +145,15 @@ namespace BiatecMCPTests
             Assert.That(result.Error, Does.Contain("InstructionError"));
         }
 
+        private const string StatusLanded = "{\"jsonrpc\":\"2.0\",\"result\":{\"context\":{\"slot\":9},\"value\":[{\"slot\":8,\"confirmations\":null,\"err\":null,\"confirmationStatus\":\"finalized\"}]},\"id\":1}";
+
         [TestCase("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32002,\"message\":\"Transaction simulation failed: This transaction has already been processed\",\"data\":{\"err\":\"AlreadyProcessed\"}},\"id\":1}")]
         [TestCase("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32002,\"message\":\"Transaction simulation failed\",\"data\":{\"err\":\"AlreadyProcessed\",\"logs\":[]}},\"id\":1}")]
-        public async Task SendTransactionAsync_AlreadyProcessed_IsSuccessWithTheLocallyComputedSignature(string body)
+        public async Task SendTransactionAsync_AlreadyProcessedAndLandedOk_IsSuccessWithTheLocallyComputedSignature(string body)
         {
-            // The advertised safe retry after an outcome-unknown broadcast: if the first attempt landed, resubmitting the same
-            // signed bytes must read as success (never as a failed transfer an agent might rebuild and send twice).
-            var handler = new StubHandler(_ => Json(body));
+            // The advertised safe retry after an outcome-unknown broadcast: if the first attempt landed successfully, resubmitting
+            // the same signed bytes must read as success (never as a failed transfer an agent might rebuild and send twice).
+            var handler = Routed(("sendTransaction", body), ("getSignatureStatuses", StatusLanded));
             var signed = new byte[1 + 64 + 10];
             signed[0] = 1;
             for (var i = 1; i <= 64; i++)
@@ -155,6 +165,60 @@ namespace BiatecMCPTests
 
             Assert.That(result.Error, Is.Null);
             Assert.That(result.Signature, Is.EqualTo(SolanaAddressValidator.TryComputeSignature(signed)));
+            Assert.That(handler.LastBody, Does.Contain("getSignatureStatuses").And.Contain("searchTransactionHistory"));
+        }
+
+        private const string AlreadyProcessedError = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32002,\"message\":\"Transaction simulation failed: This transaction has already been processed\",\"data\":{\"err\":\"AlreadyProcessed\"}},\"id\":1}";
+
+        private static byte[] SignedBytes()
+        {
+            var signed = new byte[1 + 64 + 10];
+            signed[0] = 1;
+            for (var i = 1; i <= 64; i++)
+            {
+                signed[i] = (byte)(i * 3);
+            }
+
+            return signed;
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_AlreadyProcessedButFailedOnChain_IsADefiniteFailureNotASuccess()
+        {
+            // "Processed" also covers a transaction that landed and FAILED - claiming success would tell the user money moved.
+            var handler = Routed(("sendTransaction", AlreadyProcessedError),
+                ("getSignatureStatuses", "{\"jsonrpc\":\"2.0\",\"result\":{\"context\":{\"slot\":9},\"value\":[{\"slot\":8,\"err\":{\"InstructionError\":[0,{\"Custom\":1}]},\"confirmationStatus\":\"finalized\"}]},\"id\":1}"));
+
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
+
+            Assert.That(result.Signature, Is.Null);
+            Assert.That(result.OutcomeUnknown, Is.False);
+            Assert.That(result.Error, Does.Contain("FAILED on-chain").And.Contain("InstructionError"));
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_AlreadyProcessedButStatusNotFound_StaysOutcomeUnknownNeverSuccess()
+        {
+            var handler = Routed(("sendTransaction", AlreadyProcessedError),
+                ("getSignatureStatuses", "{\"jsonrpc\":\"2.0\",\"result\":{\"context\":{\"slot\":9},\"value\":[null]},\"id\":1}"));
+
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
+
+            Assert.That(result.Signature, Is.Null);
+            Assert.That(result.OutcomeUnknown, Is.True);
+            Assert.That(result.ExpectedSignature, Is.EqualTo(SolanaAddressValidator.TryComputeSignature(SignedBytes())));
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_AlreadyProcessedAndStatusLookupFails_StaysOutcomeUnknownNeverSuccess()
+        {
+            var calls = 0;
+            var handler = new StubHandler(_ => ++calls == 1 ? Json(AlreadyProcessedError) : Json("down", HttpStatusCode.BadGateway));
+
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
+
+            Assert.That(result.Signature, Is.Null);
+            Assert.That(result.OutcomeUnknown, Is.True);
         }
 
         [Test]

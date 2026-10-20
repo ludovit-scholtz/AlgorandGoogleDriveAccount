@@ -80,11 +80,11 @@ namespace BiatecMCP.BusinessLogic
             if (response.Error != null)
             {
                 // Resubmitting the exact same signed bytes after an outcome-unknown broadcast is the advertised safe retry. If
-                // the first attempt did land, the node answers "already processed" - which is a SUCCESS (same signature), not a
-                // failed transfer an agent might then rebuild and send twice.
+                // the first attempt did land, the node answers "already processed" - but "processed" also covers a transaction
+                // that landed and FAILED on-chain, so confirm the actual status instead of assuming success.
                 if (IsAlreadyProcessed(response.Error) && SolanaAddressValidator.TryComputeSignature(signedTransaction) is { } processedSignature)
                 {
-                    return new SolanaSendResult(processedSignature, null);
+                    return await ConfirmProcessedAsync(processedSignature, cancellationToken);
                 }
 
                 // A preflight failure's useful detail (e.g. "AccountNotFound", "InsufficientFundsForFee") is in
@@ -98,6 +98,32 @@ namespace BiatecMCP.BusinessLogic
             return response.Result is { ValueKind: JsonValueKind.String } signature && !string.IsNullOrEmpty(signature.GetString())
                 ? new SolanaSendResult(signature.GetString(), null)
                 : new SolanaSendResult(null, "The Solana RPC node returned no transaction signature.");
+        }
+
+        /// <summary>
+        /// Looks the signature up via <c>getSignatureStatuses</c> (with history search): success only if it landed without
+        /// an error; a landed-but-failed transaction is reported as a definite failure; if the status can't be established
+        /// the outcome stays "unknown" rather than being claimed as a success.
+        /// </summary>
+        private async Task<SolanaSendResult> ConfirmProcessedAsync(string signature, CancellationToken cancellationToken)
+        {
+            var response = await TryCallAsync("getSignatureStatuses", new object[] { new[] { signature }, new { searchTransactionHistory = true } }, cancellationToken);
+            if (response?.Result is { } result
+                && result.TryGetProperty("value", out var value)
+                && value.ValueKind == JsonValueKind.Array
+                && value.GetArrayLength() == 1
+                && value[0].ValueKind == JsonValueKind.Object)
+            {
+                var status = value[0];
+                if (!status.TryGetProperty("err", out var err) || err.ValueKind == JsonValueKind.Null)
+                {
+                    return new SolanaSendResult(signature, null);
+                }
+
+                return new SolanaSendResult(null, $"The transaction was processed but FAILED on-chain ({err.GetRawText().Trim('"')}). Resubmitting it cannot succeed - fix the cause and build a new transfer.");
+            }
+
+            return new SolanaSendResult(null, "The Solana RPC node says the transaction was already processed, but its final status could not be confirmed.", OutcomeUnknown: true, ExpectedSignature: signature);
         }
 
         private static bool IsAlreadyProcessed(JsonRpcError error) =>

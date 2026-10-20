@@ -172,7 +172,10 @@ fuzzy matching, raw genesis id, display name, or numeric EVM chain id is accepte
 fails with `400 unknown_network`. BiatecMCP's `listSupportedNetworks` tool enumerates the current full set if
 you're integrating outside BiatecMCP and need to discover it programmatically.
 
-`address` must be a **known** address - resolved to the seed/slot that actually signs for it via:
+`address` must be a **known** address **of the route's own chain family** (an Algorand address is only valid on an AVM
+network, an EVM address on an EVM network, a Solana address on `solana`, and so on - one slot's different-family addresses
+never stand in for each other, and `GET /wallet/{network}/{address}/info` reports a wrong-family address as inactive) -
+resolved to the seed/slot that actually signs for it via:
 
 1. **A seed's own primary address** (its ARC-76 slot-0 address) - recognized for free, no extra step ever needed.
 2. **A previously-derived address at any slot** - calling `GET /wallet/address/{seedAddress}/{slot}` derives

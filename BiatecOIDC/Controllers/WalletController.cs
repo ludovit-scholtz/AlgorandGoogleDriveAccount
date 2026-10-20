@@ -230,7 +230,7 @@ namespace BiatecOIDC.Controllers
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
 
-            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address, resolvedNetwork.Family);
             if (signer == null)
             {
                 return BadRequest(new ProblemDetails
@@ -321,7 +321,7 @@ namespace BiatecOIDC.Controllers
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
 
-            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address, ChainFamily.Evm);
             if (signer == null)
             {
                 return BadRequest(new ProblemDetails
@@ -394,7 +394,7 @@ namespace BiatecOIDC.Controllers
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
 
-            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address, family);
             if (signer == null)
             {
                 return BadRequest(new ProblemDetails
@@ -485,7 +485,7 @@ namespace BiatecOIDC.Controllers
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
 
-            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address, ChainFamily.Sol);
             if (signer == null)
             {
                 return BadRequest(new ProblemDetails
@@ -639,7 +639,7 @@ namespace BiatecOIDC.Controllers
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var resolvedAccessToken = ResolveProviderAccessToken(principal, email);
 
-            var signer = await ResolveSignerAsync(principal, email, provider, resolvedAccessToken, address);
+            var signer = await ResolveSignerAsync(principal, email, provider, resolvedAccessToken, address, resolvedNetwork.Family);
             if (signer == null)
             {
                 return BadRequest(new ProblemDetails { Title = "address_not_active", Detail = $"'{address}' is not a known address for this account." });
@@ -687,7 +687,7 @@ namespace BiatecOIDC.Controllers
             var provider = principal.FindFirstValue(AuthSchemeNames.IdpClaimType) ?? string.Empty;
             var accessToken = ResolveProviderAccessToken(principal, email);
 
-            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+            var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address, resolvedNetwork.Family);
             if (signer == null)
             {
                 return BadRequest(new ProblemDetails { Title = "address_not_active", Detail = $"'{address}' is not a known address for this account." });
@@ -918,7 +918,7 @@ namespace BiatecOIDC.Controllers
 
             try
             {
-                var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address);
+                var signer = await ResolveSignerAsync(principal, email, provider, accessToken, address, resolvedNetwork.Family);
                 return Ok(new AddressInfoResponse
                 {
                     Address = address,
@@ -1434,18 +1434,29 @@ namespace BiatecOIDC.Controllers
         /// <see cref="GetAddress"/>, or explicitly by
         /// <see cref="ActivateAddress"/>). Returns <c>null</c> if <paramref name="address"/> is neither.
         /// </summary>
-        private async Task<(string SeedAddress, int Slot)?> ResolveSignerAsync(ClaimsPrincipal principal, string email, string provider, string? accessToken, string address)
+        private async Task<(string SeedAddress, int Slot)?> ResolveSignerAsync(ClaimsPrincipal principal, string email, string provider, string? accessToken, string address, ChainFamily expectedFamily)
         {
             var seeds = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                 token => _accountRepository.ListSeedsAsync(email, provider, token));
             var nativeSeed = seeds.FirstOrDefault(s => string.Equals(s.SeedAddress, address, StringComparison.Ordinal));
             if (nativeSeed != null)
             {
-                return (nativeSeed.SeedAddress, 0);
+                // A seed's own identifying address is its Algorand slot-0 address - only valid on an AVM network. Resolving it
+                // for another family's route would make that family's key (same seed, slot 0) sign "as" an address that isn't its own.
+                return expectedFamily == ChainFamily.Avm ? (nativeSeed.SeedAddress, 0) : null;
             }
 
             var entry = await ExecuteWithProviderTokenRefreshAsync(principal, email, provider, accessToken,
                 token => _addressActivationService.TryResolveAsync(email, provider, token, address));
+
+            // The registry maps an address of ANY family to a (seed, slot): require the entry to belong to the route's family, so
+            // e.g. a Solana (or Bitcoin) address of slot N can't be used to make the EVM key of slot N sign. An entry with no
+            // recorded family can't have been written by current code; it is tolerated rather than locking such a user out.
+            if (entry != null && !string.IsNullOrEmpty(entry.Family) && !string.Equals(entry.Family, expectedFamily.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
             return entry == null ? null : (entry.SeedAddress, entry.Slot);
         }
 

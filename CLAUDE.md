@@ -868,9 +868,13 @@ setup stage needs.
   arbitrary programs are deliberately unsupported. Recipient/blockhash are validated as base58 32-byte values
   (`FormatException` -> 400, checked *before* anything is priced, so a malformed request is a clean 400 rather than being
   masked by a valuation outage or exhausted limit). The route's `address` must also equal the resolved seed/slot's own
-  Solana address (`WalletService.SignSolanaTransferAsync`'s `senderAddress` check, 400 otherwise): the activation
-  registry resolves an address of *any* family to a (seed, slot), so without it slot N's Algorand/EVM address in the
-  route would sign from slot N's Solana account (the Bitcoin branch has this same gap - a possible follow-up).
+  Solana address (`WalletService.SignSolanaTransferAsync`'s `senderAddress` check, 400 otherwise), as a second line
+  of defense behind `WalletController.ResolveSignerAsync`'s family check: the activation registry maps an address of
+  *any* family to a (seed, slot), so `ResolveSignerAsync` now takes the route's `ChainFamily` and only resolves a
+  seed's own Algorand address on an AVM network and only registry entries whose `Family` matches (an entry with no
+  recorded family is tolerated) - for every network family, so slot N's Solana/Bitcoin/Algorand address can no longer
+  make slot N's EVM (or any other family's) key sign, and `GET .../info` reports an address inactive on a network
+  of another family.
   Spending limits **are** enforced (`WalletService.SignSolanaTransferAsync`): the
   lamports are priced via `ISolanaValuationService`/`CoinGeckoSolanaValuationService` (CoinGecko SOL-USD, its own
   `SolanaValuation` config section and `oidc:fx:coingecko-sol-usd` cache key, deliberately independent of the
@@ -890,11 +894,11 @@ setup stage needs.
   connection/5xx is reported as `BroadcastOutcomeUnknown` with the signature computed locally from the signed bytes
   (`SolanaAddressValidator.TryComputeSignature`) and an explorer link - the transaction may have been accepted, so an
   agent must check before building and signing a *new* transfer (resubmitting the identical signed transaction can
-  never execute twice - and if the first attempt did land, the node's "already processed" answer to that resubmission is
-  mapped to success with the locally computed signature, never to a failed transfer an agent might rebuild). `getCryptoAddress`/`getCryptoBalance` gained Solana branches (native
+  never execute twice - and if the first attempt did land, the node's "already processed" answer to that resubmission is confirmed via `getSignatureStatuses` first - success only if it landed without error, a landed-but-FAILED
+  transaction is a definite failure, and an unconfirmable status stays "outcome unknown" - never assumed successful). `getCryptoAddress`/`getCryptoBalance` gained Solana branches (native
   SOL only, balance as lamports string + SOL), `createSolanaTransaction` (build-only, no `sign` claim: validates the
   receiver via `SolanaAddressValidator` before any RPC call, best-effort balance pre-check against amount + the
-  5,000-lamport base fee, fetches a finalized blockhash, returns the wire JSON), `signTransaction` needs no
+  5,000-lamport base fee, fetches a `confirmed`-commitment blockhash, returns the wire JSON), `signTransaction` needs no
   branch (forwards the blob), and `submitTransactionToBlockchain` broadcasts exactly one signed transaction
   (explorer link `https://explorer.solana.com/tx/{signature}`). The blockhash expires after roughly a minute, so
   sign-and-submit promptly (tool descriptions say so). Rent-exemption failures (sending under ~0.00089 SOL to a

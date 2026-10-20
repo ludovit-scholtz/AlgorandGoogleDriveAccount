@@ -46,7 +46,11 @@ namespace BiatecMCP.MCP
         private const string NoSolanaAddressMessage =
             "This account has no Solana address yet. Complete storage-provider consent by signing in through BiatecOIDC first.";
 
-        /// <summary>Solana's base network fee for a one-signature transaction (5,000 lamports) - this server adds no priority fee.</summary>
+        /// <summary>
+        /// Solana's base network fee for a one-signature transaction (5,000 lamports) - this server adds no priority fee. Advisory
+        /// only here (balance pre-check / estimate); BiatecOIDC's own <c>WalletService</c> constant of the same value is what
+        /// the spending limit actually counts - keep the two in step if a priority fee is ever added to the signed message.
+        /// </summary>
         private const ulong SolanaBaseFeeLamports = 5000;
 
         private readonly IBiatecWalletClient _walletClient;
