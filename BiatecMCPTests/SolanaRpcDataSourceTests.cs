@@ -326,6 +326,7 @@ namespace BiatecMCPTests
         }
 
         [TestCase(HttpStatusCode.RequestTimeout)]
+        [TestCase(HttpStatusCode.BadRequest)]
         [TestCase(HttpStatusCode.NotFound)]
         [TestCase((HttpStatusCode)425)]
         public async Task SendTransactionAsync_AmbiguousClientErrorStatus_IsOutcomeUnknownBecauseAProxyMayHaveForwardedIt(HttpStatusCode status)
@@ -340,18 +341,18 @@ namespace BiatecMCPTests
 
         [TestCase(HttpStatusCode.TooManyRequests)]
         [TestCase(HttpStatusCode.Forbidden)]
-        [TestCase(HttpStatusCode.BadRequest)]
         [TestCase(HttpStatusCode.Unauthorized)]
         [TestCase(HttpStatusCode.RequestEntityTooLarge)]
         public async Task SendTransactionAsync_ClientErrorStatus_IsADefiniteNotAcceptedSoRetryingTheSameBytesIsSafe(HttpStatusCode status)
         {
             var handler = new StubHandler(_ => Json("rate limited", status));
 
-            var result = await Create(handler).SendTransactionAsync(new byte[] { 1 });
+            var result = await Create(handler).SendTransactionAsync(SignedBytes());
 
             Assert.That(result.OutcomeUnknown, Is.False);
             Assert.That(result.Signature, Is.Null);
             Assert.That(result.Error, Does.Contain((int)status + "").And.Contain("not accepted"));
+            Assert.That(result.ExpectedSignature, Is.EqualTo(SolanaAddressValidator.TryComputeSignature(SignedBytes())), "even a definite refusal names the signature, for a doubtful agent to look up");
         }
 
         [Test]

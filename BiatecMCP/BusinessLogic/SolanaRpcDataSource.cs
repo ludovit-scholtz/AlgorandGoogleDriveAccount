@@ -71,18 +71,20 @@ namespace BiatecMCP.BusinessLogic
 
             if (response == null)
             {
-                // Only statuses that clearly mean "refused before looking at it" are a definitive "not accepted": bad request,
-                // unauthorized, forbidden, payload too large, rate limited. Anything else - 408/425, other 4xx an intermediary
-                // may emit AFTER forwarding the request, 5xx, timeouts - proves nothing about whether the node queued it.
-                if (httpStatus is 400 or 401 or 403 or 413 or 429)
+                // Only statuses that clearly mean "refused before looking at it" are a definitive "not accepted": unauthorized,
+                // forbidden, payload too large, rate limited. Anything else - 400, 408/425, other 4xx an intermediary may emit AFTER
+                // forwarding the request, 5xx, timeouts - proves nothing about whether the node queued it. Even for these the
+                // signature is named, so a doubtful agent has something to look up before it builds a new transfer.
+                var signatureToCheck = SolanaAddressValidator.TryComputeSignature(signedTransaction);
+                if (httpStatus is 401 or 403 or 413 or 429)
                 {
-                    return new SolanaSendResult(null, $"The Solana RPC node refused the request (HTTP {httpStatus}, most likely rate limiting). The transaction was not accepted - submit the same signed transaction again shortly.");
+                    return new SolanaSendResult(null, $"The Solana RPC node refused the request (HTTP {httpStatus}, most likely rate limiting). The transaction was not accepted - submit the same signed transaction again shortly.", ExpectedSignature: signatureToCheck);
                 }
 
                 // A timeout / dropped connection / 5xx after the request left the building does NOT prove the node dropped the
                 // transaction - it may have been accepted. Say so, and name the signature to look up, so an agent doesn't
                 // rebuild and send a second transfer.
-                return new SolanaSendResult(null, "The Solana RPC node did not answer cleanly, so it is UNKNOWN whether the transaction was accepted.", OutcomeUnknown: true, ExpectedSignature: SolanaAddressValidator.TryComputeSignature(signedTransaction));
+                return new SolanaSendResult(null, "The Solana RPC node did not answer cleanly, so it is UNKNOWN whether the transaction was accepted.", OutcomeUnknown: true, ExpectedSignature: signatureToCheck);
             }
 
             if (response.Error != null)

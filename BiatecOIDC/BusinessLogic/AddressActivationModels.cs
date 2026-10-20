@@ -12,7 +12,11 @@ namespace BiatecOIDC.BusinessLogic
     {
         public string Address { get; set; } = string.Empty;
 
-        /// <summary><c>"Avm"</c> or <c>"Evm"</c>.</summary>
+        /// <summary>
+        /// The chain family this address belongs to - a <see cref="ChainFamily"/> name: <c>"Avm"</c>, <c>"Evm"</c>, <c>"Btc"</c>, <c>"Bch"</c> or
+        /// <c>"Sol"</c>. <c>WalletController.ResolveSignerAsync</c> only resolves an entry on a route of the same family; an entry with no recorded
+        /// family is treated as legacy <c>"Avm"</c>.
+        /// </summary>
         public string Family { get; set; } = string.Empty;
 
         /// <summary>Which seed's key signs for <see cref="Address"/> - its own identifying (Algorand slot-0) address.</summary>
