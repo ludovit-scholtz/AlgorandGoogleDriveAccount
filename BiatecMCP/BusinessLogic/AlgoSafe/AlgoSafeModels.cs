@@ -59,6 +59,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         public bool Supported { get; set; }
 
         public bool Bootstrapped { get; set; }
+
+        /// <summary>False when the safe has too many boxes to enumerate, so the groups' member lists are missing.</summary>
+        public bool MembersComplete { get; set; } = true;
+
         public bool Paused { get; set; }
         public ulong ValidatorAppId { get; set; }
         public ulong NextProposalId { get; set; }

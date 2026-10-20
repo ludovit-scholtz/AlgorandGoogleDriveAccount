@@ -34,6 +34,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         /// <summary>Box references per call are scarce (max 8 in total), and every member is one box.</summary>
         internal const int MaxBootstrapMembers = 6;
 
+        /// <summary>Algorand's own transaction note limit.</summary>
+        private const int MaxNoteBytes = 1024;
+
         private readonly IAlgoSafeChainClient _chain;
         private readonly AlgoSafeReader _reader;
 
@@ -229,6 +232,17 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} is a governance (admin) change, whose content this server cannot show; approve it in the AlgoSafe app instead.");
             }
 
+            if (view.Transactions.Count != (int)summary.TotalTransactions)
+            {
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} should contain {summary.TotalTransactions} transaction(s) but only {view.Transactions.Count} could be read; approving something not fully reviewed is refused.");
+            }
+
+            var closeOuts = view.Transactions.Where(t => t.ClosesAccount).ToList();
+            if (closeOuts.Count > 0)
+            {
+                throw new AlgoSafeException("UnsupportedProposal", $"Proposal {proposalId} contains {closeOuts.Count} close-out transaction(s) that sweep the safe's ENTIRE remaining balance to {closeOuts[0].CloseTo}; approving that is refused here - review and approve it in the AlgoSafe app instead.");
+            }
+
             var undecoded = view.Transactions.Where(t => t.Kind.StartsWith("Unsupported", StringComparison.Ordinal)).ToList();
             if (undecoded.Count > 0)
             {
@@ -266,7 +280,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             // ("payload changed since review") instead of counting an approval for content the signer never saw.
             var transactions = await NewProxy(appId, parameters).ApproveProposal_Transactions(
                 proposalId, summary.PayloadVersion, 0, AsAccount(sender), null, string.Empty, 1000);
-            return await FinishAsync(transactions, parameters, $"Approve proposal {proposalId} of safe {appId} (payload version {summary.PayloadVersion}; {summary.ApprovalsCount + 1}/{summary.Threshold} approvals after this).", cancellationToken);
+            return await FinishAsync(transactions, parameters, $"Approve proposal {proposalId} of safe {appId} (payload version {summary.PayloadVersion}; {summary.ApprovalsCount + 1}/{summary.Threshold} approvals after this). It sends: {DescribeTransfers(view.Transactions)}", cancellationToken);
         }
 
         public async Task<AlgoSafeBuiltStep> BuildExecuteAsync(Address sender, ulong appId, ulong proposalId, CancellationToken cancellationToken = default)
@@ -308,6 +322,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
         // ───────────────────────── helpers ─────────────────────────
 
+        private static string DescribeTransfers(IReadOnlyList<AlgoSafeProposedTransactionView> transactions) =>
+            string.Join("; ", transactions.Select(t => t.AssetId == 0
+                ? $"{t.Amount} microAlgo to {t.Receiver}"
+                : $"{t.Amount} of asset {t.AssetId} to {t.Receiver}"));
+
         private AlgoSafeCallProxy NewProxy(ulong appId, TransactionParametersResponse parameters) =>
             new(_chain.Algod, appId) { TransParamsOverride = parameters };
 
@@ -330,6 +349,11 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         private static AlgoSafePayloadEntry EncodeTransfer(AlgoSafeTransferRequest transfer, ulong groupAllowedActions)
         {
             var receiver = ParseAddress(transfer.Receiver, "receiver");
+            if (System.Text.Encoding.UTF8.GetByteCount(transfer.Note ?? string.Empty) > MaxNoteBytes)
+            {
+                throw new AlgoSafeException("InvalidRequest", $"A transfer note can be at most {MaxNoteBytes} bytes.");
+            }
+
             var zero = AlgoSafePayloadCodec.ZeroAddress;
             if (transfer.AssetId == 0)
             {
@@ -424,7 +448,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 {
                     return await FinishAsync(transactions, parameters, summary, cancellationToken);
                 }
-                catch (AlgoSafeException ex) when (ex.ErrorType == "SimulationFailed" && ex.Message.Contains("budget", StringComparison.OrdinalIgnoreCase))
+                catch (AlgoSafeException ex) when (ex.BudgetExhausted)
                 {
                     last = ex;
                 }

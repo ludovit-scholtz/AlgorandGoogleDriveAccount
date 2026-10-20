@@ -69,17 +69,26 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
 
             view.SafeBalanceMicroAlgo = await _chain.GetBalanceAsync(safeAddress, cancellationToken);
             var state = ParseGlobalState(app);
-            view.Name = state.GetString("name");
+            view.Name = AlgoSafeText.Clean(state.GetString("name"));
             view.Bootstrapped = state.GetUInt("boot") == 1;
             view.Paused = state.GetUInt("paused") != 0;
             view.ValidatorAppId = state.GetUInt("vapp");
             view.NextProposalId = state.GetUInt("npid");
             var nextGroupId = state.GetUInt("ngid");
 
-            var memberNames = (await _chain.ListBoxNamesAsync(appId, cancellationToken))
-                .Select(n => AlgoSafeBoxNames.TryParseMember(n, out var gid, out var account) ? (Ok: true, GroupId: gid, Account: account) : default)
-                .Where(m => m.Ok)
-                .ToList();
+            // Members can only be enumerated from the box listing; a safe too large to list still shows its groups, just without members.
+            var memberNames = new List<(bool Ok, ulong GroupId, Address Account)>();
+            try
+            {
+                memberNames = (await _chain.ListBoxNamesAsync(appId, cancellationToken))
+                    .Select(n => AlgoSafeBoxNames.TryParseMember(n, out var gid, out var account) ? (Ok: true, GroupId: gid, Account: account) : default)
+                    .Where(m => m.Ok)
+                    .ToList();
+            }
+            catch (AlgoSafeException ex) when (ex.ErrorType == "TooManyBoxes")
+            {
+                view.MembersComplete = false;
+            }
 
             var groups = new List<AlgoSafeGroupView>();
             for (ulong groupId = 1; groupId < nextGroupId; groupId++)
@@ -96,7 +105,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                     var member = await ReadMemberAsync(appId, groupId, account, cancellationToken);
                     if (member != null)
                     {
-                        members.Add(new AlgoSafeMemberView { Address = account.EncodeAsString(), Label = member.Label, AccountType = member.AccountType });
+                        members.Add(new AlgoSafeMemberView { Address = account.EncodeAsString(), Label = AlgoSafeText.Clean(member.Label), AccountType = member.AccountType });
                     }
                 }
 
@@ -107,7 +116,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
             return view;
         }
 
-        public async Task<IReadOnlyList<AlgoSafeProposalSummaryView>> ListProposalsAsync(ulong appId, string? statusFilter, int limit, CancellationToken cancellationToken = default)
+        public async Task<(IReadOnlyList<AlgoSafeProposalSummaryView> Proposals, bool Truncated)> ListProposalsAsync(ulong appId, string? statusFilter, int limit, CancellationToken cancellationToken = default)
         {
             var app = await RequireSupportedAsync(appId, cancellationToken);
             var nextProposalId = ParseGlobalState(app).GetUInt("npid");
@@ -127,7 +136,9 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                 results.Add(ToSummary(id - 1, proposal, currentRound));
             }
 
-            return results;
+            // Stopped by the scan cap (not by running out of proposals or filling the page): older proposals may match too.
+            var truncated = results.Count < limit && scanned >= MaxProposalsScanned && nextProposalId - (ulong)scanned > 1;
+            return (results, truncated);
         }
 
         public async Task<AlgoSafeProposalView> GetProposalAsync(ulong appId, ulong proposalId, Address? caller, CancellationToken cancellationToken = default)
@@ -295,7 +306,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                         AssetId = 0,
                         ClosesAccount = payment.HasClose != 0,
                         CloseTo = payment.HasClose != 0 ? payment.CloseRemainderTo.EncodeAsString() : null,
-                        Note = payment.Note
+                        Note = AlgoSafeText.Clean(payment.Note)
                     };
                 }
 
@@ -311,7 +322,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                         AssetId = asset.XferAsset,
                         ClosesAccount = asset.HasAssetClose != 0,
                         CloseTo = asset.HasAssetClose != 0 ? asset.AssetCloseTo.EncodeAsString() : null,
-                        Note = asset.Note
+                        Note = AlgoSafeText.Clean(asset.Note)
                     };
                 }
 
@@ -324,7 +335,7 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         private static AlgoSafeGroupView ToGroupView(ulong groupId, AlgoSafeProxy.Structs.SignerGroup group, IReadOnlyList<AlgoSafeMemberView> members) => new()
         {
             GroupId = groupId,
-            Name = group.Name,
+            Name = AlgoSafeText.Clean(group.Name),
             Active = group.Active != 0,
             GroupType = group.GroupType == AlgoSafeConstants.GroupTypeCustodian ? "Custodian" : "Standard",
             Threshold = group.Threshold,

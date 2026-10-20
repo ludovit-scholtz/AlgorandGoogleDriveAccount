@@ -54,7 +54,10 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
                         continue;
                     }
 
-                    throw new AlgoSafeException("SimulationFailed", $"The network rejected this transaction when simulated: {Explain(result.FailureMessage)}");
+                    throw new AlgoSafeException("SimulationFailed", $"The network rejected this transaction when simulated: {Explain(result.FailureMessage)}")
+                    {
+                        BudgetExhausted = result.FailureMessage.Contains("budget", StringComparison.OrdinalIgnoreCase)
+                    };
                 }
 
                 var changed = false;

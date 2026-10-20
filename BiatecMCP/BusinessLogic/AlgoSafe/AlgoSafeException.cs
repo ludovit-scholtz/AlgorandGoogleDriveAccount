@@ -14,5 +14,8 @@ namespace BiatecMCP.BusinessLogic.AlgoSafe
         }
 
         public string ErrorType { get; }
+
+        /// <summary>Set on a failed simulation whose node message said the opcode budget ran out - the one failure a larger budget can fix.</summary>
+        public bool BudgetExhausted { get; init; }
     }
 }
