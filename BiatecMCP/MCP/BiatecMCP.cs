@@ -1765,7 +1765,7 @@ namespace BiatecMCP.MCP
                     : $" If it was accepted its signature is {result.ExpectedSignature} - check https://explorer.solana.com/tx/{result.ExpectedSignature} before doing anything else.";
                 return new SubmitTransactionToBlockchainResponse
                 {
-                    Error = $"{result.Error}{lookup} Do NOT rebuild and resend the transfer until you have checked: if it is not found within about a minute its blockhash has expired and building a fresh transfer is safe.",
+                    Error = $"{result.Error}{lookup} Submitting this exact same signed transaction again is safe (it cannot execute twice), but do NOT build and sign a NEW transfer until you have checked: if it is not found within about a minute its blockhash has expired and a fresh transfer is safe.",
                     ErrorType = "BroadcastOutcomeUnknown"
                 };
             }

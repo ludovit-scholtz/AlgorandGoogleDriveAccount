@@ -230,6 +230,10 @@ namespace BiatecOIDC.BusinessLogic
                 throw new ArgumentException("A transfer of more than 0 lamports is required.", nameof(transfer));
             }
 
+            // Validate before anything external happens (vault read, CoinGecko, limit file) so a malformed request is a
+            // clean 400 instead of being masked by a valuation outage or an already-exhausted limit.
+            transfer.Validate();
+
             // Resolved once, up front, so the spending-limit check and the actual signing call below agree
             // on the same identity even if the vault's primary seed changes mid-request.
             var resolvedAddress = await _accountRepository.ResolveSeedAddressAsync(email, provider, seedAddress, accessToken);

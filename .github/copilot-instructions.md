@@ -866,7 +866,12 @@ setup stage needs.
   builds the one System Program `transfer` itself via Solnet (`TransactionBuilder`, legacy format, signer as both
   sender and fee payer, no priority-fee instruction), so what is spent is known by construction. SPL tokens and
   arbitrary programs are deliberately unsupported. Recipient/blockhash are validated as base58 32-byte values
-  (`FormatException` -> 400). Spending limits **are** enforced (`WalletService.SignSolanaTransferAsync`): the
+  (`FormatException` -> 400, checked *before* anything is priced, so a malformed request is a clean 400 rather than being
+  masked by a valuation outage or exhausted limit). The route's `address` must also equal the resolved seed/slot's own
+  Solana address (`WalletService.SignSolanaTransferAsync`'s `senderAddress` check, 400 otherwise): the activation
+  registry resolves an address of *any* family to a (seed, slot), so without it slot N's Algorand/EVM address in the
+  route would sign from slot N's Solana account (the Bitcoin branch has this same gap - a possible follow-up).
+  Spending limits **are** enforced (`WalletService.SignSolanaTransferAsync`): the
   lamports are priced via `ISolanaValuationService`/`CoinGeckoSolanaValuationService` (CoinGecko SOL-USD, its own
   `SolanaValuation` config section and `oidc:fx:coingecko-sol-usd` cache key, deliberately independent of the
   BTC/BCH pair so a deployment overriding `BitcoinValuation:CoinGeckoSimplePriceUrl` needs no change), checked
@@ -877,7 +882,13 @@ setup stage needs.
   `BiatecMCP` side: `ISolanaRpcDataSource`/`SolanaRpcDataSource` (raw JSON-RPC over a typed `HttpClient`, node URL
   from the `Solana:RpcUrl` config section - default Solana's rate-limited public endpoint, point it at a real RPC
   provider for production traffic; every method fails soft, `sendTransaction` returns the node's error text incl.
-  `error.data.err` such as `AccountNotFound`). `getCryptoAddress`/`getCryptoBalance` gained Solana branches (native
+  `error.data.err` such as `AccountNotFound`). Blockhash, balance pre-check and broadcast preflight all use `confirmed`
+  commitment so they agree (a `finalized` blockhash is already ~13s into its ~60s life). A 4xx from `sendTransaction`
+  (rate limit) is a definite "not accepted" - resubmitting the same signed bytes is safe; a timeout/dropped
+  connection/5xx is reported as `BroadcastOutcomeUnknown` with the signature computed locally from the signed bytes
+  (`SolanaAddressValidator.TryComputeSignature`) and an explorer link - the transaction may have been accepted, so an
+  agent must check before building and signing a *new* transfer (resubmitting the identical signed transaction can
+  never execute twice). `getCryptoAddress`/`getCryptoBalance` gained Solana branches (native
   SOL only, balance as lamports string + SOL), `createSolanaTransaction` (build-only, no `sign` claim: validates the
   receiver via `SolanaAddressValidator` before any RPC call, best-effort balance pre-check against amount + the
   5,000-lamport base fee, fetches a finalized blockhash, returns the wire JSON), `signTransaction` needs no

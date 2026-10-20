@@ -62,7 +62,7 @@ namespace BiatecOIDC.BusinessLogic
             {
                 response = await _httpClient.GetFromJsonAsync<CoinGeckoSimplePriceResponse>(_config.CurrentValue.CoinGeckoSimplePriceUrl, JsonOptions, cancellationToken);
             }
-            catch (Exception ex) when (ex is HttpRequestException or JsonException || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or NotSupportedException || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
             {
                 // A caller-initiated cancellation is not a pricing outage - let it propagate as such.
                 throw new SolanaValuationException(ex);

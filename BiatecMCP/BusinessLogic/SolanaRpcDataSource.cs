@@ -40,7 +40,7 @@ namespace BiatecMCP.BusinessLogic
 
         public async Task<string?> TryGetLatestBlockhashAsync(CancellationToken cancellationToken = default)
         {
-            var response = await TryCallAsync("getLatestBlockhash", new object[] { new { commitment = "finalized" } }, cancellationToken);
+            var response = await TryCallAsync("getLatestBlockhash", new object[] { new { commitment = "confirmed" } }, cancellationToken);
             if (response?.Result is { } result
                 && result.TryGetProperty("value", out var value)
                 && value.TryGetProperty("blockhash", out var blockhash)
@@ -56,16 +56,24 @@ namespace BiatecMCP.BusinessLogic
         {
             // preflightCommitment matches the "confirmed" commitment createSolanaTransaction's balance pre-check uses - a
             // balance that is confirmed but not yet finalized would otherwise pass the pre-check and then fail preflight.
+            var httpStatus = 0;
             var response = await TryCallAsync(
                 "sendTransaction",
                 new object[] { Convert.ToBase64String(signedTransaction), new { encoding = "base64", preflightCommitment = "confirmed" } },
-                cancellationToken);
+                cancellationToken,
+                status => httpStatus = status);
 
             if (response == null)
             {
-                // A timeout / dropped connection / error status after the request left the building does NOT prove the node
-                // dropped the transaction - it may have been accepted. Say so, and name the signature to look up, so an agent
-                // doesn't rebuild and resend a second transfer.
+                // A 4xx (rate limit, forbidden, ...) is a definitive "not accepted" - the node refused to even look at it.
+                if (httpStatus is >= 400 and < 500)
+                {
+                    return new SolanaSendResult(null, $"The Solana RPC node refused the request (HTTP {httpStatus}, most likely rate limiting). The transaction was not accepted - submit the same signed transaction again shortly.");
+                }
+
+                // A timeout / dropped connection / 5xx after the request left the building does NOT prove the node dropped the
+                // transaction - it may have been accepted. Say so, and name the signature to look up, so an agent doesn't
+                // rebuild and send a second transfer.
                 return new SolanaSendResult(null, "The Solana RPC node did not answer cleanly, so it is UNKNOWN whether the transaction was accepted.", OutcomeUnknown: true, ExpectedSignature: SolanaAddressValidator.TryComputeSignature(signedTransaction));
             }
 
@@ -84,7 +92,7 @@ namespace BiatecMCP.BusinessLogic
                 : new SolanaSendResult(null, "The Solana RPC node returned no transaction signature.");
         }
 
-        private async Task<JsonRpcResponse?> TryCallAsync(string method, object[] parameters, CancellationToken cancellationToken)
+        private async Task<JsonRpcResponse?> TryCallAsync(string method, object[] parameters, CancellationToken cancellationToken, Action<int>? onHttpError = null)
         {
             try
             {
@@ -93,13 +101,15 @@ namespace BiatecMCP.BusinessLogic
                 if (!response.IsSuccessStatusCode)
                 {
                     _logger.LogWarning("Solana RPC {Method} returned HTTP {Status}.", method, (int)response.StatusCode);
+                    onHttpError?.Invoke((int)response.StatusCode);
                     return null;
                 }
 
                 return await response.Content.ReadFromJsonAsync<JsonRpcResponse>(JsonOptions, cancellationToken);
             }
-            catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or NotSupportedException || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
             {
+                // A caller-initiated cancellation is not an RPC failure - it propagates as the cancellation it is.
                 _logger.LogWarning(ex, "Solana RPC {Method} failed.", method);
                 return null;
             }

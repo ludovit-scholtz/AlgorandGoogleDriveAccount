@@ -82,7 +82,7 @@ namespace BiatecMCPTests
             var blockhash = await Create(handler).TryGetLatestBlockhashAsync();
 
             Assert.That(blockhash, Is.EqualTo("EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N"));
-            Assert.That(handler.LastBody, Does.Contain("getLatestBlockhash").And.Contain("finalized"));
+            Assert.That(handler.LastBody, Does.Contain("getLatestBlockhash").And.Contain("confirmed"));
         }
 
         [Test]
@@ -168,13 +168,44 @@ namespace BiatecMCPTests
         }
 
         [Test]
-        public async Task SendTransactionAsync_ErrorStatusCode_IsOutcomeUnknownNotAConfirmedRejection()
+        public async Task SendTransactionAsync_ServerErrorStatus_IsOutcomeUnknownNotAConfirmedRejection()
         {
             var handler = new StubHandler(_ => Json("busy", HttpStatusCode.BadGateway));
 
             var result = await Create(handler).SendTransactionAsync(new byte[] { 1 });
 
             Assert.That(result.OutcomeUnknown, Is.True);
+        }
+
+        [TestCase(HttpStatusCode.TooManyRequests)]
+        [TestCase(HttpStatusCode.Forbidden)]
+        public async Task SendTransactionAsync_ClientErrorStatus_IsADefiniteNotAcceptedSoRetryingTheSameBytesIsSafe(HttpStatusCode status)
+        {
+            var handler = new StubHandler(_ => Json("rate limited", status));
+
+            var result = await Create(handler).SendTransactionAsync(new byte[] { 1 });
+
+            Assert.That(result.OutcomeUnknown, Is.False);
+            Assert.That(result.Signature, Is.Null);
+            Assert.That(result.Error, Does.Contain((int)status + "").And.Contain("not accepted"));
+        }
+
+        [Test]
+        public async Task SendTransactionAsync_CallerCancellation_Propagates()
+        {
+            var handler = new StubHandler(_ => throw new TaskCanceledException());
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            await Assert.ThrowsAsync<TaskCanceledException>(async () => await Create(handler).SendTransactionAsync(new byte[] { 1 }, cts.Token));
+        }
+
+        [Test]
+        public async Task TryGetBalanceAsync_NonJsonBody_ReturnsNull()
+        {
+            var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html>blocked</html>", Encoding.UTF8, "text/html") });
+
+            Assert.That(await Create(handler).TryGetBalanceAsync("addr"), Is.Null);
         }
 
         [Test]

@@ -110,5 +110,15 @@ namespace BiatecOIDCTests
 
             await Assert.ThrowsAsync<SolanaValuationException>(async () => await _service.GetUsdValueAsync(1UL));
         }
+
+        [Test]
+        public async Task GetUsdValueAsync_NonJsonContentType_ThrowsSolanaValuationException()
+        {
+            _handler.Protected()
+                .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html>rate limited</html>", System.Text.Encoding.UTF8, "text/html") });
+
+            await Assert.ThrowsAsync<SolanaValuationException>(async () => await _service.GetUsdValueAsync(1UL));
+        }
     }
 }

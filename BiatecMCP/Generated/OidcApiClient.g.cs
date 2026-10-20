@@ -401,7 +401,7 @@ namespace BiatecMCP.Generated
         /// <param name="seedAddress">The seed's own identifying (slot-0) address.</param>
         /// <param name="slot">ARC-76 derivation index within that seed. Defaults to `0`. Bounded to
         /// <br/>`[0, BiatecOIDC.Controllers.WalletController.MaxDerivationSlot]` - this endpoint requires only an identity-level
-        /// <br/>(`openid`) token and writes up to four entries to the caller's own cloud storage per distinct
+        /// <br/>(`openid`) token and writes up to five entries to the caller's own cloud storage per distinct
         /// <br/>slot, so an unbounded caller-supplied slot would let the lowest-privilege token grow that file
         /// <br/>without limit (audit finding M-04/R-029).</param>
         /// <returns>The derived addresses.</returns>
@@ -2997,7 +2997,7 @@ namespace BiatecMCP.Generated
         /// <param name="seedAddress">The seed's own identifying (slot-0) address.</param>
         /// <param name="slot">ARC-76 derivation index within that seed. Defaults to `0`. Bounded to
         /// <br/>`[0, BiatecOIDC.Controllers.WalletController.MaxDerivationSlot]` - this endpoint requires only an identity-level
-        /// <br/>(`openid`) token and writes up to four entries to the caller's own cloud storage per distinct
+        /// <br/>(`openid`) token and writes up to five entries to the caller's own cloud storage per distinct
         /// <br/>slot, so an unbounded caller-supplied slot would let the lowest-privilege token grow that file
         /// <br/>without limit (audit finding M-04/R-029).</param>
         /// <returns>The derived addresses.</returns>

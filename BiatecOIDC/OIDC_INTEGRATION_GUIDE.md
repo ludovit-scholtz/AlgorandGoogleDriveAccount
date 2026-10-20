@@ -255,7 +255,10 @@ Daily/weekly/monthly spending limits **are** enforced: the transferred SOL is pr
 price, cached ~5 minutes) and checked against the global and per-address limits before signing; a spend that
 can't be priced is refused with `503 asset_valuation_failed`, and exceeding a limit with `403
 spending_limit_exceeded`. A transfer to the signer's own address moves nothing and is not counted. A malformed
-recipient/blockhash or zero `Lamports` is `400 invalid_request`.
+recipient/blockhash or zero `Lamports` is `400 invalid_request` (checked before pricing). The route's `address` must be the
+Solana address of the seed/slot it resolves to (as returned by `GET /wallet/address/{seedAddress}/{slot}`) - an
+Algorand or EVM address of the same slot is refused with `400 invalid_request` rather than signing from that slot's
+Solana account.
 
 See [the supported-chains page](https://oidc.biatec.io/chains.html) for the full capability matrix, and this
 repo's `CLAUDE.md` for the deeper architecture writeup (`IEvmChainRegistry`, `INetworkResolver`, etc., all in

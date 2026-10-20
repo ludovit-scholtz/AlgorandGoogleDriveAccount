@@ -732,7 +732,7 @@ namespace BiatecOIDC.Controllers
         /// <param name="slot">
         /// ARC-76 derivation index within that seed. Defaults to <c>0</c>. Bounded to
         /// <c>[0, <see cref="MaxDerivationSlot"/>]</c> - this endpoint requires only an identity-level
-        /// (<c>openid</c>) token and writes up to four entries to the caller's own cloud storage per distinct
+        /// (<c>openid</c>) token and writes up to five entries to the caller's own cloud storage per distinct
         /// slot, so an unbounded caller-supplied slot would let the lowest-privilege token grow that file
         /// without limit (audit finding M-04/R-029).
         /// </param>

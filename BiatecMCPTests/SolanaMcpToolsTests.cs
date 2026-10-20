@@ -304,7 +304,7 @@ namespace BiatecMCPTests
             var result = await _tool.SubmitTransactionToBlockchain(new List<string> { Convert.ToBase64String(new byte[] { 1 }) }, "solana");
 
             Assert.That(result.ErrorType, Is.EqualTo("BroadcastOutcomeUnknown"));
-            Assert.That(result.Error, Does.Contain("UNKNOWN").And.Contain("https://explorer.solana.com/tx/3abcSig").And.Contain("Do NOT rebuild"));
+            Assert.That(result.Error, Does.Contain("UNKNOWN").And.Contain("https://explorer.solana.com/tx/3abcSig").And.Contain("same signed transaction again is safe").And.Contain("do NOT build and sign a NEW transfer"));
             Assert.That(result.TxId, Is.Empty);
         }
 
