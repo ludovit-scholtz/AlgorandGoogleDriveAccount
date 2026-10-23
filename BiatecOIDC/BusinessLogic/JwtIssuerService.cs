@@ -471,8 +471,8 @@ namespace BiatecOIDC.BusinessLogic
             // Only ever asserted true when the upstream identity provider itself said so. Never inferred
             // (e.g. from "the user signed in"), and never trusted from a provider that doesn't attest it:
             // Microsoft Entra's `email` claim is a mutable, unverified profile attribute.
-            // An empty provider means a pre-provider-claim session, which the catalog resolves to Google too.
-            var emailVerified = (string.IsNullOrEmpty(provider) || string.Equals(provider, GoogleCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase))
+            // Fails closed: a principal with no recorded provider is never treated as attested.
+            var emailVerified = string.Equals(provider, GoogleCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(user.FindFirst("email_verified")?.Value, "true", StringComparison.OrdinalIgnoreCase);
 
             if (string.Equals(request.ResponseType, "id_token", StringComparison.Ordinal))

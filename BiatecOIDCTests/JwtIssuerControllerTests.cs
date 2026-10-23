@@ -720,7 +720,7 @@ namespace BiatecOIDCTests
                 .Build();
         }
 
-        private static async Task<string> GetUserInfoJsonAsync(params Claim[] claims)
+        private static string GetUserInfoJson(params Claim[] claims)
         {
             var jwtIssuerService = new Mock<IJwtIssuerService>();
             jwtIssuerService
@@ -730,22 +730,22 @@ namespace BiatecOIDCTests
             controller.Request.Headers.Authorization = "Bearer tok";
 
             var ok = (OkObjectResult)controller.UserInfo();
-            return await Task.FromResult(System.Text.Json.JsonSerializer.Serialize(ok.Value));
+            return System.Text.Json.JsonSerializer.Serialize(ok.Value);
         }
 
         [Test]
-        public async Task UserInfo_AttestedEmail_ReturnsEmailVerifiedTrueBoolean()
+        public void UserInfo_AttestedEmail_ReturnsEmailVerifiedTrueBoolean()
         {
-            var json = await GetUserInfoJsonAsync(new Claim("sub", "s"), new Claim(ClaimTypes.Email, "a@b.c"), new Claim("email_verified", "true", ClaimValueTypes.Boolean));
+            var json = GetUserInfoJson(new Claim("sub", "s"), new Claim(ClaimTypes.Email, "a@b.c"), new Claim("email_verified", "true", ClaimValueTypes.Boolean));
 
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             Assert.That(doc.RootElement.GetProperty("email_verified").ValueKind, Is.EqualTo(System.Text.Json.JsonValueKind.True));
         }
 
         [Test]
-        public async Task UserInfo_UnattestedEmail_OmitsEmailVerifiedEntirely()
+        public void UserInfo_UnattestedEmail_OmitsEmailVerifiedEntirely()
         {
-            var json = await GetUserInfoJsonAsync(new Claim("sub", "s"), new Claim(ClaimTypes.Email, "a@b.c"));
+            var json = GetUserInfoJson(new Claim("sub", "s"), new Claim(ClaimTypes.Email, "a@b.c"));
 
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             Assert.That(doc.RootElement.TryGetProperty("email_verified", out _), Is.False);

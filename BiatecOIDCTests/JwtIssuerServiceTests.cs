@@ -1244,11 +1244,11 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task IdToken_LegacySessionWithNoProvider_TreatedAsGoogle()
+        public async Task IdToken_NoProviderRecorded_FailsClosed()
         {
             var jwt = await IssueIdTokenAsync(null, "true");
 
-            Assert.That(jwt.Claims.Single(c => c.Type == "email_verified").Value, Is.EqualTo("true"));
+            Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
         }
 
         [Test]
