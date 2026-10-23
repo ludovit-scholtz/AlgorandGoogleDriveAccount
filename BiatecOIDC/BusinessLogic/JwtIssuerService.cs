@@ -101,7 +101,7 @@ namespace BiatecOIDC.BusinessLogic
                 // WalletController) - granting them stamps a matching claim of the same name onto the
                 // issued access token; see JwtIssuerService.CreateAccessToken.
                 scopes_supported = new[] { "openid", "profile", "email", "sign", "manage-limits", "rekey" },
-                claims_supported = new[] { "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "email", "name", "preferred_username", "primary_seed_address", "biatec_idp", "sign", "manage-limits", "rekey" }
+                claims_supported = new[] { "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "email", "email_verified", "name", "preferred_username", "primary_seed_address", "biatec_idp", "sign", "manage-limits", "rekey" }
             };
         }
 
@@ -468,9 +468,15 @@ namespace BiatecOIDC.BusinessLogic
             var shortIdentity = BuildIdentityDisplayName(email, primarySeedAddress);
             var subject = ComputePairwiseSubject(client.ClientId, email);
 
+            // Only ever asserted true when the upstream identity provider itself said so. Never inferred
+            // (e.g. from "the user signed in"), and never trusted from a provider that doesn't attest it:
+            // Microsoft Entra's `email` claim is a mutable, unverified profile attribute.
+            var emailVerified = string.Equals(provider, GoogleCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(user.FindFirst("email_verified")?.Value, "true", StringComparison.OrdinalIgnoreCase);
+
             if (string.Equals(request.ResponseType, "id_token", StringComparison.Ordinal))
             {
-                var idToken = CreateIdToken(subject, client.ClientId, email, primarySeedAddress, shortIdentity, request.Nonce);
+                var idToken = CreateIdToken(subject, client.ClientId, email, primarySeedAddress, shortIdentity, request.Nonce, emailVerified);
                 var response = new Dictionary<string, string>
                 {
                     ["id_token"] = idToken,
@@ -508,6 +514,7 @@ namespace BiatecOIDC.BusinessLogic
                 Nonce = request.Nonce,
                 Email = email,
                 PrimarySeedAddress = primarySeedAddress,
+                EmailVerified = emailVerified,
                 Provider = provider,
                 Subject = subject,
                 ShortIdentity = shortIdentity,
@@ -606,7 +613,8 @@ namespace BiatecOIDC.BusinessLogic
                     codeRecord.Resource,
                     codeRecord.ProtectedProviderAccessToken,
                     codeRecord.ProtectedProviderRefreshToken,
-                    includeRefreshToken: true);
+                    includeRefreshToken: true,
+                    emailVerified: codeRecord.EmailVerified);
 
                 return (true, 200, null, null, response);
             }
@@ -656,7 +664,8 @@ namespace BiatecOIDC.BusinessLogic
                     refreshRecord.Resource,
                     protectedProviderAccessToken,
                     protectedProviderRefreshToken,
-                    includeRefreshToken: true);
+                    includeRefreshToken: true,
+                    emailVerified: refreshRecord.EmailVerified);
 
                 return (true, 200, null, null, response);
             }
@@ -850,10 +859,11 @@ namespace BiatecOIDC.BusinessLogic
             string? resource,
             string? protectedProviderAccessToken,
             string? protectedProviderRefreshToken,
-            bool includeRefreshToken)
+            bool includeRefreshToken,
+            bool emailVerified = false)
         {
             var accessToken = CreateAccessToken(subject, clientId, email, primarySeedAddress, provider, shortIdentity, scope, resource, protectedProviderAccessToken, protectedProviderRefreshToken);
-            var idToken = CreateIdToken(subject, clientId, email, primarySeedAddress, shortIdentity, nonce);
+            var idToken = CreateIdToken(subject, clientId, email, primarySeedAddress, shortIdentity, nonce, emailVerified);
 
             string? refreshToken = null;
             if (includeRefreshToken)
@@ -866,6 +876,7 @@ namespace BiatecOIDC.BusinessLogic
                     Subject = subject,
                     Email = email,
                     PrimarySeedAddress = primarySeedAddress,
+                    EmailVerified = emailVerified,
                     Provider = provider,
                     ShortIdentity = shortIdentity,
                     Scope = scope,
@@ -897,7 +908,7 @@ namespace BiatecOIDC.BusinessLogic
             };
         }
 
-        private string CreateIdToken(string subject, string audience, string email, string? primarySeedAddress, string shortIdentity, string? nonce)
+        private string CreateIdToken(string subject, string audience, string email, string? primarySeedAddress, string shortIdentity, string? nonce, bool emailVerified = false)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.IdTokenLifetimeMinutes);
@@ -914,6 +925,12 @@ namespace BiatecOIDC.BusinessLogic
             if (!string.IsNullOrWhiteSpace(primarySeedAddress))
             {
                 claims.Add(new Claim("primary_seed_address", primarySeedAddress));
+            }
+
+            // OIDC Core 5.1: a JSON boolean. Omitted (not `false`) when the provider didn't attest it.
+            if (emailVerified)
+            {
+                claims.Add(new Claim("email_verified", "true", ClaimValueTypes.Boolean));
             }
 
             if (!string.IsNullOrWhiteSpace(nonce))
@@ -1252,6 +1269,9 @@ namespace BiatecOIDC.BusinessLogic
             public string? Nonce { get; set; }
             public string Email { get; set; } = string.Empty;
             public string? PrimarySeedAddress { get; set; }
+
+            /// <summary>True only when the upstream provider attested the email (see <c>CreateAuthorizeResponseAsync</c>); drives the ID token's <c>email_verified</c>.</summary>
+            public bool EmailVerified { get; set; }
             public string? Provider { get; set; }
             public string Subject { get; set; } = string.Empty;
             public string ShortIdentity { get; set; } = string.Empty;
@@ -1288,6 +1308,7 @@ namespace BiatecOIDC.BusinessLogic
             public string Subject { get; set; } = string.Empty;
             public string Email { get; set; } = string.Empty;
             public string? PrimarySeedAddress { get; set; }
+            public bool EmailVerified { get; set; }
             public string? Provider { get; set; }
             public string ShortIdentity { get; set; } = string.Empty;
             public string Scope { get; set; } = "openid profile email";

@@ -1188,6 +1188,61 @@ namespace BiatecOIDCTests
             Assert.That(result.Response["id_token"], Is.Not.Empty);
         }
 
+        private async Task<JwtSecurityToken> IssueIdTokenAsync(string? provider, string? emailVerified)
+        {
+            var request = new OidcAuthorizeRequest
+            {
+                ClientId = TestClientId,
+                RedirectUri = TestRedirectUri,
+                ResponseType = "id_token",
+                Scope = "openid profile email",
+                Nonce = "test-nonce"
+            };
+            var claims = new List<Claim> { new(ClaimTypes.Email, TestEmail) };
+            if (provider != null) claims.Add(new Claim(BiatecSelfCustodyCore.Model.AuthSchemeNames.IdpClaimType, provider));
+            if (emailVerified != null) claims.Add(new Claim("email_verified", emailVerified));
+            var user = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
+
+            var result = await Service.CreateAuthorizeResponseAsync(request, DefaultConfig.Clients[0], user, providerAccessToken: null, providerRefreshToken: null);
+
+            Assert.That(result.Success, Is.True);
+            return new JwtSecurityTokenHandler().ReadJwtToken(result.Response!["id_token"]);
+        }
+
+        [Test]
+        public async Task IdToken_GoogleAttestedEmail_ContainsEmailVerifiedTrueBoolean()
+        {
+            var jwt = await IssueIdTokenAsync("Google", "true");
+
+            var claim = jwt.Claims.Single(c => c.Type == "email_verified");
+            Assert.That(claim.Value, Is.EqualTo("true"));
+            Assert.That(claim.ValueType, Is.EqualTo(ClaimValueTypes.Boolean));
+        }
+
+        [Test]
+        public async Task IdToken_GoogleWithoutAttestation_OmitsEmailVerified()
+        {
+            var jwt = await IssueIdTokenAsync("Google", null);
+
+            Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
+        [Test]
+        public async Task IdToken_MicrosoftEvenWithForgedClaim_OmitsEmailVerified()
+        {
+            var jwt = await IssueIdTokenAsync("Microsoft", "true");
+
+            Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
+        [Test]
+        public async Task IdToken_NoProviderRecorded_OmitsEmailVerified()
+        {
+            var jwt = await IssueIdTokenAsync(null, "true");
+
+            Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
         [Test]
         public async Task IdTokenFlow_TokenContainsPrimarySeedAddressClaim()
         {
