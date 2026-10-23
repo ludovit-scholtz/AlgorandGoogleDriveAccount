@@ -207,7 +207,7 @@ dependency on `BiatecSelfCustodyCore`.
     address via a live `GET /wallet/address/{seedAddress}/{slot}` call for both AVM and EVM (see
     `ResolveDerivedAddressAsync` under "EVM (Ethereum-family) support" below), using `primary_seed_address`
     only as the default *seed selector* when no explicit one is given - never as the address itself. Also
-    stamps `biatec_idp`/`sign`/`manage-limits` claims onto issued access tokens. `ResolveClientAsync(clientId)`
+    stamps `biatec_idp`/`sign`/`manage-limits` claims onto issued access tokens. Also issues `email_verified` (JSON boolean `true`, in the ID token, access token, `/userinfo` and `/introspect`) **only** when the upstream provider itself attested the email - a Google sign-in whose ID token carried `email_verified: true` (`CreateAuthorizeResponseAsync`); never inferred, omitted (never `false`) for Entra (unverified `email`) and for a principal with no `biatec_idp` (fails closed). It is persisted as `EmailVerified` on the authorization-code/refresh records and carried unchanged through refresh rotation (reflects sign-in time; records written before the claim existed keep omitting it). `ResolveClientAsync(clientId)`
     checks statically-configured `JwtIssuer:Clients`
     first, falling back to `IDynamicClientStore` (Redis-backed, RFC 7591-registered clients) — every client
     lookup in this file and `JwtIssuerController` goes through it, so a static entry always takes precedence
