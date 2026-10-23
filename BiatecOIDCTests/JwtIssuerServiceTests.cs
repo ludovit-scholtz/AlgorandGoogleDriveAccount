@@ -1216,7 +1216,7 @@ namespace BiatecOIDCTests
         [Test]
         public async Task IdToken_GoogleAttestedEmail_ContainsEmailVerifiedTrueBoolean()
         {
-            var jwt = await IssueIdTokenAsync("Google", "true");
+            var jwt = await IssueIdTokenAsync(GoogleCloudStorageProvider.ProviderName, "true");
 
             var claim = jwt.Claims.Single(c => c.Type == "email_verified");
             Assert.That(claim.Value, Is.EqualTo("true"));
@@ -1230,7 +1230,7 @@ namespace BiatecOIDCTests
         [Test]
         public async Task IdToken_GoogleWithoutAttestation_OmitsEmailVerified()
         {
-            var jwt = await IssueIdTokenAsync("Google", null);
+            var jwt = await IssueIdTokenAsync(GoogleCloudStorageProvider.ProviderName, null);
 
             Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
         }
@@ -1238,7 +1238,7 @@ namespace BiatecOIDCTests
         [Test]
         public async Task IdToken_MicrosoftEvenWithForgedClaim_OmitsEmailVerified()
         {
-            var jwt = await IssueIdTokenAsync("Microsoft", "true");
+            var jwt = await IssueIdTokenAsync(MicrosoftCloudStorageProvider.ProviderName, "true");
 
             Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
         }
@@ -2504,14 +2504,14 @@ namespace BiatecOIDCTests
     [TestFixture]
     public class IntrospectAsyncTests : JwtIssuerServiceTestBase
     {
-        private async Task<string> IssueRealAccessTokenAsync()
+        private async Task<string> IssueRealAccessTokenAsync(bool emailVerified = false)
         {
             MockDriveService
                 .Setup(d => d.GetPrimarySeedAddressAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(TestAlgorandAddress);
 
             var code = "introspect-code";
-            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri);
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri, emailVerified: emailVerified);
             SetupCacheGet("oidc:code:" + code, codeJson);
 
             var tokenRequest = new OidcTokenRequest
@@ -2525,6 +2525,22 @@ namespace BiatecOIDCTests
 
             var result = await Service.ExchangeTokenAsync(tokenRequest, null);
             return result.Response!.AccessToken;
+        }
+
+        [Test]
+        public async Task AttestedEmail_ResponseContainsEmailVerifiedTrue()
+        {
+            var introspection = await Service.IntrospectAsync(await IssueRealAccessTokenAsync(emailVerified: true));
+
+            Assert.That(introspection["email_verified"], Is.EqualTo(true));
+        }
+
+        [Test]
+        public async Task UnattestedEmail_ResponseOmitsEmailVerified()
+        {
+            var introspection = await Service.IntrospectAsync(await IssueRealAccessTokenAsync());
+
+            Assert.That(introspection.ContainsKey("email_verified"), Is.False);
         }
 
         [Test]

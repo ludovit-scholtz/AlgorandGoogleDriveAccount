@@ -783,6 +783,13 @@ namespace BiatecOIDC.BusinessLogic
                 ["primary_seed_address"] = result.Claims.TryGetValue("primary_seed_address", out var address) ? address : string.Empty
             };
 
+            // Same rule as /userinfo: a boolean, present only when the provider attested the email.
+            if (result.Claims.TryGetValue("email_verified", out var emailVerifiedValue)
+                && string.Equals(emailVerifiedValue?.ToString(), "true", StringComparison.OrdinalIgnoreCase))
+            {
+                response["email_verified"] = true;
+            }
+
             return await Task.FromResult(response);
         }
 

@@ -240,7 +240,8 @@ for balance queries).
 ID token and access token contain these relevant claims:
 
 - `sub`: pairwise subject per client and email.
-- `email`: authenticated Google email.
+- `email`: authenticated email.
+- `email_verified`: `true` only when the provider attested the email (Google today) - omitted otherwise; see below. It reflects the state at interactive sign-in and is carried unchanged through refresh-token rotation.
 - `name` and `preferred_username`: shortened identity (first 4 + last 4 chars of the primary seed address).
 - `primary_seed_address`: the current primary seed's own identifying (Algorand slot-0) address — a *seed
   selector*, not a derived per-chain address. To get an actual signing address (Algorand or Ethereum-family)
