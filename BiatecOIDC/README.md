@@ -54,6 +54,7 @@ compatibility with a legacy `returnUrl` direct `id_token` flow.
 ## Claims in issued tokens
 
 - `email`
+- `email_verified` (`true` only when the provider attested the email - Google today; omitted for Microsoft Entra)
 - `primary_seed_address` (optional - omitted if the user never granted Google Drive access)
 - `preferred_username` and `name` set to the short identity derived from Algorand address (first 4 + last 4 chars)
 - standard claims such as `sub`, `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`

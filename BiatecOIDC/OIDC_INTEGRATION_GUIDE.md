@@ -296,7 +296,8 @@ for balance queries).
 ID token and access token contain these relevant claims:
 
 - `sub`: pairwise subject per client and email.
-- `email`: authenticated Google email.
+- `email`: authenticated email.
+- `email_verified`: `true` only when the provider attested the email (Google today) - omitted otherwise; see below. It reflects the state at interactive sign-in and is carried unchanged through refresh-token rotation.
 - `name` and `preferred_username`: shortened identity (first 4 + last 4 chars of the primary seed address).
 - `primary_seed_address`: the current primary seed's own identifying (Algorand slot-0) address — a *seed
   selector*, not a derived per-chain address. To get an actual signing address (Algorand or Ethereum-family)
@@ -323,6 +324,12 @@ Important behavior for Drive consent:
 - Tokens are still issued for `openid profile email` authentication.
 - `primary_seed_address` is optional and omitted when Drive access is unavailable.
 - Integrator apps should treat `primary_seed_address` as nullable and request incremental consent only when Drive-backed actions are needed.
+
+`email_verified` (ID token, access token and `/userinfo`; JSON boolean) is `true` **only** when the upstream identity provider itself
+attested the address — today that means a Google sign-in whose ID token carried `email_verified: true`. It is
+omitted (never `false`) for Microsoft Entra sign-ins, whose `email` claim is an unverified profile attribute,
+and for any session with no recorded provider. Treat an absent claim as "not verified".
+Refresh tokens issued before this claim existed keep omitting it until the user signs in interactively again.
 
 ## Scope handling
 

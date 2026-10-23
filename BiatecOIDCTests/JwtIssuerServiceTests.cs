@@ -148,7 +148,8 @@ namespace BiatecOIDCTests
             string? codeChallengeMethod = null,
             string? provider = null,
             string? protectedProviderAccessToken = null,
-            string? resource = null)
+            string? resource = null,
+            bool emailVerified = false)
         {
             var record = new
             {
@@ -165,6 +166,7 @@ namespace BiatecOIDCTests
                 codeChallenge,
                 codeChallengeMethod,
                 resource,
+                emailVerified,
                 protectedProviderAccessToken,
                 createdUtc = DateTimeOffset.UtcNow,
                 expiresUtc = expiresUtc ?? DateTimeOffset.UtcNow.AddSeconds(120)
@@ -182,11 +184,13 @@ namespace BiatecOIDCTests
             DateTimeOffset? expiresUtc = null,
             string? provider = null,
             string? protectedProviderAccessToken = null,
-            string? protectedProviderRefreshToken = null)
+            string? protectedProviderRefreshToken = null,
+            bool emailVerified = false)
         {
             var record = new
             {
                 refreshToken,
+                emailVerified,
                 clientId,
                 subject = "sub-value",
                 email,
@@ -1188,6 +1192,65 @@ namespace BiatecOIDCTests
             Assert.That(result.Response["id_token"], Is.Not.Empty);
         }
 
+        private async Task<JwtSecurityToken> IssueIdTokenAsync(string? provider, string? emailVerified)
+        {
+            var request = new OidcAuthorizeRequest
+            {
+                ClientId = TestClientId,
+                RedirectUri = TestRedirectUri,
+                ResponseType = "id_token",
+                Scope = "openid profile email",
+                Nonce = "test-nonce"
+            };
+            var claims = new List<Claim> { new(ClaimTypes.Email, TestEmail) };
+            if (provider != null) claims.Add(new Claim(BiatecSelfCustodyCore.Model.AuthSchemeNames.IdpClaimType, provider));
+            if (emailVerified != null) claims.Add(new Claim("email_verified", emailVerified));
+            var user = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
+
+            var result = await Service.CreateAuthorizeResponseAsync(request, DefaultConfig.Clients[0], user, providerAccessToken: null, providerRefreshToken: null);
+
+            Assert.That(result.Success, Is.True);
+            return new JwtSecurityTokenHandler().ReadJwtToken(result.Response!["id_token"]);
+        }
+
+        [Test]
+        public async Task IdToken_GoogleAttestedEmail_ContainsEmailVerifiedTrueBoolean()
+        {
+            var jwt = await IssueIdTokenAsync(GoogleCloudStorageProvider.ProviderName, "true");
+
+            var claim = jwt.Claims.Single(c => c.Type == "email_verified");
+            Assert.That(claim.Value, Is.EqualTo("true"));
+            Assert.That(claim.ValueType, Is.EqualTo(ClaimValueTypes.Boolean));
+
+            // Strict OIDC clients need a real JSON boolean, not the string "true".
+            using var payload = JsonDocument.Parse(Base64UrlEncoder.Decode(jwt.RawPayload));
+            Assert.That(payload.RootElement.GetProperty("email_verified").ValueKind, Is.EqualTo(JsonValueKind.True));
+        }
+
+        [Test]
+        public async Task IdToken_GoogleWithoutAttestation_OmitsEmailVerified()
+        {
+            var jwt = await IssueIdTokenAsync(GoogleCloudStorageProvider.ProviderName, null);
+
+            Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
+        [Test]
+        public async Task IdToken_MicrosoftEvenWithForgedClaim_OmitsEmailVerified()
+        {
+            var jwt = await IssueIdTokenAsync(MicrosoftCloudStorageProvider.ProviderName, "true");
+
+            Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
+        [Test]
+        public async Task IdToken_NoProviderRecorded_FailsClosed()
+        {
+            var jwt = await IssueIdTokenAsync(null, "true");
+
+            Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
         [Test]
         public async Task IdTokenFlow_TokenContainsPrimarySeedAddressClaim()
         {
@@ -1306,6 +1369,99 @@ namespace BiatecOIDCTests
             Assert.That(result.Response!.AccessToken, Is.Not.Empty);
             Assert.That(result.Response.IdToken, Is.Not.Empty);
             Assert.That(result.Response.RefreshToken, Is.Not.Empty);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_EmailVerifiedRecord_IdAndAccessTokensCarryIt()
+        {
+            var code = "verified-code";
+            SetupCacheGet("oidc:code:" + code, BuildCodeRecordJson(code, TestClientId, TestRedirectUri, provider: "Google", emailVerified: true));
+
+            var result = await Service.ExchangeTokenAsync(new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            }, null);
+
+            var handler = new JwtSecurityTokenHandler();
+            Assert.That(handler.ReadJwtToken(result.Response!.IdToken).Claims.Single(c => c.Type == "email_verified").Value, Is.EqualTo("true"));
+            Assert.That(handler.ReadJwtToken(result.Response.AccessToken).Claims.Single(c => c.Type == "email_verified").Value, Is.EqualTo("true"));
+        }
+
+        [Test]
+        public async Task RefreshTokenGrant_RecordPredatingTheClaim_OmitsEmailVerified()
+        {
+            var refreshToken = "refresh-legacy";
+            // BuildRefreshTokenRecordJson always writes the field; strip it to mimic a pre-deploy record.
+            var json = System.Text.Json.Nodes.JsonNode.Parse(BuildRefreshTokenRecordJson(refreshToken, TestClientId, provider: "Google", emailVerified: true))!.AsObject();
+            json.Remove("emailVerified");
+            SetupCacheGet("oidc:refresh:" + refreshToken, json.ToJsonString());
+
+            var result = await Service.ExchangeTokenAsync(new OidcTokenRequest
+            {
+                GrantType = "refresh_token",
+                RefreshToken = refreshToken,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            }, null);
+
+            Assert.That(result.Success, Is.True);
+            Assert.That(new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.IdToken).Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_UnverifiedRecord_OmitsEmailVerified()
+        {
+            var code = "unverified-code";
+            SetupCacheGet("oidc:code:" + code, BuildCodeRecordJson(code, TestClientId, TestRedirectUri, provider: "Microsoft"));
+
+            var result = await Service.ExchangeTokenAsync(new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            }, null);
+
+            Assert.That(new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.IdToken).Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
+        [Test]
+        public async Task RefreshTokenGrant_EmailVerifiedRecord_NewIdTokenKeepsItAndRotatedRecordPersistsIt()
+        {
+            var refreshToken = "refresh-verified";
+            SetupCacheGet("oidc:refresh:" + refreshToken, BuildRefreshTokenRecordJson(refreshToken, TestClientId, provider: "Google", emailVerified: true));
+
+            string? rotatedJson = null;
+            MockDatabase
+                .Setup(d => d.StringSetAsync(
+                    It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:refresh:")),
+                    It.IsAny<RedisValue>(),
+                    It.IsAny<TimeSpan?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<When>(),
+                    It.IsAny<CommandFlags>()))
+                .Callback<RedisKey, RedisValue, TimeSpan?, bool, When, CommandFlags>((_, value, _, _, _, _) => rotatedJson = value!)
+                .ReturnsAsync(true);
+
+            var result = await Service.ExchangeTokenAsync(new OidcTokenRequest
+            {
+                GrantType = "refresh_token",
+                RefreshToken = refreshToken,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            }, null);
+
+            Assert.That(new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.IdToken).Claims.Single(c => c.Type == "email_verified").Value, Is.EqualTo("true"));
+
+            // The rotated refresh record must carry it too, or the claim is lost on the next refresh.
+            Assert.That(rotatedJson, Is.Not.Null);
+            using var doc = JsonDocument.Parse(rotatedJson!);
+            Assert.That(doc.RootElement.GetProperty("emailVerified").GetBoolean(), Is.True);
         }
 
         [Test]
@@ -2348,14 +2504,14 @@ namespace BiatecOIDCTests
     [TestFixture]
     public class IntrospectAsyncTests : JwtIssuerServiceTestBase
     {
-        private async Task<string> IssueRealAccessTokenAsync()
+        private async Task<string> IssueRealAccessTokenAsync(bool emailVerified = false)
         {
             MockDriveService
                 .Setup(d => d.GetPrimarySeedAddressAsync(TestEmail, It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(TestAlgorandAddress);
 
             var code = "introspect-code";
-            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri);
+            var codeJson = BuildCodeRecordJson(code, TestClientId, TestRedirectUri, emailVerified: emailVerified);
             SetupCacheGet("oidc:code:" + code, codeJson);
 
             var tokenRequest = new OidcTokenRequest
@@ -2369,6 +2525,22 @@ namespace BiatecOIDCTests
 
             var result = await Service.ExchangeTokenAsync(tokenRequest, null);
             return result.Response!.AccessToken;
+        }
+
+        [Test]
+        public async Task AttestedEmail_ResponseContainsEmailVerifiedTrue()
+        {
+            var introspection = await Service.IntrospectAsync(await IssueRealAccessTokenAsync(emailVerified: true));
+
+            Assert.That(introspection["email_verified"], Is.EqualTo(true));
+        }
+
+        [Test]
+        public async Task UnattestedEmail_ResponseOmitsEmailVerified()
+        {
+            var introspection = await Service.IntrospectAsync(await IssueRealAccessTokenAsync());
+
+            Assert.That(introspection.ContainsKey("email_verified"), Is.False);
         }
 
         [Test]

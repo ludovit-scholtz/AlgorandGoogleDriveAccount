@@ -1275,8 +1275,9 @@ namespace BiatecOIDC.Controllers
         /// <c>Authorization</c> header.
         /// </summary>
         /// <returns>
-        /// <c>sub</c>, <c>email</c>, <c>name</c>, <c>preferred_username</c>, and <c>primary_seed_address</c>
-        /// (omitted if the user never granted Drive/OneDrive access). 401 if the token is
+        /// <c>sub</c>, <c>email</c>, <c>name</c>, <c>preferred_username</c>, <c>primary_seed_address</c>
+        /// (omitted if the user never granted Drive/OneDrive access), and <c>email_verified: true</c>
+        /// (omitted unless the upstream provider attested the email). 401 if the token is
         /// missing or invalid.
         /// </returns>
         [AllowAnonymous]
@@ -1302,14 +1303,22 @@ namespace BiatecOIDC.Controllers
             var name = principal.FindFirstValue(ClaimTypes.Name);
             var primarySeedAddress = principal.FindFirstValue("primary_seed_address");
 
-            return Ok(new
+            var response = new Dictionary<string, object?>
             {
-                sub,
-                email,
-                name,
-                preferred_username = principal.FindFirstValue("preferred_username"),
-                primary_seed_address = primarySeedAddress
-            });
+                ["sub"] = sub,
+                ["email"] = email,
+                ["name"] = name,
+                ["preferred_username"] = principal.FindFirstValue("preferred_username"),
+                ["primary_seed_address"] = primarySeedAddress
+            };
+
+            // JSON boolean, present only (never null/false) when the upstream provider attested the email.
+            if (string.Equals(principal.FindFirstValue("email_verified"), "true", StringComparison.OrdinalIgnoreCase))
+            {
+                response["email_verified"] = true;
+            }
+
+            return Ok(response);
         }
 
         /// <summary>
