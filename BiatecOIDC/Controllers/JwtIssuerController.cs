@@ -1308,7 +1308,9 @@ namespace BiatecOIDC.Controllers
                 email,
                 name,
                 preferred_username = principal.FindFirstValue("preferred_username"),
-                primary_seed_address = primarySeedAddress
+                primary_seed_address = primarySeedAddress,
+                // Boolean, present only when the upstream provider attested the email.
+                email_verified = principal.FindFirstValue("email_verified") == "true" ? (bool?)true : null
             });
         }
 

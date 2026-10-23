@@ -37,7 +37,7 @@ external integration doc — for implementation work, this file plus the source 
 
 ## Claims issued
 
-`email`, `primary_seed_address` (**optional** — omitted if the user denied Drive/OneDrive consent; treat as
+`email`, `email_verified` (ID token + access token/`/userinfo`; JSON boolean `true` **only** when the provider attested the email - Google today; omitted, never `false`, for Entra), `primary_seed_address` (**optional** — omitted if the user denied Drive/OneDrive consent; treat as
 optional, request storage scope only right before storage-backed operations; the current primary seed's own
 identifying address, resolved via `IDriveService.GetPrimarySeedAddressAsync` — no ARC-76 derivation, just
 whichever vault entry is `IsPrimary` — depending on the signed-in principal's `biatec_idp` claim, see

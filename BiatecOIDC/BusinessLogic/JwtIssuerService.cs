@@ -471,7 +471,8 @@ namespace BiatecOIDC.BusinessLogic
             // Only ever asserted true when the upstream identity provider itself said so. Never inferred
             // (e.g. from "the user signed in"), and never trusted from a provider that doesn't attest it:
             // Microsoft Entra's `email` claim is a mutable, unverified profile attribute.
-            var emailVerified = string.Equals(provider, GoogleCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase)
+            // An empty provider means a pre-provider-claim session, which the catalog resolves to Google too.
+            var emailVerified = (string.IsNullOrEmpty(provider) || string.Equals(provider, GoogleCloudStorageProvider.ProviderName, StringComparison.OrdinalIgnoreCase))
                 && string.Equals(user.FindFirst("email_verified")?.Value, "true", StringComparison.OrdinalIgnoreCase);
 
             if (string.Equals(request.ResponseType, "id_token", StringComparison.Ordinal))
@@ -860,9 +861,9 @@ namespace BiatecOIDC.BusinessLogic
             string? protectedProviderAccessToken,
             string? protectedProviderRefreshToken,
             bool includeRefreshToken,
-            bool emailVerified = false)
+            bool emailVerified)
         {
-            var accessToken = CreateAccessToken(subject, clientId, email, primarySeedAddress, provider, shortIdentity, scope, resource, protectedProviderAccessToken, protectedProviderRefreshToken);
+            var accessToken = CreateAccessToken(subject, clientId, email, primarySeedAddress, provider, shortIdentity, scope, resource, protectedProviderAccessToken, protectedProviderRefreshToken, emailVerified);
             var idToken = CreateIdToken(subject, clientId, email, primarySeedAddress, shortIdentity, nonce, emailVerified);
 
             string? refreshToken = null;
@@ -908,7 +909,7 @@ namespace BiatecOIDC.BusinessLogic
             };
         }
 
-        private string CreateIdToken(string subject, string audience, string email, string? primarySeedAddress, string shortIdentity, string? nonce, bool emailVerified = false)
+        private string CreateIdToken(string subject, string audience, string email, string? primarySeedAddress, string shortIdentity, string? nonce, bool emailVerified)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.IdTokenLifetimeMinutes);
@@ -970,7 +971,7 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         private static readonly string[] AlwaysGrantedScopes = { "openid", "profile", "email" };
 
-        private string CreateAccessToken(string subject, string clientId, string email, string? primarySeedAddress, string? provider, string shortIdentity, string scope, string? resource, string? protectedProviderAccessToken, string? protectedProviderRefreshToken)
+        private string CreateAccessToken(string subject, string clientId, string email, string? primarySeedAddress, string? provider, string shortIdentity, string scope, string? resource, string? protectedProviderAccessToken, string? protectedProviderRefreshToken, bool emailVerified)
         {
             var now = DateTimeOffset.UtcNow;
             var expires = now.AddMinutes(Current.AccessTokenLifetimeMinutes);
@@ -993,6 +994,12 @@ namespace BiatecOIDC.BusinessLogic
             if (!string.IsNullOrWhiteSpace(provider))
             {
                 claims.Add(new Claim(AuthSchemeNames.IdpClaimType, provider));
+            }
+
+            // Read back by /userinfo; see CreateIdToken.
+            if (emailVerified)
+            {
+                claims.Add(new Claim("email_verified", "true", ClaimValueTypes.Boolean));
             }
 
             var grantedScopes = scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

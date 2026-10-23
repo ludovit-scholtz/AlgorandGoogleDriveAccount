@@ -148,7 +148,8 @@ namespace BiatecOIDCTests
             string? codeChallengeMethod = null,
             string? provider = null,
             string? protectedProviderAccessToken = null,
-            string? resource = null)
+            string? resource = null,
+            bool emailVerified = false)
         {
             var record = new
             {
@@ -165,6 +166,7 @@ namespace BiatecOIDCTests
                 codeChallenge,
                 codeChallengeMethod,
                 resource,
+                emailVerified,
                 protectedProviderAccessToken,
                 createdUtc = DateTimeOffset.UtcNow,
                 expiresUtc = expiresUtc ?? DateTimeOffset.UtcNow.AddSeconds(120)
@@ -182,11 +184,13 @@ namespace BiatecOIDCTests
             DateTimeOffset? expiresUtc = null,
             string? provider = null,
             string? protectedProviderAccessToken = null,
-            string? protectedProviderRefreshToken = null)
+            string? protectedProviderRefreshToken = null,
+            bool emailVerified = false)
         {
             var record = new
             {
                 refreshToken,
+                emailVerified,
                 clientId,
                 subject = "sub-value",
                 email,
@@ -1217,6 +1221,10 @@ namespace BiatecOIDCTests
             var claim = jwt.Claims.Single(c => c.Type == "email_verified");
             Assert.That(claim.Value, Is.EqualTo("true"));
             Assert.That(claim.ValueType, Is.EqualTo(ClaimValueTypes.Boolean));
+
+            // Strict OIDC clients need a real JSON boolean, not the string "true".
+            using var payload = JsonDocument.Parse(Base64UrlEncoder.Decode(jwt.RawPayload));
+            Assert.That(payload.RootElement.GetProperty("email_verified").ValueKind, Is.EqualTo(JsonValueKind.True));
         }
 
         [Test]
@@ -1236,11 +1244,11 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task IdToken_NoProviderRecorded_OmitsEmailVerified()
+        public async Task IdToken_LegacySessionWithNoProvider_TreatedAsGoogle()
         {
             var jwt = await IssueIdTokenAsync(null, "true");
 
-            Assert.That(jwt.Claims.Any(c => c.Type == "email_verified"), Is.False);
+            Assert.That(jwt.Claims.Single(c => c.Type == "email_verified").Value, Is.EqualTo("true"));
         }
 
         [Test]
@@ -1361,6 +1369,78 @@ namespace BiatecOIDCTests
             Assert.That(result.Response!.AccessToken, Is.Not.Empty);
             Assert.That(result.Response.IdToken, Is.Not.Empty);
             Assert.That(result.Response.RefreshToken, Is.Not.Empty);
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_EmailVerifiedRecord_IdAndAccessTokensCarryIt()
+        {
+            var code = "verified-code";
+            SetupCacheGet("oidc:code:" + code, BuildCodeRecordJson(code, TestClientId, TestRedirectUri, provider: "Google", emailVerified: true));
+
+            var result = await Service.ExchangeTokenAsync(new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            }, null);
+
+            var handler = new JwtSecurityTokenHandler();
+            Assert.That(handler.ReadJwtToken(result.Response!.IdToken).Claims.Single(c => c.Type == "email_verified").Value, Is.EqualTo("true"));
+            Assert.That(handler.ReadJwtToken(result.Response.AccessToken).Claims.Single(c => c.Type == "email_verified").Value, Is.EqualTo("true"));
+        }
+
+        [Test]
+        public async Task AuthorizationCodeGrant_UnverifiedRecord_OmitsEmailVerified()
+        {
+            var code = "unverified-code";
+            SetupCacheGet("oidc:code:" + code, BuildCodeRecordJson(code, TestClientId, TestRedirectUri, provider: "Microsoft"));
+
+            var result = await Service.ExchangeTokenAsync(new OidcTokenRequest
+            {
+                GrantType = "authorization_code",
+                Code = code,
+                RedirectUri = TestRedirectUri,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            }, null);
+
+            Assert.That(new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.IdToken).Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
+        [Test]
+        public async Task RefreshTokenGrant_EmailVerifiedRecord_NewIdTokenKeepsItAndRotatedRecordPersistsIt()
+        {
+            var refreshToken = "refresh-verified";
+            SetupCacheGet("oidc:refresh:" + refreshToken, BuildRefreshTokenRecordJson(refreshToken, TestClientId, provider: "Google", emailVerified: true));
+
+            string? rotatedJson = null;
+            MockDatabase
+                .Setup(d => d.StringSetAsync(
+                    It.Is<RedisKey>(k => ((string)k!).StartsWith("oidc:refresh:")),
+                    It.IsAny<RedisValue>(),
+                    It.IsAny<TimeSpan?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<When>(),
+                    It.IsAny<CommandFlags>()))
+                .Callback<RedisKey, RedisValue, TimeSpan?, bool, When, CommandFlags>((_, value, _, _, _, _) => rotatedJson = value!)
+                .ReturnsAsync(true);
+
+            var result = await Service.ExchangeTokenAsync(new OidcTokenRequest
+            {
+                GrantType = "refresh_token",
+                RefreshToken = refreshToken,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            }, null);
+
+            Assert.That(new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.IdToken).Claims.Single(c => c.Type == "email_verified").Value, Is.EqualTo("true"));
+
+            // The rotated refresh record must carry it too, or the claim is lost on the next refresh.
+            Assert.That(rotatedJson, Is.Not.Null);
+            using var doc = JsonDocument.Parse(rotatedJson!);
+            Assert.That(doc.RootElement.GetProperty("emailVerified").GetBoolean(), Is.True);
         }
 
         [Test]
