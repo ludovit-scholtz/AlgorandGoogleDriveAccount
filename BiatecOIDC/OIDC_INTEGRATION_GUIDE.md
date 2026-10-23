@@ -268,10 +268,11 @@ Important behavior for Drive consent:
 - `primary_seed_address` is optional and omitted when Drive access is unavailable.
 - Integrator apps should treat `primary_seed_address` as nullable and request incremental consent only when Drive-backed actions are needed.
 
-`email_verified` (ID token only, JSON boolean) is `true` **only** when the upstream identity provider itself
+`email_verified` (ID token, access token and `/userinfo`; JSON boolean) is `true` **only** when the upstream identity provider itself
 attested the address — today that means a Google sign-in whose ID token carried `email_verified: true`. It is
 omitted (never `false`) for Microsoft Entra sign-ins, whose `email` claim is an unverified profile attribute,
-and for any session with no recorded provider. Treat an absent claim as "not verified".
+Sessions with no recorded provider predate multi-provider support and are treated as Google. Treat an absent claim as "not verified".
+Refresh tokens issued before this claim existed keep omitting it until the user signs in interactively again.
 
 ## Scope handling
 

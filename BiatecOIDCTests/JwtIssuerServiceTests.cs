@@ -1392,6 +1392,27 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task RefreshTokenGrant_RecordPredatingTheClaim_OmitsEmailVerified()
+        {
+            var refreshToken = "refresh-legacy";
+            // BuildRefreshTokenRecordJson always writes the field; strip it to mimic a pre-deploy record.
+            var json = System.Text.Json.Nodes.JsonNode.Parse(BuildRefreshTokenRecordJson(refreshToken, TestClientId, provider: "Google", emailVerified: true))!.AsObject();
+            json.Remove("emailVerified");
+            SetupCacheGet("oidc:refresh:" + refreshToken, json.ToJsonString());
+
+            var result = await Service.ExchangeTokenAsync(new OidcTokenRequest
+            {
+                GrantType = "refresh_token",
+                RefreshToken = refreshToken,
+                ClientId = TestClientId,
+                ClientSecret = TestClientSecret
+            }, null);
+
+            Assert.That(result.Success, Is.True);
+            Assert.That(new JwtSecurityTokenHandler().ReadJwtToken(result.Response!.IdToken).Claims.Any(c => c.Type == "email_verified"), Is.False);
+        }
+
+        [Test]
         public async Task AuthorizationCodeGrant_UnverifiedRecord_OmitsEmailVerified()
         {
             var code = "unverified-code";
