@@ -498,6 +498,15 @@ namespace BiatecOIDC
                 }
             });
 
+            // Popup pages keep window.opener unless this is on (see PopupOpenerPolicy; enable once the clients that
+            // open them no longer read popup.closed as a cancel).
+            var popupOpenerPolicy = app.Configuration.GetValue<bool>("Oidc:PopupOpenerPolicy:Enabled");
+            app.Use(async (context, next) =>
+            {
+                BiatecOIDC.Helper.PopupOpenerPolicy.Apply(context, popupOpenerPolicy);
+                await next();
+            });
+
             app.UseCors();
 
             app.UseAuthentication();

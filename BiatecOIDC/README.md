@@ -153,3 +153,7 @@ prompt for implementing this flow in destination projects, and
 
 - **Company**: Scholtz & Company, j.s.a. (Slovakia)
 - **License**: proprietary software owned by Scholtz & Company, j.s.a.
+
+## Popup pages and window.opener
+
+The authorization, provider picker, consent and logout pages are shown by clients in a popup. Set `Oidc__PopupOpenerPolicy__Enabled=true` to send `Cross-Origin-Opener-Policy: same-origin` on them, which stops those pages reaching the opening page through `window.opener`. It is off by default because the opener then reads `popup.closed === true` at once: enable it only when the clients no longer treat `popup.closed` as a cancel (the Biatec chat widget does not since T-235, scholtz/biatec-chat#395).
