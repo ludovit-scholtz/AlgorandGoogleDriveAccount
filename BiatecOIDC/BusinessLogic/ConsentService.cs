@@ -22,6 +22,14 @@ namespace BiatecOIDC.BusinessLogic
         /// <summary>Verifies and records a signed receipt posted by a device (approve, deny or code_failed).</summary>
         Task<ReceiptResult> SubmitReceiptAsync(DeviceRecord device, string authReqId, JsonElement receipt, string issuer);
 
+        /// <summary>
+        /// One poll of the CIBA token endpoint by the client that opened the request. A poll that comes before the announced interval
+        /// has passed answers <c>slow_down</c> and grows the interval by 5 seconds (RFC 8628 3.5, CIBA 11); a request that was denied,
+        /// or locked by three wrong codes, answers <c>access_denied</c>. The state is changed by compare-and-set, so concurrent polls
+        /// cannot both pass.
+        /// </summary>
+        Task<PollResult> PollAsync(string clientId, string authReqId);
+
         /// <summary>The stored receipt of a decided request, only to the user it belongs to or to its own confidential client.</summary>
         Task<(ReceiptLookup Lookup, string? ReceiptJson)> GetReceiptAsync(ReceiptCaller caller, string authReqId);
     }
@@ -36,6 +44,7 @@ namespace BiatecOIDC.BusinessLogic
         private const int MaxDisplayNameLength = 100;
         private const int MaxScopeLength = 200;
         private const int ConflictRetries = 5;
+        private const int SlowDownStepSeconds = 5;
 
         private readonly IConsentStore _store;
         private readonly IDeviceStore _devices;
@@ -292,6 +301,54 @@ namespace BiatecOIDC.BusinessLogic
             }
 
             return new ReceiptResult { Outcome = ReceiptOutcome.Conflict };
+        }
+
+        public async Task<PollResult> PollAsync(string clientId, string authReqId)
+        {
+            var interval = _config.PollIntervalSeconds;
+            for (var attempt = 0; attempt < ConflictRetries; attempt++)
+            {
+                var now = _time.GetUtcNow().ToUnixTimeSeconds();
+                var record = await _store.GetAsync(authReqId);
+                if (record is null || !string.Equals(record.ClientId, clientId, StringComparison.Ordinal))
+                {
+                    return new PollResult { Outcome = PollOutcome.InvalidGrant };
+                }
+
+                switch (record.Status)
+                {
+                    case ConsentStatus.Approved:
+                        return new PollResult { Outcome = PollOutcome.Approved, Interval = record.Interval, Request = record };
+                    case ConsentStatus.Denied:
+                    case ConsentStatus.CodeFailed:
+                    case ConsentStatus.CodeLocked: // three wrong codes: denied for the client even before the signed code_failed arrives
+                        return new PollResult { Outcome = PollOutcome.AccessDenied, Interval = record.Interval };
+                }
+                if (record.Expiry <= now)
+                {
+                    return new PollResult { Outcome = PollOutcome.Expired, Interval = record.Interval };
+                }
+
+                var tooFast = now < record.NextPollAt;
+                var updated = Clone(record);
+                if (tooFast)
+                {
+                    updated.Interval = record.Interval + SlowDownStepSeconds;
+                }
+                updated.NextPollAt = now + updated.Interval;
+                if (await _store.TryUpdateAsync(record, updated))
+                {
+                    if (tooFast)
+                    {
+                        _logger.LogInformation("consent_slow_down auth_req_id={AuthReqId} interval={Interval}", authReqId, updated.Interval);
+                    }
+                    return new PollResult { Outcome = tooFast ? PollOutcome.SlowDown : PollOutcome.Pending, Interval = updated.Interval };
+                }
+                interval = record.Interval;
+            }
+
+            // The request kept changing underneath us (other polls): answer as for a slow client without recording anything.
+            return new PollResult { Outcome = PollOutcome.SlowDown, Interval = interval + SlowDownStepSeconds };
         }
 
         public async Task<(ReceiptLookup Lookup, string? ReceiptJson)> GetReceiptAsync(ReceiptCaller caller, string authReqId)
