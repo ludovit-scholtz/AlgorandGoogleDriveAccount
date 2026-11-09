@@ -157,3 +157,9 @@ prompt for implementing this flow in destination projects, and
 ## Popup pages and window.opener
 
 The authorization, provider picker, consent and logout pages are shown by clients in a popup. Set `Oidc__PopupOpenerPolicy__Enabled=true` to send `Cross-Origin-Opener-Policy: same-origin` on them, which stops those pages reaching the opening page through `window.opener`. It is off by default because the opener then reads `popup.closed === true` at once: enable it only when the clients no longer treat `popup.closed` as a cancel (the Biatec chat widget does not since T-235, scholtz/biatec-chat#395).
+
+## Device API (Biatec Authenticator)
+
+- `POST /devices` (user bearer): enrolls a device (`kid`, P-256 `public_key` JWK, optional `push`, `name`); answers 201 with the `device_token` (shown once, only its hash is stored) and `active_at` (`Devices:ActivationSeconds`, default 24 h). No platform attestation is verified yet; devices are enrolled unattested.
+- `PUT /devices/push` (`Authorization: Device <token>`): registers where the device notifications go; at most `Devices:PushRegistrationsPerMinute` (6) a minute per device, 429 beyond. A push token belongs to one device.
+- **Proof of possession (scholtz/biatec-chat#283):** every device call must also carry `X-Device-Proof`, a DPoP-style (RFC 9449) JWS (`alg` ES256, `typ` `biatec-device-proof+jwt`, `kid`; claims `htm`, `htu`, `iat`, `jti`, `ath`) signed with the enrolled device key. The server checks the signature, method, URL, `ath` (SHA-256 of the device token), `iat` within `Devices:ProofSkewSeconds` (60) and remembers each `jti` for twice that window. A refusal is `401` with `WWW-Authenticate: Device error="invalid_proof"` (`invalid_token` for an unknown token). The bearer alone is never accepted.
