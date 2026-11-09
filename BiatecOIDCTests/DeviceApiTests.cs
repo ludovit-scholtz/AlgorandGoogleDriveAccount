@@ -184,6 +184,23 @@ namespace BiatecOIDCTests
             Assert.That(many, Is.TypeOf<ConflictObjectResult>());
         }
 
+        [Test]
+        public async Task Enroll_ReturnsAnAttestation_OnlyWhenAKeyIsConfigured()
+        {
+            using var signing = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            using var svc = new ConsentAttestationService(Options.Create(new ConsentConfiguration { AttestationSigningKeyPem = signing.ExportPkcs8PrivateKeyPem() }));
+            var c = new DevicesController(_store, _jwt.Object, Options.Create(new DevicesConfiguration()), _time, svc);
+            var http = new DefaultHttpContext();
+            http.Request.Headers.Authorization = "Bearer user-token";
+            c.ControllerContext = new ControllerContext { HttpContext = http };
+            var r = (ObjectResult)await c.Enroll(new EnrollDeviceRequest { Kid = "device-0001", PublicKey = Jwk() });
+            var attestation = ((EnrollDeviceResponse)r.Value!).Attestation;
+            Assert.That(attestation, Is.Not.Null.And.Matches(@"^[\w-]+\.[\w-]+\.[\w-]+$"));
+
+            await Enroll("device-0002");
+            Assert.That(_store.Devices.ContainsKey("device-0002"));
+        }
+
         // ---- the proof ----
 
         private static (int? Status, string? Challenge) Outcome(IActionResult r, DevicesController c)

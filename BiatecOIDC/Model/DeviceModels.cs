@@ -52,6 +52,8 @@ namespace BiatecOIDC.Model
         [JsonPropertyName("active")] public bool Active { get; set; }
         [JsonPropertyName("active_at")] public long ActiveAt { get; set; }
         [JsonPropertyName("device_token")] public string DeviceToken { get; set; } = "";
+        /// <summary>Compact ES256 JWS the device sends back in every receipt; absent when no attestation key is configured.</summary>
+        [JsonPropertyName("attestation"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Attestation { get; set; }
     }
 
     /// <summary>Settings of the device API (section <c>Devices</c>).</summary>
