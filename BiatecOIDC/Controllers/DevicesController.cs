@@ -30,9 +30,12 @@ namespace BiatecOIDC.Controllers
         private readonly IJwtIssuerService _jwt;
         private readonly DevicesConfiguration _config;
         private readonly TimeProvider _time;
+        private readonly IConsentAttestationService? _attestation;
 
-        public DevicesController(IDeviceStore store, IJwtIssuerService jwt, IOptions<DevicesConfiguration> config, TimeProvider time)
+        public DevicesController(IDeviceStore store, IJwtIssuerService jwt, IOptions<DevicesConfiguration> config, TimeProvider time,
+            IConsentAttestationService? attestation = null)
         {
+            _attestation = attestation;
             _store = store;
             _jwt = jwt;
             _config = config.Value;
@@ -102,6 +105,7 @@ namespace BiatecOIDC.Controllers
                 Active = device.ActiveAt <= now,
                 ActiveAt = device.ActiveAt,
                 DeviceToken = deviceToken,
+                Attestation = _attestation?.Issue(_jwt.GetIssuer(Request), sub, device.Kid, device.KeyX, device.KeyY, _time.GetUtcNow()),
             });
         }
 

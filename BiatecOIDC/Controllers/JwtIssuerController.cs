@@ -38,6 +38,7 @@ namespace BiatecOIDC.Controllers
         private static readonly TimeSpan AuthorizeAttemptWindow = TimeSpan.FromSeconds(10);
 
         private readonly IJwtIssuerService _jwtIssuerService;
+        private readonly IConsentAttestationService? _consentAttestation;
         private readonly IDistributedCache _cache;
         private readonly ICloudStorageProviderCatalog _providerCatalog;
         private readonly ICloudAccountRepository _accountRepository;
@@ -48,8 +49,10 @@ namespace BiatecOIDC.Controllers
             IDistributedCache cache,
             ICloudStorageProviderCatalog providerCatalog,
             ICloudAccountRepository accountRepository,
-            IOptionsMonitor<MockCloudServiceConfiguration> mockConfig)
+            IOptionsMonitor<MockCloudServiceConfiguration> mockConfig,
+            IConsentAttestationService? consentAttestation = null)
         {
+            _consentAttestation = consentAttestation;
             _jwtIssuerService = jwtIssuerService;
             _cache = cache;
             _providerCatalog = providerCatalog;
@@ -95,7 +98,16 @@ namespace BiatecOIDC.Controllers
         [HttpGet(".well-known/jwks.json")]
         public IActionResult Jwks()
         {
-            return Ok(_jwtIssuerService.GetJsonWebKeySet());
+            var set = _jwtIssuerService.GetJsonWebKeySet();
+            // The consent attestation key (EC P-256) is published next to the token signing key so receipts verify offline.
+            var attestationKey = _consentAttestation?.GetPublicJwk();
+            if (attestationKey is null)
+            {
+                return Ok(set);
+            }
+            var node = System.Text.Json.JsonSerializer.SerializeToNode(set)!.AsObject();
+            node["keys"]!.AsArray().Add(attestationKey);
+            return Ok(node);
         }
 
         /// <summary>

@@ -1,0 +1,509 @@
+{
+  "_comment": "Signed receipt vectors. Verify with jwks.json. Regenerate with scripts/generate-vectors.mjs.",
+  "vectors": [
+    {
+      "name": "stepup-transaction-approve",
+      "description": "Biatec Chat step-up receipt; binding_message is the empty string.",
+      "request": {
+        "auth_req_id": "ciba_8257c10231dd9b46e2f877484cf0b2a3",
+        "entry": "step-up",
+        "authorization_details": [
+          {
+            "type": "biatec_transaction",
+            "network": "algorand-mainnet",
+            "group_hash": "BJPMYYUBSMQWYXMEBZT2ZHFZTWCIJAFAIMUZEGOJZKJPRBKU5KNA",
+            "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+            "receiver": "WSNJGAWN52IJMHAEFZIOPCS3IXSHS4C46QDNSKWDEWQ3E6M4HUNLYTHJXE",
+            "asset": {
+              "id": "31566704",
+              "symbol": "USDC",
+              "decimals": 6
+            },
+            "amount": "5000.000000",
+            "fiat_value": {
+              "amount": "4612.50",
+              "currency": "EUR"
+            }
+          }
+        ],
+        "client": {
+          "entity_id": "https://chat.biatec.io",
+          "verified": true,
+          "display_name": "Biatec Chat",
+          "domain": "chat.biatec.io"
+        },
+        "binding_message": "",
+        "requested_expiry": 300,
+        "expiry": 1792425900,
+        "bound_hash": "BJPMYYUBSMQWYXMEBZT2ZHFZTWCIJAFAIMUZEGOJZKJPRBKU5KNA",
+        "origin": "https://app.biatec.io",
+        "sub": "pw_7c1f0a52e9b34d68"
+      },
+      "receipt": {
+        "version": "1",
+        "signed": {
+          "authorization_details": [
+            {
+              "type": "biatec_transaction",
+              "network": "algorand-mainnet",
+              "group_hash": "BJPMYYUBSMQWYXMEBZT2ZHFZTWCIJAFAIMUZEGOJZKJPRBKU5KNA",
+              "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+              "receiver": "WSNJGAWN52IJMHAEFZIOPCS3IXSHS4C46QDNSKWDEWQ3E6M4HUNLYTHJXE",
+              "asset": {
+                "id": "31566704",
+                "symbol": "USDC",
+                "decimals": 6
+              },
+              "amount": "5000.000000",
+              "fiat_value": {
+                "amount": "4612.50",
+                "currency": "EUR"
+              }
+            }
+          ],
+          "auth_req_id": "ciba_8257c10231dd9b46e2f877484cf0b2a3",
+          "client_entity_id": "https://chat.biatec.io",
+          "binding_code": "483920",
+          "decision": "approve",
+          "expiry": 1792425900,
+          "sub": "pw_7c1f0a52e9b34d68",
+          "binding_message": ""
+        },
+        "alg": "ES256",
+        "signature": "__O_nfXakRDrzsjDH4xuEiUC5qozyvwYvQ_64EQKZO74mIOdljt8FolnFAjVRquGVNN7W2nhkIVjAsHMv0pJyQ",
+        "issued_at": 1792425620,
+        "device": {
+          "kid": "device-test-key-1",
+          "public_key": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "WaGrIVu9nxelqZVnkH9zHbfccq7AbouCYjVdXMfTSvo",
+            "y": "S45Nc7iger4-AGl6Civy_9FCLltVZQDXhXN3p7zGez0"
+          },
+          "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Im9pZGMtdGVzdC1rZXktMSIsInR5cCI6ImJpYXRlYy1kZXZpY2UtYXR0ZXN0YXRpb24rand0In0.eyJpc3MiOiJodHRwczovL29pZGMuYmlhdGVjLnRlc3QiLCJzdWIiOiJwd183YzFmMGE1MmU5YjM0ZDY4IiwiZGV2aWNlX2tpZCI6ImRldmljZS10ZXN0LWtleS0xIiwiZGV2aWNlX2p3a190aHVtYnByaW50IjoiNGxPM2U3S2JQdVpzQzZnQU85MjBSVFhXRThpa3FQM3NidHdnSkZvM1lBMCIsImlhdCI6MTc5MjE2NjQwMCwiZXhwIjoxODIzOTYxNjAwfQ.7XgHDUznYGjvCMUvom5EcsaC42nUY2js6GtdbTG0FUXtTszWSMhBREoa3rw6VnO720a2RvataFGPNQW-sGGCoQ"
+        }
+      },
+      "canonical": "{\"auth_req_id\":\"ciba_8257c10231dd9b46e2f877484cf0b2a3\",\"authorization_details\":[{\"amount\":\"5000.000000\",\"asset\":{\"decimals\":6,\"id\":\"31566704\",\"symbol\":\"USDC\"},\"fiat_value\":{\"amount\":\"4612.50\",\"currency\":\"EUR\"},\"group_hash\":\"BJPMYYUBSMQWYXMEBZT2ZHFZTWCIJAFAIMUZEGOJZKJPRBKU5KNA\",\"network\":\"algorand-mainnet\",\"receiver\":\"WSNJGAWN52IJMHAEFZIOPCS3IXSHS4C46QDNSKWDEWQ3E6M4HUNLYTHJXE\",\"sender\":\"YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE\",\"type\":\"biatec_transaction\"}],\"binding_code\":\"483920\",\"binding_message\":\"\",\"client_entity_id\":\"https://chat.biatec.io\",\"decision\":\"approve\",\"expiry\":1792425900,\"sub\":\"pw_7c1f0a52e9b34d68\"}",
+      "canonical_sha256": "2487fca133ced403dccd1e23076dedb5577ea4c803daaa75f03cba0526e5ce18"
+    },
+    {
+      "name": "direct-transaction-approve-verified",
+      "description": "Direct entry of a trust-anchored client; the client text is rendered and signed.",
+      "request": {
+        "auth_req_id": "ciba_4ca2b87005a74cf568307ada20aa7300",
+        "entry": "direct",
+        "authorization_details": [
+          {
+            "type": "biatec_transaction",
+            "network": "algorand-mainnet",
+            "group_hash": "23B3EFAFKNM6M25AY45DFMNLS5X5KMC7SDMSJHPOG74KUBNQIGEA",
+            "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+            "receiver": "4E4JPC4YKK3NBXFGZRL77BC76VWPIX7JKOZYCDTULY23AVLVGQPVVEKFDQ",
+            "asset": {
+              "id": "31566704",
+              "symbol": "USDC",
+              "decimals": 6
+            },
+            "amount": "5000.000000",
+            "fiat_value": {
+              "amount": "4612.50",
+              "currency": "EUR"
+            }
+          }
+        ],
+        "client": {
+          "entity_id": "https://bank.example",
+          "verified": true,
+          "display_name": "Example Bank",
+          "domain": "bank.example"
+        },
+        "binding_message": "Invoice 2026-0042",
+        "requested_expiry": 300,
+        "expiry": 1792425900,
+        "bound_hash": "23B3EFAFKNM6M25AY45DFMNLS5X5KMC7SDMSJHPOG74KUBNQIGEA",
+        "origin": "https://app.biatec.io",
+        "sub": "pw_7c1f0a52e9b34d68"
+      },
+      "receipt": {
+        "version": "1",
+        "signed": {
+          "authorization_details": [
+            {
+              "type": "biatec_transaction",
+              "network": "algorand-mainnet",
+              "group_hash": "23B3EFAFKNM6M25AY45DFMNLS5X5KMC7SDMSJHPOG74KUBNQIGEA",
+              "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+              "receiver": "4E4JPC4YKK3NBXFGZRL77BC76VWPIX7JKOZYCDTULY23AVLVGQPVVEKFDQ",
+              "asset": {
+                "id": "31566704",
+                "symbol": "USDC",
+                "decimals": 6
+              },
+              "amount": "5000.000000",
+              "fiat_value": {
+                "amount": "4612.50",
+                "currency": "EUR"
+              }
+            }
+          ],
+          "auth_req_id": "ciba_4ca2b87005a74cf568307ada20aa7300",
+          "client_entity_id": "https://bank.example",
+          "binding_code": "120934",
+          "decision": "approve",
+          "expiry": 1792425900,
+          "sub": "pw_7c1f0a52e9b34d68",
+          "binding_message": "Invoice 2026-0042"
+        },
+        "alg": "ES256",
+        "signature": "TIDGJQXQrRFDwAZ8djNculHd3-dovkvkZ7I8mYL2sd_ZqShZkyas7AB6dRihktZGR75RGa1LhbQ-cx2aor1ctQ",
+        "issued_at": 1792425621,
+        "device": {
+          "kid": "device-test-key-1",
+          "public_key": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "WaGrIVu9nxelqZVnkH9zHbfccq7AbouCYjVdXMfTSvo",
+            "y": "S45Nc7iger4-AGl6Civy_9FCLltVZQDXhXN3p7zGez0"
+          },
+          "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Im9pZGMtdGVzdC1rZXktMSIsInR5cCI6ImJpYXRlYy1kZXZpY2UtYXR0ZXN0YXRpb24rand0In0.eyJpc3MiOiJodHRwczovL29pZGMuYmlhdGVjLnRlc3QiLCJzdWIiOiJwd183YzFmMGE1MmU5YjM0ZDY4IiwiZGV2aWNlX2tpZCI6ImRldmljZS10ZXN0LWtleS0xIiwiZGV2aWNlX2p3a190aHVtYnByaW50IjoiNGxPM2U3S2JQdVpzQzZnQU85MjBSVFhXRThpa3FQM3NidHdnSkZvM1lBMCIsImlhdCI6MTc5MjE2NjQwMCwiZXhwIjoxODIzOTYxNjAwfQ.7XgHDUznYGjvCMUvom5EcsaC42nUY2js6GtdbTG0FUXtTszWSMhBREoa3rw6VnO720a2RvataFGPNQW-sGGCoQ"
+        }
+      },
+      "canonical": "{\"auth_req_id\":\"ciba_4ca2b87005a74cf568307ada20aa7300\",\"authorization_details\":[{\"amount\":\"5000.000000\",\"asset\":{\"decimals\":6,\"id\":\"31566704\",\"symbol\":\"USDC\"},\"fiat_value\":{\"amount\":\"4612.50\",\"currency\":\"EUR\"},\"group_hash\":\"23B3EFAFKNM6M25AY45DFMNLS5X5KMC7SDMSJHPOG74KUBNQIGEA\",\"network\":\"algorand-mainnet\",\"receiver\":\"4E4JPC4YKK3NBXFGZRL77BC76VWPIX7JKOZYCDTULY23AVLVGQPVVEKFDQ\",\"sender\":\"YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE\",\"type\":\"biatec_transaction\"}],\"binding_code\":\"120934\",\"binding_message\":\"Invoice 2026-0042\",\"client_entity_id\":\"https://bank.example\",\"decision\":\"approve\",\"expiry\":1792425900,\"sub\":\"pw_7c1f0a52e9b34d68\"}",
+      "canonical_sha256": "9736301ecc14def04bcbb781912d4a7746e94fd17e2cee60fc413974e17e3957"
+    },
+    {
+      "name": "direct-transaction-approve-unverified",
+      "description": "Unverified client: the raw text is never rendered, so the signed binding_message is empty.",
+      "request": {
+        "auth_req_id": "ciba_9944144d6a28b9d2f30d17991039ced8",
+        "entry": "direct",
+        "authorization_details": [
+          {
+            "type": "biatec_transaction",
+            "network": "algorand-mainnet",
+            "group_hash": "3SOEPQ4XFO5HQO4WUMWN2RDYZEUJIB4STIAVYDF5HFIJMY356Y6A",
+            "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+            "receiver": "NSF4KM4M7GVFIL65BCJEGIY4J2HFA3QEZDTPVGWU2J52OF7QZJNUE7SOYE",
+            "asset": {
+              "id": "31566704",
+              "symbol": "USDC",
+              "decimals": 6
+            },
+            "amount": "5000.000000",
+            "fiat_value": {
+              "amount": "4612.50",
+              "currency": "EUR"
+            }
+          }
+        ],
+        "client": {
+          "entity_id": "client-3f9a1c",
+          "verified": false,
+          "fingerprint": "3F9A-1C77"
+        },
+        "binding_message": "",
+        "requested_expiry": 300,
+        "expiry": 1792425900,
+        "bound_hash": "3SOEPQ4XFO5HQO4WUMWN2RDYZEUJIB4STIAVYDF5HFIJMY356Y6A",
+        "origin": "https://app.biatec.io",
+        "sub": "pw_7c1f0a52e9b34d68"
+      },
+      "receipt": {
+        "version": "1",
+        "signed": {
+          "authorization_details": [
+            {
+              "type": "biatec_transaction",
+              "network": "algorand-mainnet",
+              "group_hash": "3SOEPQ4XFO5HQO4WUMWN2RDYZEUJIB4STIAVYDF5HFIJMY356Y6A",
+              "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+              "receiver": "NSF4KM4M7GVFIL65BCJEGIY4J2HFA3QEZDTPVGWU2J52OF7QZJNUE7SOYE",
+              "asset": {
+                "id": "31566704",
+                "symbol": "USDC",
+                "decimals": 6
+              },
+              "amount": "5000.000000",
+              "fiat_value": {
+                "amount": "4612.50",
+                "currency": "EUR"
+              }
+            }
+          ],
+          "auth_req_id": "ciba_9944144d6a28b9d2f30d17991039ced8",
+          "client_entity_id": "client-3f9a1c",
+          "binding_code": "775201",
+          "decision": "approve",
+          "expiry": 1792425900,
+          "sub": "pw_7c1f0a52e9b34d68",
+          "binding_message": ""
+        },
+        "alg": "ES256",
+        "signature": "TUcpdTZYu58pJWL_LWrbHGI7YwqXk534P4snqowAsLilJbO-TdUDQu-awAUHKZ8_rYjSYpPO0iQ9d-ZUkBXzog",
+        "issued_at": 1792425622,
+        "device": {
+          "kid": "device-test-key-1",
+          "public_key": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "WaGrIVu9nxelqZVnkH9zHbfccq7AbouCYjVdXMfTSvo",
+            "y": "S45Nc7iger4-AGl6Civy_9FCLltVZQDXhXN3p7zGez0"
+          },
+          "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Im9pZGMtdGVzdC1rZXktMSIsInR5cCI6ImJpYXRlYy1kZXZpY2UtYXR0ZXN0YXRpb24rand0In0.eyJpc3MiOiJodHRwczovL29pZGMuYmlhdGVjLnRlc3QiLCJzdWIiOiJwd183YzFmMGE1MmU5YjM0ZDY4IiwiZGV2aWNlX2tpZCI6ImRldmljZS10ZXN0LWtleS0xIiwiZGV2aWNlX2p3a190aHVtYnByaW50IjoiNGxPM2U3S2JQdVpzQzZnQU85MjBSVFhXRThpa3FQM3NidHdnSkZvM1lBMCIsImlhdCI6MTc5MjE2NjQwMCwiZXhwIjoxODIzOTYxNjAwfQ.7XgHDUznYGjvCMUvom5EcsaC42nUY2js6GtdbTG0FUXtTszWSMhBREoa3rw6VnO720a2RvataFGPNQW-sGGCoQ"
+        }
+      },
+      "canonical": "{\"auth_req_id\":\"ciba_9944144d6a28b9d2f30d17991039ced8\",\"authorization_details\":[{\"amount\":\"5000.000000\",\"asset\":{\"decimals\":6,\"id\":\"31566704\",\"symbol\":\"USDC\"},\"fiat_value\":{\"amount\":\"4612.50\",\"currency\":\"EUR\"},\"group_hash\":\"3SOEPQ4XFO5HQO4WUMWN2RDYZEUJIB4STIAVYDF5HFIJMY356Y6A\",\"network\":\"algorand-mainnet\",\"receiver\":\"NSF4KM4M7GVFIL65BCJEGIY4J2HFA3QEZDTPVGWU2J52OF7QZJNUE7SOYE\",\"sender\":\"YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE\",\"type\":\"biatec_transaction\"}],\"binding_code\":\"775201\",\"binding_message\":\"\",\"client_entity_id\":\"client-3f9a1c\",\"decision\":\"approve\",\"expiry\":1792425900,\"sub\":\"pw_7c1f0a52e9b34d68\"}",
+      "canonical_sha256": "092b59cfc409444140de41854dd4b6736029580ec2b19e510d54113ea6ea87e2",
+      "unsigned_client_binding_message": "Example Bank refund"
+    },
+    {
+      "name": "stepup-limits-change-approve",
+      "description": "biatec_limits_change; request_hash is SHA-256 of JCS(limitsRequestBody).",
+      "request": {
+        "auth_req_id": "ciba_4fbfcfaa9d401aff6e014a99e9142e2a",
+        "entry": "step-up",
+        "authorization_details": [
+          {
+            "type": "biatec_limits_change",
+            "current_limits": {
+              "per_transaction_eur": "1000",
+              "per_day_eur": "3000"
+            },
+            "requested_limits": {
+              "per_transaction_eur": "2000",
+              "per_day_eur": "5000"
+            },
+            "request_hash": "22091d0dfc4ee5068e79431862533b695bb5f70ec0f4a6ccb01b870541deaf90"
+          }
+        ],
+        "client": {
+          "entity_id": "https://chat.biatec.io",
+          "verified": true,
+          "display_name": "Biatec Chat",
+          "domain": "chat.biatec.io"
+        },
+        "binding_message": "",
+        "requested_expiry": 300,
+        "expiry": 1792425900,
+        "bound_hash": "22091d0dfc4ee5068e79431862533b695bb5f70ec0f4a6ccb01b870541deaf90",
+        "origin": "https://app.biatec.io",
+        "sub": "pw_7c1f0a52e9b34d68"
+      },
+      "receipt": {
+        "version": "1",
+        "signed": {
+          "authorization_details": [
+            {
+              "type": "biatec_limits_change",
+              "current_limits": {
+                "per_transaction_eur": "1000",
+                "per_day_eur": "3000"
+              },
+              "requested_limits": {
+                "per_transaction_eur": "2000",
+                "per_day_eur": "5000"
+              },
+              "request_hash": "22091d0dfc4ee5068e79431862533b695bb5f70ec0f4a6ccb01b870541deaf90"
+            }
+          ],
+          "auth_req_id": "ciba_4fbfcfaa9d401aff6e014a99e9142e2a",
+          "client_entity_id": "https://chat.biatec.io",
+          "binding_code": "905512",
+          "decision": "approve",
+          "expiry": 1792425900,
+          "sub": "pw_7c1f0a52e9b34d68",
+          "binding_message": ""
+        },
+        "alg": "ES256",
+        "signature": "agIy6ym2k0ZStpvulENL1BDbPJqPD5pb08_ezse97eX5yHRMGZPJmzqamEeQi9RwWIdsf3bIXtG8Xo8VKnG3EQ",
+        "issued_at": 1792425623,
+        "device": {
+          "kid": "device-test-key-1",
+          "public_key": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "WaGrIVu9nxelqZVnkH9zHbfccq7AbouCYjVdXMfTSvo",
+            "y": "S45Nc7iger4-AGl6Civy_9FCLltVZQDXhXN3p7zGez0"
+          },
+          "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Im9pZGMtdGVzdC1rZXktMSIsInR5cCI6ImJpYXRlYy1kZXZpY2UtYXR0ZXN0YXRpb24rand0In0.eyJpc3MiOiJodHRwczovL29pZGMuYmlhdGVjLnRlc3QiLCJzdWIiOiJwd183YzFmMGE1MmU5YjM0ZDY4IiwiZGV2aWNlX2tpZCI6ImRldmljZS10ZXN0LWtleS0xIiwiZGV2aWNlX2p3a190aHVtYnByaW50IjoiNGxPM2U3S2JQdVpzQzZnQU85MjBSVFhXRThpa3FQM3NidHdnSkZvM1lBMCIsImlhdCI6MTc5MjE2NjQwMCwiZXhwIjoxODIzOTYxNjAwfQ.7XgHDUznYGjvCMUvom5EcsaC42nUY2js6GtdbTG0FUXtTszWSMhBREoa3rw6VnO720a2RvataFGPNQW-sGGCoQ"
+        }
+      },
+      "canonical": "{\"auth_req_id\":\"ciba_4fbfcfaa9d401aff6e014a99e9142e2a\",\"authorization_details\":[{\"current_limits\":{\"per_day_eur\":\"3000\",\"per_transaction_eur\":\"1000\"},\"request_hash\":\"22091d0dfc4ee5068e79431862533b695bb5f70ec0f4a6ccb01b870541deaf90\",\"requested_limits\":{\"per_day_eur\":\"5000\",\"per_transaction_eur\":\"2000\"},\"type\":\"biatec_limits_change\"}],\"binding_code\":\"905512\",\"binding_message\":\"\",\"client_entity_id\":\"https://chat.biatec.io\",\"decision\":\"approve\",\"expiry\":1792425900,\"sub\":\"pw_7c1f0a52e9b34d68\"}",
+      "canonical_sha256": "9ba0f536e39924e30439274e9cfac52e3e50936c065afd8235d3ce5b309622f4",
+      "limits_request_body": {
+        "per_day_eur": "5000",
+        "per_transaction_eur": "2000"
+      }
+    },
+    {
+      "name": "direct-transaction-deny",
+      "description": "Explicit Deny before any code was typed.",
+      "request": {
+        "auth_req_id": "ciba_4274be16f641fc76bc418e1803e3f2c2",
+        "entry": "direct",
+        "authorization_details": [
+          {
+            "type": "biatec_transaction",
+            "network": "algorand-mainnet",
+            "group_hash": "WRWOBA3Y7ZSUXIXAATHUDWOV4TLZ2HNOAVOU45WLFPT457QV546A",
+            "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+            "receiver": "2RHTIWFMARFVAR76UAYQYOGZNYO4IVKKLKR7B5K43GHFPCUTRYCPIGM5NI",
+            "asset": {
+              "id": "31566704",
+              "symbol": "USDC",
+              "decimals": 6
+            },
+            "amount": "5000.000000",
+            "fiat_value": {
+              "amount": "4612.50",
+              "currency": "EUR"
+            }
+          }
+        ],
+        "client": {
+          "entity_id": "https://bank.example",
+          "verified": true,
+          "display_name": "Example Bank",
+          "domain": "bank.example"
+        },
+        "binding_message": "Invoice 2026-0043",
+        "requested_expiry": 300,
+        "expiry": 1792425900,
+        "bound_hash": "WRWOBA3Y7ZSUXIXAATHUDWOV4TLZ2HNOAVOU45WLFPT457QV546A",
+        "origin": "https://app.biatec.io",
+        "sub": "pw_7c1f0a52e9b34d68"
+      },
+      "receipt": {
+        "version": "1",
+        "signed": {
+          "authorization_details": [
+            {
+              "type": "biatec_transaction",
+              "network": "algorand-mainnet",
+              "group_hash": "WRWOBA3Y7ZSUXIXAATHUDWOV4TLZ2HNOAVOU45WLFPT457QV546A",
+              "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+              "receiver": "2RHTIWFMARFVAR76UAYQYOGZNYO4IVKKLKR7B5K43GHFPCUTRYCPIGM5NI",
+              "asset": {
+                "id": "31566704",
+                "symbol": "USDC",
+                "decimals": 6
+              },
+              "amount": "5000.000000",
+              "fiat_value": {
+                "amount": "4612.50",
+                "currency": "EUR"
+              }
+            }
+          ],
+          "auth_req_id": "ciba_4274be16f641fc76bc418e1803e3f2c2",
+          "client_entity_id": "https://bank.example",
+          "binding_code": "",
+          "decision": "deny",
+          "expiry": 1792425900,
+          "sub": "pw_7c1f0a52e9b34d68",
+          "binding_message": "Invoice 2026-0043"
+        },
+        "alg": "ES256",
+        "signature": "yCsYJzsWtHF7nDjCLcv-R24utouLC15yro_IEJA4Ip43dFQTWaO8_5qXvozpmjaDyBfrxW1MA0rA-2DJMjirdw",
+        "issued_at": 1792425624,
+        "device": {
+          "kid": "device-test-key-1",
+          "public_key": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "WaGrIVu9nxelqZVnkH9zHbfccq7AbouCYjVdXMfTSvo",
+            "y": "S45Nc7iger4-AGl6Civy_9FCLltVZQDXhXN3p7zGez0"
+          },
+          "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Im9pZGMtdGVzdC1rZXktMSIsInR5cCI6ImJpYXRlYy1kZXZpY2UtYXR0ZXN0YXRpb24rand0In0.eyJpc3MiOiJodHRwczovL29pZGMuYmlhdGVjLnRlc3QiLCJzdWIiOiJwd183YzFmMGE1MmU5YjM0ZDY4IiwiZGV2aWNlX2tpZCI6ImRldmljZS10ZXN0LWtleS0xIiwiZGV2aWNlX2p3a190aHVtYnByaW50IjoiNGxPM2U3S2JQdVpzQzZnQU85MjBSVFhXRThpa3FQM3NidHdnSkZvM1lBMCIsImlhdCI6MTc5MjE2NjQwMCwiZXhwIjoxODIzOTYxNjAwfQ.7XgHDUznYGjvCMUvom5EcsaC42nUY2js6GtdbTG0FUXtTszWSMhBREoa3rw6VnO720a2RvataFGPNQW-sGGCoQ"
+        }
+      },
+      "canonical": "{\"auth_req_id\":\"ciba_4274be16f641fc76bc418e1803e3f2c2\",\"authorization_details\":[{\"amount\":\"5000.000000\",\"asset\":{\"decimals\":6,\"id\":\"31566704\",\"symbol\":\"USDC\"},\"fiat_value\":{\"amount\":\"4612.50\",\"currency\":\"EUR\"},\"group_hash\":\"WRWOBA3Y7ZSUXIXAATHUDWOV4TLZ2HNOAVOU45WLFPT457QV546A\",\"network\":\"algorand-mainnet\",\"receiver\":\"2RHTIWFMARFVAR76UAYQYOGZNYO4IVKKLKR7B5K43GHFPCUTRYCPIGM5NI\",\"sender\":\"YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE\",\"type\":\"biatec_transaction\"}],\"binding_code\":\"\",\"binding_message\":\"Invoice 2026-0043\",\"client_entity_id\":\"https://bank.example\",\"decision\":\"deny\",\"expiry\":1792425900,\"sub\":\"pw_7c1f0a52e9b34d68\"}",
+      "canonical_sha256": "c1c9909527d9abe8b46ae80bd4942bb6643bf77a480027dcf7f28eae56886503"
+    },
+    {
+      "name": "stepup-transaction-code-failed",
+      "description": "Third wrong code; does not count toward rule 10's denial counter.",
+      "request": {
+        "auth_req_id": "ciba_b642083e279a81e2bf6fb7f4b15c8cc8",
+        "entry": "step-up",
+        "authorization_details": [
+          {
+            "type": "biatec_transaction",
+            "network": "algorand-mainnet",
+            "group_hash": "XIHPCD45SSOGFFAPJJXDNIBS7T3SCVTE6OZ3N7VM3EXFTXW3EHYA",
+            "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+            "receiver": "AB5EYGE7QZOXJZZBAFOGOBLFPN7N5DCFDMJA5ISMEQA6MM4HKYIMXHJYUM",
+            "asset": {
+              "id": "31566704",
+              "symbol": "USDC",
+              "decimals": 6
+            },
+            "amount": "5000.000000",
+            "fiat_value": {
+              "amount": "4612.50",
+              "currency": "EUR"
+            }
+          }
+        ],
+        "client": {
+          "entity_id": "https://chat.biatec.io",
+          "verified": true,
+          "display_name": "Biatec Chat",
+          "domain": "chat.biatec.io"
+        },
+        "binding_message": "",
+        "requested_expiry": 300,
+        "expiry": 1792425900,
+        "bound_hash": "XIHPCD45SSOGFFAPJJXDNIBS7T3SCVTE6OZ3N7VM3EXFTXW3EHYA",
+        "origin": "https://app.biatec.io",
+        "sub": "pw_7c1f0a52e9b34d68"
+      },
+      "receipt": {
+        "version": "1",
+        "signed": {
+          "authorization_details": [
+            {
+              "type": "biatec_transaction",
+              "network": "algorand-mainnet",
+              "group_hash": "XIHPCD45SSOGFFAPJJXDNIBS7T3SCVTE6OZ3N7VM3EXFTXW3EHYA",
+              "sender": "YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE",
+              "receiver": "AB5EYGE7QZOXJZZBAFOGOBLFPN7N5DCFDMJA5ISMEQA6MM4HKYIMXHJYUM",
+              "asset": {
+                "id": "31566704",
+                "symbol": "USDC",
+                "decimals": 6
+              },
+              "amount": "5000.000000",
+              "fiat_value": {
+                "amount": "4612.50",
+                "currency": "EUR"
+              }
+            }
+          ],
+          "auth_req_id": "ciba_b642083e279a81e2bf6fb7f4b15c8cc8",
+          "client_entity_id": "https://chat.biatec.io",
+          "binding_code": "111111",
+          "decision": "code_failed",
+          "expiry": 1792425900,
+          "sub": "pw_7c1f0a52e9b34d68",
+          "binding_message": ""
+        },
+        "alg": "ES256",
+        "signature": "_dLtzUSC0a6hE-1VhO3_0FRV85R-Xk7yi3xkftwQHs1htAHXAYXuO5QVNbsLaYZ91u8SoTj6mRCB5OyPeUUrrw",
+        "issued_at": 1792425625,
+        "device": {
+          "kid": "device-test-key-1",
+          "public_key": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "WaGrIVu9nxelqZVnkH9zHbfccq7AbouCYjVdXMfTSvo",
+            "y": "S45Nc7iger4-AGl6Civy_9FCLltVZQDXhXN3p7zGez0"
+          },
+          "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Im9pZGMtdGVzdC1rZXktMSIsInR5cCI6ImJpYXRlYy1kZXZpY2UtYXR0ZXN0YXRpb24rand0In0.eyJpc3MiOiJodHRwczovL29pZGMuYmlhdGVjLnRlc3QiLCJzdWIiOiJwd183YzFmMGE1MmU5YjM0ZDY4IiwiZGV2aWNlX2tpZCI6ImRldmljZS10ZXN0LWtleS0xIiwiZGV2aWNlX2p3a190aHVtYnByaW50IjoiNGxPM2U3S2JQdVpzQzZnQU85MjBSVFhXRThpa3FQM3NidHdnSkZvM1lBMCIsImlhdCI6MTc5MjE2NjQwMCwiZXhwIjoxODIzOTYxNjAwfQ.7XgHDUznYGjvCMUvom5EcsaC42nUY2js6GtdbTG0FUXtTszWSMhBREoa3rw6VnO720a2RvataFGPNQW-sGGCoQ"
+        }
+      },
+      "canonical": "{\"auth_req_id\":\"ciba_b642083e279a81e2bf6fb7f4b15c8cc8\",\"authorization_details\":[{\"amount\":\"5000.000000\",\"asset\":{\"decimals\":6,\"id\":\"31566704\",\"symbol\":\"USDC\"},\"fiat_value\":{\"amount\":\"4612.50\",\"currency\":\"EUR\"},\"group_hash\":\"XIHPCD45SSOGFFAPJJXDNIBS7T3SCVTE6OZ3N7VM3EXFTXW3EHYA\",\"network\":\"algorand-mainnet\",\"receiver\":\"AB5EYGE7QZOXJZZBAFOGOBLFPN7N5DCFDMJA5ISMEQA6MM4HKYIMXHJYUM\",\"sender\":\"YKBLPFVKZFZFGOVHQK6L63YX67B76YBZCSYYGU4WD7QC3PRRP4U7Q2DCWE\",\"type\":\"biatec_transaction\"}],\"binding_code\":\"111111\",\"binding_message\":\"\",\"client_entity_id\":\"https://chat.biatec.io\",\"decision\":\"code_failed\",\"expiry\":1792425900,\"sub\":\"pw_7c1f0a52e9b34d68\"}",
+      "canonical_sha256": "549915b317c5ec250cfe669cc40e1c302d0024a383e395dcfa3968960bade997"
+    }
+  ]
+}

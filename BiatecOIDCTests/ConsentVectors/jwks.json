@@ -1,0 +1,13 @@
+{
+  "keys": [
+    {
+      "kty": "EC",
+      "x": "wxrK6aaHlVFAUToxcZBBrXsGylobBlKjaa6hXg_5RCY",
+      "y": "M-PQI2gbug7WeUG0sICQfk-KB5Vdwa1cYptDwDTnVjM",
+      "crv": "P-256",
+      "kid": "oidc-test-key-1",
+      "alg": "ES256",
+      "use": "sig"
+    }
+  ]
+}
