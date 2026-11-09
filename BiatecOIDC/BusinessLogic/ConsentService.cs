@@ -1,0 +1,480 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using BiatecOIDC.Helper;
+using BiatecOIDC.Model;
+using Microsoft.Extensions.Options;
+
+namespace BiatecOIDC.BusinessLogic
+{
+    /// <summary>The rules of the Biatec consent protocol at the authorization server: opening requests, showing them to a device, taking its receipt, and handing the receipt back to the client.</summary>
+    public interface IConsentService
+    {
+        Task<OpenConsentResult> OpenAsync(OpenConsentCommand command);
+
+        /// <summary>The device's view (consent-request schema) of its user's open requests. Never contains the binding code.</summary>
+        Task<IReadOnlyList<JsonObject>> ListOpenForDeviceAsync(DeviceRecord device);
+
+        /// <summary>The device's view of one request, or null when it does not exist, is not the device user's, or has ended.</summary>
+        Task<JsonObject?> GetForDeviceAsync(DeviceRecord device, string authReqId);
+
+        /// <summary>Verifies and records a signed receipt posted by a device (approve, deny or code_failed).</summary>
+        Task<ReceiptResult> SubmitReceiptAsync(DeviceRecord device, string authReqId, JsonElement receipt, string issuer);
+
+        /// <summary>The stored receipt of a decided request, only to the user it belongs to or to its own confidential client.</summary>
+        Task<(ReceiptLookup Lookup, string? ReceiptJson)> GetReceiptAsync(ReceiptCaller caller, string authReqId);
+    }
+
+    /// <inheritdoc cref="IConsentService"/>
+    public sealed class ConsentService : IConsentService
+    {
+        private const int MaxAuthorizationDetailsBytes = 16 * 1024;
+        private const int MaxBindingMessageLength = 140;
+        private const int MaxOriginLength = 255;
+        private const int ConflictRetries = 5;
+
+        private readonly IConsentStore _store;
+        private readonly IDeviceStore _devices;
+        private readonly IConsentAttestationService _attestation;
+        private readonly ConsentConfiguration _config;
+        private readonly TimeProvider _time;
+        private readonly ILogger<ConsentService> _logger;
+
+        public ConsentService(IConsentStore store, IDeviceStore devices, IConsentAttestationService attestation, IOptions<ConsentConfiguration> config,
+            TimeProvider time, ILogger<ConsentService> logger)
+        {
+            _store = store;
+            _devices = devices;
+            _attestation = attestation;
+            _config = config.Value;
+            _time = time;
+            _logger = logger;
+        }
+
+        public async Task<OpenConsentResult> OpenAsync(OpenConsentCommand c)
+        {
+            if (!_attestation.IsConfigured)
+            {
+                return Fail(OpenConsentFailure.NotConfigured);
+            }
+
+            var invalid = Validate(c, out var details, out var boundHash);
+            if (invalid is not null)
+            {
+                return Fail(OpenConsentFailure.InvalidRequest, invalid);
+            }
+
+            var now = _time.GetUtcNow();
+            var nowSeconds = now.ToUnixTimeSeconds();
+            // Rule 8: with no active device nothing that needs the phone can be completed, so no request is opened.
+            if (!(await _devices.ListForUserAsync(c.Sub)).Any(d => d.ActiveAt <= nowSeconds))
+            {
+                return Fail(OpenConsentFailure.NoActiveDevice);
+            }
+
+            var requested = Math.Clamp(c.RequestedExpirySeconds ?? _config.RequestedExpirySeconds, 1, _config.RequestedExpirySeconds);
+            var validity = c.MaxConsentSeconds is { } ceiling ? Math.Min(requested, Math.Max(1, ceiling)) : requested;
+            var limits = new ConsentLimits
+            {
+                MaxOpenPerUser = _config.MaxOpenRequestsPerUser,
+                MaxPendingPerClientOrigin = _config.MaxPendingPerClientOrigin,
+                MaxPerClientUserHour = _config.MaxRequestsPerClientUserPerHour,
+                RetentionSeconds = _config.RetentionDays * 86400,
+            };
+
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var id = "ciba_" + Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+                var code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
+                var record = new ConsentRequestRecord
+                {
+                    AuthReqId = id,
+                    Entry = c.Entry,
+                    Sub = c.Sub,
+                    ClientId = c.ClientId,
+                    ClientEntityId = string.IsNullOrEmpty(c.ClientEntityId) ? c.ClientId : c.ClientEntityId,
+                    ClientVerified = c.ClientVerified,
+                    ClientDisplayName = c.ClientVerified ? c.ClientDisplayName : null,
+                    ClientDomain = c.ClientVerified ? c.ClientDomain : null,
+                    Origin = c.Origin,
+                    Scope = c.Scope,
+                    Resource = c.Resource,
+                    AuthorizationDetailsJson = details!,
+                    BoundHash = boundHash!,
+                    // An unverified client has no free-text channel to the trusted surface: its text is neither shown nor signed.
+                    BindingMessage = c.ClientVerified ? (c.BindingMessage ?? "").Trim() : "",
+                    RequestedExpiry = requested,
+                    CreatedAt = nowSeconds,
+                    Expiry = nowSeconds + validity,
+                    BindingCodeHash = HashCode(id, code),
+                    AttemptsRemaining = Math.Max(1, _config.MaxWrongCodes),
+                    Status = ConsentStatus.Pending,
+                    Interval = _config.PollIntervalSeconds,
+                    NextPollAt = nowSeconds,
+                };
+
+                switch (await _store.TryOpenAsync(record, limits, now))
+                {
+                    case OpenOutcome.Opened:
+                        _logger.LogInformation("consent_opened auth_req_id={AuthReqId} client={ClientId} entry={Entry} expires_in={ExpiresIn}", id, c.ClientId, c.Entry, validity);
+                        return new OpenConsentResult { AuthReqId = id, ExpiresIn = validity, Interval = record.Interval, BindingCode = code };
+                    case OpenOutcome.UserCap:
+                        _logger.LogWarning("consent_refused reason=user_cap client={ClientId}", c.ClientId);
+                        return Fail(OpenConsentFailure.UserCap);
+                    case OpenOutcome.OriginCap:
+                        _logger.LogWarning("consent_refused reason=origin_cap client={ClientId}", c.ClientId);
+                        return Fail(OpenConsentFailure.OriginCap);
+                    case OpenOutcome.RateLimited:
+                        _logger.LogWarning("consent_refused reason=rate_limited client={ClientId}", c.ClientId);
+                        return Fail(OpenConsentFailure.RateLimited);
+                }
+            }
+
+            throw new InvalidOperationException("Could not generate a unique auth_req_id.");
+        }
+
+        public async Task<IReadOnlyList<JsonObject>> ListOpenForDeviceAsync(DeviceRecord device)
+        {
+            var now = _time.GetUtcNow().ToUnixTimeSeconds();
+            var views = new List<JsonObject>();
+            foreach (var id in await _store.ListOpenIdsAsync(device.Sub, _time.GetUtcNow()))
+            {
+                var record = await _store.GetAsync(id);
+                if (record is not null && record.Sub == device.Sub && !record.IsDecided && record.Expiry > now)
+                {
+                    views.Add(ToDeviceView(record));
+                }
+            }
+            return views;
+        }
+
+        public async Task<JsonObject?> GetForDeviceAsync(DeviceRecord device, string authReqId)
+        {
+            var record = await _store.GetAsync(authReqId);
+            // Not the device user's: the same answer as for an unknown id.
+            if (record is null || record.Sub != device.Sub || record.IsDecided || record.Expiry <= _time.GetUtcNow().ToUnixTimeSeconds())
+            {
+                return null;
+            }
+            return ToDeviceView(record);
+        }
+
+        public async Task<ReceiptResult> SubmitReceiptAsync(DeviceRecord device, string authReqId, JsonElement receipt, string issuer)
+        {
+            if (!_attestation.IsConfigured)
+            {
+                return new ReceiptResult { Outcome = ReceiptOutcome.NotConfigured };
+            }
+
+            var nowOffset = _time.GetUtcNow();
+            var now = nowOffset.ToUnixTimeSeconds();
+            // Rule 7: a device that is not active yet cannot decide.
+            if (device.ActiveAt > now)
+            {
+                return new ReceiptResult { Outcome = ReceiptOutcome.DeviceInactive };
+            }
+
+            for (var attempt = 0; attempt < ConflictRetries; attempt++)
+            {
+                var record = await _store.GetAsync(authReqId);
+                if (record is null || record.Sub != device.Sub)
+                {
+                    return new ReceiptResult { Outcome = ReceiptOutcome.NotFound };
+                }
+                if (record.IsDecided)
+                {
+                    return new ReceiptResult { Outcome = ReceiptOutcome.AlreadyDecided };
+                }
+                if (record.Expiry <= now)
+                {
+                    await _store.ReleaseAsync(record);
+                    return new ReceiptResult { Outcome = ReceiptOutcome.Expired };
+                }
+
+                var problem = CheckReceipt(receipt, device, record, issuer, nowOffset, out var decision, out var enteredCode);
+                if (problem is not null)
+                {
+                    _logger.LogWarning("consent_receipt_refused auth_req_id={AuthReqId} device={Kid} reason={Reason}", authReqId, device.Kid, problem);
+                    return new ReceiptResult { Outcome = ReceiptOutcome.InvalidReceipt, Detail = problem };
+                }
+
+                var updated = Clone(record);
+                updated.DecidedByDeviceKid = device.Kid;
+                ReceiptResult result;
+                bool finished = false;
+
+                if (record.Status == ConsentStatus.CodeLocked && decision != "code_failed")
+                {
+                    // After the third wrong code only the code_failed receipt is accepted.
+                    return new ReceiptResult { Outcome = ReceiptOutcome.CodeLocked };
+                }
+
+                switch (decision)
+                {
+                    case "deny":
+                        updated.Status = ConsentStatus.Denied;
+                        result = new ReceiptResult { Outcome = ReceiptOutcome.Denied };
+                        finished = true;
+                        break;
+                    case "code_failed":
+                        if (record.Status != ConsentStatus.CodeLocked)
+                        {
+                            return new ReceiptResult { Outcome = ReceiptOutcome.InvalidReceipt, Detail = "code_failed_not_allowed" };
+                        }
+                        updated.Status = ConsentStatus.CodeFailed;
+                        result = new ReceiptResult { Outcome = ReceiptOutcome.CodeFailedRecorded };
+                        finished = true;
+                        break;
+                    default: // approve
+                        if (CodeMatches(record, enteredCode))
+                        {
+                            updated.Status = ConsentStatus.Approved;
+                            result = new ReceiptResult { Outcome = ReceiptOutcome.Approved };
+                            finished = true;
+                        }
+                        else
+                        {
+                            updated.AttemptsRemaining = Math.Max(0, record.AttemptsRemaining - 1);
+                            if (updated.AttemptsRemaining == 0)
+                            {
+                                updated.Status = ConsentStatus.CodeLocked;
+                                result = new ReceiptResult { Outcome = ReceiptOutcome.CodeLocked };
+                            }
+                            else
+                            {
+                                result = new ReceiptResult { Outcome = ReceiptOutcome.WrongCode, AttemptsRemaining = updated.AttemptsRemaining };
+                            }
+                        }
+                        break;
+                }
+
+                if (finished)
+                {
+                    updated.DecidedAt = now;
+                    updated.ReceiptJson = receipt.GetRawText();
+                }
+
+                if (!await _store.TryUpdateAsync(record, updated))
+                {
+                    continue; // someone changed the request between the read and the write: look again
+                }
+
+                if (finished)
+                {
+                    await _store.ReleaseAsync(updated);
+                }
+                _logger.LogInformation("consent_receipt auth_req_id={AuthReqId} device={Kid} outcome={Outcome}", authReqId, device.Kid, result.Outcome);
+                return result;
+            }
+
+            return new ReceiptResult { Outcome = ReceiptOutcome.Conflict };
+        }
+
+        public async Task<(ReceiptLookup Lookup, string? ReceiptJson)> GetReceiptAsync(ReceiptCaller caller, string authReqId)
+        {
+            var record = await _store.GetAsync(authReqId);
+            if (record is null || !Owns(caller, record))
+            {
+                return (ReceiptLookup.NotFound, null);
+            }
+            return record.IsDecided && record.ReceiptJson is not null ? (ReceiptLookup.Found, record.ReceiptJson) : (ReceiptLookup.NotReady, null);
+        }
+
+        /// <summary>
+        /// The receipt belongs to the user whose request it is, and to the client that opened it. A bearer token proves the subject
+        /// (and the client it was issued to); a client proves itself only with its own secret. A caller that proves neither gets nothing.
+        /// </summary>
+        private static bool Owns(ReceiptCaller caller, ConsentRequestRecord record)
+        {
+            var clientMatches = !string.IsNullOrEmpty(caller.ClientId) && string.Equals(caller.ClientId, record.ClientId, StringComparison.Ordinal);
+            if (caller.ClientAuthenticated)
+            {
+                return clientMatches;
+            }
+            return !string.IsNullOrEmpty(caller.Sub) && string.Equals(caller.Sub, record.Sub, StringComparison.Ordinal) && clientMatches;
+        }
+
+        // ---- opening ----
+
+        private string? Validate(OpenConsentCommand c, out string? detailsJson, out string? boundHash)
+        {
+            detailsJson = null;
+            boundHash = null;
+            if (string.IsNullOrWhiteSpace(c.Sub) || string.IsNullOrWhiteSpace(c.ClientId))
+            {
+                return "sub and client are required";
+            }
+            if (c.Entry is not ("step-up" or "direct"))
+            {
+                return "entry must be step-up or direct";
+            }
+            if (string.IsNullOrEmpty(c.Origin) || c.Origin.Length > MaxOriginLength || !Uri.TryCreate(c.Origin, UriKind.Absolute, out var origin)
+                || origin.Scheme is not ("https" or "http") || origin.PathAndQuery != "/" || origin.UserInfo.Length > 0)
+            {
+                return "origin must be an absolute http(s) origin";
+            }
+            if (c.BindingMessage is { Length: > MaxBindingMessageLength })
+            {
+                return "binding_message is too long";
+            }
+            if (c.AuthorizationDetails.ValueKind != JsonValueKind.Array || c.AuthorizationDetails.GetArrayLength() != 1
+                || c.AuthorizationDetails[0].ValueKind != JsonValueKind.Object)
+            {
+                return "authorization_details must be an array of exactly one object";
+            }
+
+            var d = c.AuthorizationDetails[0];
+            var type = d.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+            var hashMember = type switch { "biatec_transaction" => "group_hash", "biatec_limits_change" => "request_hash", _ => null };
+            if (hashMember is null)
+            {
+                return "unsupported authorization_details type";
+            }
+            if (!d.TryGetProperty(hashMember, out var h) || h.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(h.GetString()))
+            {
+                return hashMember + " is required";
+            }
+
+            try
+            {
+                // Strict canonicalization is what the receipt will be signed over: refuse here what could never be signed.
+                var canonical = JsonCanonicalizer.Canonicalize(c.AuthorizationDetails);
+                if (Encoding.UTF8.GetByteCount(canonical) > MaxAuthorizationDetailsBytes)
+                {
+                    return "authorization_details is too large";
+                }
+                detailsJson = canonical;
+            }
+            catch (JsonCanonicalizationException ex)
+            {
+                return "authorization_details cannot be canonicalized: " + ex.Message;
+            }
+
+            boundHash = h.GetString();
+            return null;
+        }
+
+        private static OpenConsentResult Fail(OpenConsentFailure failure, string? detail = null) => new() { Failure = failure, Detail = detail };
+
+        // ---- receipts ----
+
+        private string? CheckReceipt(JsonElement receipt, DeviceRecord device, ConsentRequestRecord record, string issuer, DateTimeOffset now,
+            out string decision, out string enteredCode)
+        {
+            decision = "";
+            enteredCode = "";
+            if (receipt.ValueKind != JsonValueKind.Object || Str(receipt, "version") != "1" || Str(receipt, "alg") != "ES256"
+                || !receipt.TryGetProperty("signed", out var signed) || signed.ValueKind != JsonValueKind.Object
+                || !receipt.TryGetProperty("device", out var dev) || dev.ValueKind != JsonValueKind.Object)
+            {
+                return "malformed_receipt";
+            }
+
+            // The key in the receipt must be the enrolled one: a receipt cannot bring its own key.
+            if (Str(dev, "kid") != device.Kid || !dev.TryGetProperty("public_key", out var key)
+                || Str(key, "kty") != "EC" || Str(key, "crv") != "P-256" || Str(key, "x") != device.KeyX || Str(key, "y") != device.KeyY)
+            {
+                return "device_key_mismatch";
+            }
+
+            var jwk = _attestation.GetPublicJwk();
+            if (jwk is null)
+            {
+                return "not_configured";
+            }
+            var jwks = new[] { JsonDocument.Parse(jwk.ToJsonString()).RootElement };
+            if (!ConsentReceiptVerifier.VerifyDeviceSignature(receipt))
+            {
+                return "bad_signature";
+            }
+            if (!ConsentReceiptVerifier.VerifyAttestation(receipt, jwks, issuer, now))
+            {
+                return "bad_attestation";
+            }
+
+            // Every signed member is compared with what this server stored, never with what the receipt supplies.
+            decision = Str(signed, "decision") ?? "";
+            enteredCode = Str(signed, "binding_code") ?? "";
+            if (decision is not ("approve" or "deny" or "code_failed"))
+            {
+                return "bad_decision";
+            }
+            if (Str(signed, "auth_req_id") != record.AuthReqId || Str(signed, "client_entity_id") != record.ClientEntityId
+                || Str(signed, "binding_message") != record.BindingMessage || Str(signed, "sub") != record.Sub
+                || !signed.TryGetProperty("expiry", out var expiry) || !expiry.TryGetInt64(out var expirySeconds) || expirySeconds != record.Expiry)
+            {
+                return "receipt_does_not_match_request";
+            }
+
+            try
+            {
+                if (!signed.TryGetProperty("authorization_details", out var ad)
+                    || JsonCanonicalizer.Canonicalize(ad) != record.AuthorizationDetailsJson)
+                {
+                    return "receipt_does_not_match_request";
+                }
+            }
+            catch (JsonCanonicalizationException)
+            {
+                return "malformed_receipt";
+            }
+
+            // A deny or code_failed receipt carries whatever the user typed; only an approval's code is compared.
+            if (decision == "approve" && (enteredCode.Length != 6 || !enteredCode.All(char.IsAsciiDigit)))
+            {
+                return "bad_binding_code_format";
+            }
+            return null;
+        }
+
+        private static bool CodeMatches(ConsentRequestRecord record, string entered)
+        {
+            var expected = Encoding.ASCII.GetBytes(record.BindingCodeHash);
+            var actual = Encoding.ASCII.GetBytes(HashCode(record.AuthReqId, entered));
+            return CryptographicOperations.FixedTimeEquals(expected, actual);
+        }
+
+        /// <summary>SHA-256 hex of <c>auth_req_id:code</c>. The id is the salt, and a code is only ever tried three times, so a stored hash is no easier to use than none.</summary>
+        public static string HashCode(string authReqId, string code)
+            => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(authReqId + ":" + code))).ToLowerInvariant();
+
+        // ---- views ----
+
+        private static JsonObject ToDeviceView(ConsentRequestRecord r)
+        {
+            var client = new JsonObject { ["entity_id"] = r.ClientEntityId, ["verified"] = r.ClientVerified };
+            if (r.ClientVerified)
+            {
+                client["display_name"] = r.ClientDisplayName;
+                client["domain"] = r.ClientDomain;
+            }
+            else
+            {
+                // An unverified client shows only a short fingerprint of its identifier.
+                var h = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(r.ClientId)))[..8];
+                client["fingerprint"] = h[..4] + "-" + h[4..];
+            }
+
+            // The binding code is deliberately absent: the user types it from the requesting surface.
+            return new JsonObject
+            {
+                ["auth_req_id"] = r.AuthReqId,
+                ["entry"] = r.Entry,
+                ["authorization_details"] = JsonNode.Parse(r.AuthorizationDetailsJson),
+                ["client"] = client,
+                ["binding_message"] = r.BindingMessage,
+                ["requested_expiry"] = r.RequestedExpiry,
+                ["expiry"] = r.Expiry,
+                ["bound_hash"] = r.BoundHash,
+                ["origin"] = r.Origin,
+                ["sub"] = r.Sub,
+            };
+        }
+
+        private static ConsentRequestRecord Clone(ConsentRequestRecord r) => JsonSerializer.Deserialize<ConsentRequestRecord>(JsonSerializer.Serialize(r))!;
+
+        private static string? Str(JsonElement o, string name)
+            => o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+    }
+}

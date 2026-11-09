@@ -206,8 +206,11 @@ namespace BiatecOIDC
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IDynamicClientStore, BiatecOIDC.BusinessLogic.DynamicClientStore>();
             builder.Services.Configure<BiatecOIDC.Model.DevicesConfiguration>(builder.Configuration.GetSection("Devices"));
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IDeviceStore, BiatecOIDC.BusinessLogic.DeviceStore>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IDeviceAuthenticator, BiatecOIDC.BusinessLogic.DeviceAuthenticator>();
             builder.Services.Configure<BiatecOIDC.Model.ConsentConfiguration>(builder.Configuration.GetSection("Consent"));
             builder.Services.AddSingleton<BiatecOIDC.BusinessLogic.IConsentAttestationService, BiatecOIDC.BusinessLogic.ConsentAttestationService>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IConsentStore, BiatecOIDC.BusinessLogic.ConsentStore>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IConsentService, BiatecOIDC.BusinessLogic.ConsentService>();
             Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.TryAddSingleton(builder.Services, TimeProvider.System);
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IJwtIssuerService, BiatecOIDC.BusinessLogic.JwtIssuerService>();
 
