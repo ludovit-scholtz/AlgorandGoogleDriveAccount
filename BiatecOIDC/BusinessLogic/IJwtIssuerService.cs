@@ -63,6 +63,12 @@ namespace BiatecOIDC.BusinessLogic
         Task<Dictionary<string, object>> IntrospectAsync(string token);
 
         /// <summary>
+        /// Authenticates a confidential client from HTTP Basic credentials (RFC 6749 2.3.1). A public client (no secret) never
+        /// authenticates this way: it has no credential to present. Returns null when the credentials are missing or wrong.
+        /// </summary>
+        Task<JwtIssuerClientConfiguration?> AuthenticateConfidentialClientAsync(string? basicAuthHeader);
+
+        /// <summary>
         /// Validates the signature and issuer of a token previously issued by this provider (e.g. an
         /// <c>id_token_hint</c> at logout) and returns its <c>aud</c> claim if valid. Lifetime is not
         /// checked, since a logout hint legitimately references an already-expired id_token. Returns

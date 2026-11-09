@@ -15,6 +15,9 @@ namespace BiatecOIDC.BusinessLogic
 
         Task<int> CountForUserAsync(string sub);
 
+        /// <summary>All devices of a user.</summary>
+        Task<IReadOnlyList<DeviceRecord>> ListForUserAsync(string sub);
+
         /// <summary>
         /// Sets where the device's notifications go. A push token belongs to one device: it is removed from every other
         /// device record first.

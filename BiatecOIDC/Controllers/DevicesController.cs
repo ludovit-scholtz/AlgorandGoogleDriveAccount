@@ -20,10 +20,12 @@ namespace BiatecOIDC.Controllers
     /// </summary>
     [ApiController]
     [Route("devices")]
+    // Device tokens, transaction details and receipts must never sit in a cache.
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     [AllowAnonymous]
     public class DevicesController : ControllerBase
     {
-        public const string ProofHeader = "X-Device-Proof";
+        public const string ProofHeader = DeviceAuthenticator.ProofHeader;
         private static readonly Regex KidPattern = new("^[A-Za-z0-9._-]{8,64}$", RegexOptions.Compiled);
 
         private readonly IDeviceStore _store;
@@ -31,10 +33,12 @@ namespace BiatecOIDC.Controllers
         private readonly DevicesConfiguration _config;
         private readonly TimeProvider _time;
         private readonly IConsentAttestationService? _attestation;
+        private readonly IDeviceAuthenticator _authenticator;
 
         public DevicesController(IDeviceStore store, IJwtIssuerService jwt, IOptions<DevicesConfiguration> config, TimeProvider time,
-            IConsentAttestationService? attestation = null)
+            IDeviceAuthenticator authenticator, IConsentAttestationService? attestation = null)
         {
+            _authenticator = authenticator;
             _attestation = attestation;
             _store = store;
             _jwt = jwt;
@@ -145,35 +149,13 @@ namespace BiatecOIDC.Controllers
         [NonAction]
         public async Task<(DeviceRecord? Device, IActionResult? Error)> AuthenticateDeviceAsync()
         {
-            var header = Request.Headers.Authorization.ToString();
-            const string prefix = "Device ";
-            if (!header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || header.Length == prefix.Length)
+            var (device, failure) = await _authenticator.AuthenticateAsync(Request);
+            return failure switch
             {
-                return (null, Challenge401("invalid_token"));
-            }
-
-            var token = header[prefix.Length..].Trim();
-            var device = await _store.GetByTokenHashAsync(DeviceStore.Hash(token));
-            if (device is null)
-            {
-                return (null, Challenge401("invalid_token"));
-            }
-
-            var url = _jwt.GetIssuer(Request) + Request.Path.Value;
-            var result = DeviceProofVerifier.Verify(Request.Headers[ProofHeader].ToString(), device.Kid, device.KeyX, device.KeyY,
-                Request.Method, url, token, _time.GetUtcNow(), _config.ProofSkewSeconds, out var jti);
-            if (result != DeviceProofResult.Valid)
-            {
-                return (null, Challenge401("invalid_proof"));
-            }
-
-            // Remembered for twice the accepted window, so a replay inside the window and just after it is both refused.
-            if (!await _store.TryRememberProofAsync(device.Kid, jti!, TimeSpan.FromSeconds(2 * _config.ProofSkewSeconds)))
-            {
-                return (null, Challenge401("invalid_proof"));
-            }
-
-            return (device, null);
+                DeviceAuthFailure.None => (device, null),
+                DeviceAuthFailure.InvalidToken => (null, Challenge401("invalid_token")),
+                _ => (null, Challenge401("invalid_proof")),
+            };
         }
 
         private IActionResult Challenge401(string error)

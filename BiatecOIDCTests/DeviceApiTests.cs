@@ -36,6 +36,9 @@ namespace BiatecOIDCTests
 
         public Task<int> CountForUserAsync(string sub) => Task.FromResult(Devices.Values.Count(d => d.Sub == sub));
 
+        public Task<IReadOnlyList<DeviceRecord>> ListForUserAsync(string sub)
+            => Task.FromResult<IReadOnlyList<DeviceRecord>>(Devices.Values.Where(d => d.Sub == sub).ToList());
+
         public Task SetPushAsync(string kid, string provider, string token)
         {
             foreach (var other in Devices.Values.Where(d => d.PushToken == token && d.PushProvider == provider))
@@ -93,7 +96,8 @@ namespace BiatecOIDCTests
 
         private DevicesController Controller(string? authorization, string method, string path, string? proof = null, DevicesConfiguration? config = null)
         {
-            var c = new DevicesController(_store, _jwt.Object, Options.Create(config ?? new DevicesConfiguration()), _time);
+            var options = Options.Create(config ?? new DevicesConfiguration());
+            var c = new DevicesController(_store, _jwt.Object, options, _time, new DeviceAuthenticator(_store, _jwt.Object, options, _time));
             var http = new DefaultHttpContext();
             http.Request.Method = method;
             http.Request.Path = path;
@@ -189,7 +193,8 @@ namespace BiatecOIDCTests
         {
             using var signing = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             using var svc = new ConsentAttestationService(Options.Create(new ConsentConfiguration { AttestationSigningKeyPem = signing.ExportPkcs8PrivateKeyPem() }));
-            var c = new DevicesController(_store, _jwt.Object, Options.Create(new DevicesConfiguration()), _time, svc);
+            var options = Options.Create(new DevicesConfiguration());
+            var c = new DevicesController(_store, _jwt.Object, options, _time, new DeviceAuthenticator(_store, _jwt.Object, options, _time), svc);
             var http = new DefaultHttpContext();
             http.Request.Headers.Authorization = "Bearer user-token";
             c.ControllerContext = new ControllerContext { HttpContext = http };

@@ -53,6 +53,20 @@ namespace BiatecOIDC.BusinessLogic
             return kid.IsNullOrEmpty ? null : await GetByKidAsync(kid!);
         }
 
+        public async Task<IReadOnlyList<DeviceRecord>> ListForUserAsync(string sub)
+        {
+            var kids = await _redis.GetDatabase().SetMembersAsync(UserPrefix + sub);
+            var devices = new List<DeviceRecord>();
+            foreach (var kid in kids)
+            {
+                if (await GetByKidAsync(kid!) is { } device)
+                {
+                    devices.Add(device);
+                }
+            }
+            return devices;
+        }
+
         public async Task<int> CountForUserAsync(string sub)
             => (int)await _redis.GetDatabase().SetLengthAsync(UserPrefix + sub);
 

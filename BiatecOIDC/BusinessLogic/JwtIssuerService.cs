@@ -1062,6 +1062,17 @@ namespace BiatecOIDC.BusinessLogic
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
+        public async Task<JwtIssuerClientConfiguration?> AuthenticateConfidentialClientAsync(string? basicAuthHeader)
+        {
+            var (clientId, _) = ParseBasicAuth(basicAuthHeader);
+            if (string.IsNullOrWhiteSpace(clientId))
+            {
+                return null;
+            }
+            var result = await ValidateClientAuthenticationAsync(null, null, basicAuthHeader);
+            return result.Success && result.Client is { IsPublicClient: false } client ? client : null;
+        }
+
         private async Task<(bool Success, int StatusCode, string? Error, string? ErrorDescription, JwtIssuerClientConfiguration? Client)> ValidateClientAuthenticationAsync(
             string? bodyClientId,
             string? bodyClientSecret,
