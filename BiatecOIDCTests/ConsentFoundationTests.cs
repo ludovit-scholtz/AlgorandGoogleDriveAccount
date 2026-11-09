@@ -242,6 +242,29 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public void TheJwks_PublishesTheAttestationKeyNextToTheTokenKey_AndNeverAPrivatePart()
+        {
+            using var svc = Service(out _);
+            var jwt = new Moq.Mock<IJwtIssuerService>();
+            jwt.Setup(j => j.GetJsonWebKeySet()).Returns(new { keys = new[] { new { kty = "RSA", use = "sig", kid = "rsa-1", alg = "RS256", n = "AQAB", e = "AQAB" } } });
+            var mockConfig = Moq.Mock.Of<Microsoft.Extensions.Options.IOptionsMonitor<MockCloudServiceConfiguration>>(m => m.CurrentValue == new MockCloudServiceConfiguration());
+            var controller = new BiatecOIDC.Controllers.JwtIssuerController(jwt.Object, Moq.Mock.Of<Microsoft.Extensions.Caching.Distributed.IDistributedCache>(),
+                Moq.Mock.Of<BiatecSelfCustodyCore.Providers.ICloudStorageProviderCatalog>(), Moq.Mock.Of<BiatecSelfCustodyCore.Repository.ICloudAccountRepository>(), mockConfig, svc);
+
+            var ok = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.Jwks();
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(ok.Value));
+            var keys = doc.RootElement.GetProperty("keys").EnumerateArray().ToList();
+            Assert.That(keys.Select(k => k.GetProperty("kid").GetString()), Is.EqualTo(new[] { "rsa-1", "biatec-consent-1" }));
+            Assert.That(keys[1].GetProperty("crv").GetString(), Is.EqualTo("P-256"));
+            Assert.That(doc.RootElement.GetRawText(), Does.Not.Contain("\"d\""));
+
+            var withoutKey = new BiatecOIDC.Controllers.JwtIssuerController(jwt.Object, Moq.Mock.Of<Microsoft.Extensions.Caching.Distributed.IDistributedCache>(),
+                Moq.Mock.Of<BiatecSelfCustodyCore.Providers.ICloudStorageProviderCatalog>(), Moq.Mock.Of<BiatecSelfCustodyCore.Repository.ICloudAccountRepository>(), mockConfig);
+            using var plain = JsonDocument.Parse(JsonSerializer.Serialize(((Microsoft.AspNetCore.Mvc.OkObjectResult)withoutKey.Jwks()).Value));
+            Assert.That(plain.RootElement.GetProperty("keys").GetArrayLength(), Is.EqualTo(1));
+        }
+
+        [Test]
         public void WithoutAKey_TheServiceIsNotConfigured_AndIssuesNothing()
         {
             using var svc = new ConsentAttestationService(Options.Create(new ConsentConfiguration()));
