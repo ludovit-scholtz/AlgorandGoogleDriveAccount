@@ -148,7 +148,7 @@ namespace BiatecOIDCTests
         [TestCase(ReceiptOutcome.CodeLocked, 403, "access_denied")]
         [TestCase(ReceiptOutcome.NotFound, 404, "not_found")]
         [TestCase(ReceiptOutcome.AlreadyDecided, 409, "already_decided")]
-        [TestCase(ReceiptOutcome.Conflict, 409, "already_decided")]
+        [TestCase(ReceiptOutcome.Conflict, 409, "\"conflict\"")]
         [TestCase(ReceiptOutcome.Expired, 410, "expired")]
         [TestCase(ReceiptOutcome.DeviceInactive, 403, "device_inactive")]
         [TestCase(ReceiptOutcome.NotConfigured, 503, "consent_not_configured")]

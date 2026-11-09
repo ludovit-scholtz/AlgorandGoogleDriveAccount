@@ -32,6 +32,9 @@ namespace BiatecOIDC.BusinessLogic
         private const int MaxAuthorizationDetailsBytes = 16 * 1024;
         private const int MaxBindingMessageLength = 140;
         private const int MaxOriginLength = 255;
+        private const int MaxIdentifierLength = 200;
+        private const int MaxDisplayNameLength = 100;
+        private const int MaxScopeLength = 200;
         private const int ConflictRetries = 5;
 
         private readonly IConsentStore _store;
@@ -40,6 +43,8 @@ namespace BiatecOIDC.BusinessLogic
         private readonly ConsentConfiguration _config;
         private readonly TimeProvider _time;
         private readonly ILogger<ConsentService> _logger;
+        private readonly byte[] _codeKey;
+        private readonly JsonElement? _attestationJwk;
 
         public ConsentService(IConsentStore store, IDeviceStore devices, IConsentAttestationService attestation, IOptions<ConsentConfiguration> config,
             TimeProvider time, ILogger<ConsentService> logger)
@@ -50,16 +55,31 @@ namespace BiatecOIDC.BusinessLogic
             _config = config.Value;
             _time = time;
             _logger = logger;
+            _codeKey = DeriveCodeKey(_config);
+            using var jwkDoc = attestation.GetPublicJwk() is { } jwk ? JsonDocument.Parse(jwk.ToJsonString()) : null;
+            _attestationJwk = jwkDoc?.RootElement.Clone();
+        }
+
+        /// <summary>The key of the binding-code hash: the configured secret, else one derived (domain-separated) from the attestation key. Empty when neither exists.</summary>
+        private static byte[] DeriveCodeKey(ConsentConfiguration config)
+        {
+            if (!string.IsNullOrWhiteSpace(config.BindingCodeKey))
+            {
+                return Encoding.UTF8.GetBytes(config.BindingCodeKey);
+            }
+            return string.IsNullOrWhiteSpace(config.AttestationSigningKeyPem)
+                ? Array.Empty<byte>()
+                : SHA256.HashData(Encoding.UTF8.GetBytes("biatec-consent-binding-code-v1:" + config.AttestationSigningKeyPem));
         }
 
         public async Task<OpenConsentResult> OpenAsync(OpenConsentCommand c)
         {
-            if (!_attestation.IsConfigured)
+            if (!_attestation.IsConfigured || _codeKey.Length == 0)
             {
                 return Fail(OpenConsentFailure.NotConfigured);
             }
 
-            var invalid = Validate(c, out var details, out var boundHash);
+            var invalid = Validate(c, out var details, out var boundHash, out var origin);
             if (invalid is not null)
             {
                 return Fail(OpenConsentFailure.InvalidRequest, invalid);
@@ -93,11 +113,12 @@ namespace BiatecOIDC.BusinessLogic
                     Entry = c.Entry,
                     Sub = c.Sub,
                     ClientId = c.ClientId,
-                    ClientEntityId = string.IsNullOrEmpty(c.ClientEntityId) ? c.ClientId : c.ClientEntityId,
+                    // An unverified client's self-declared entity id is never shown or signed: only its client id is.
+                    ClientEntityId = c.ClientVerified && !string.IsNullOrEmpty(c.ClientEntityId) ? c.ClientEntityId : c.ClientId,
                     ClientVerified = c.ClientVerified,
                     ClientDisplayName = c.ClientVerified ? c.ClientDisplayName : null,
                     ClientDomain = c.ClientVerified ? c.ClientDomain : null,
-                    Origin = c.Origin,
+                    Origin = origin!,
                     Scope = c.Scope,
                     Resource = c.Resource,
                     AuthorizationDetailsJson = details!,
@@ -107,7 +128,7 @@ namespace BiatecOIDC.BusinessLogic
                     RequestedExpiry = requested,
                     CreatedAt = nowSeconds,
                     Expiry = nowSeconds + validity,
-                    BindingCodeHash = HashCode(id, code),
+                    BindingCodeHash = HashCode(_codeKey, id, code),
                     AttemptsRemaining = Math.Max(1, _config.MaxWrongCodes),
                     Status = ConsentStatus.Pending,
                     Interval = _config.PollIntervalSeconds,
@@ -138,6 +159,10 @@ namespace BiatecOIDC.BusinessLogic
         {
             var now = _time.GetUtcNow().ToUnixTimeSeconds();
             var views = new List<JsonObject>();
+            if (device.ActiveAt > now)
+            {
+                return views; // a device in its activation delay sees nothing
+            }
             foreach (var id in await _store.ListOpenIdsAsync(device.Sub, _time.GetUtcNow()))
             {
                 var record = await _store.GetAsync(id);
@@ -152,8 +177,8 @@ namespace BiatecOIDC.BusinessLogic
         public async Task<JsonObject?> GetForDeviceAsync(DeviceRecord device, string authReqId)
         {
             var record = await _store.GetAsync(authReqId);
-            // Not the device user's: the same answer as for an unknown id.
-            if (record is null || record.Sub != device.Sub || record.IsDecided || record.Expiry <= _time.GetUtcNow().ToUnixTimeSeconds())
+            // Not the device user's, or the device is not active yet: the same answer as for an unknown id.
+            if (record is null || device.ActiveAt > _time.GetUtcNow().ToUnixTimeSeconds() || record.Sub != device.Sub || record.IsDecided || record.Expiry <= _time.GetUtcNow().ToUnixTimeSeconds())
             {
                 return null;
             }
@@ -192,7 +217,7 @@ namespace BiatecOIDC.BusinessLogic
                     return new ReceiptResult { Outcome = ReceiptOutcome.Expired };
                 }
 
-                var problem = CheckReceipt(receipt, device, record, issuer, nowOffset, out var decision, out var enteredCode);
+                var problem = CheckReceipt(receipt, device, record, issuer, nowOffset, out var decision, out var enteredCode, out var envelope);
                 if (problem is not null)
                 {
                     _logger.LogWarning("consent_receipt_refused auth_req_id={AuthReqId} device={Kid} reason={Reason}", authReqId, device.Kid, problem);
@@ -200,7 +225,6 @@ namespace BiatecOIDC.BusinessLogic
                 }
 
                 var updated = Clone(record);
-                updated.DecidedByDeviceKid = device.Kid;
                 ReceiptResult result;
                 bool finished = false;
 
@@ -252,7 +276,10 @@ namespace BiatecOIDC.BusinessLogic
                 if (finished)
                 {
                     updated.DecidedAt = now;
-                    updated.ReceiptJson = receipt.GetRawText();
+                    updated.DecidedByDeviceKid = device.Kid;
+                    // The stored (and later returned) receipt is rebuilt from the members that were verified, so a duplicated or extra
+                    // member in what the device posted can never reach a client or be read differently by another parser.
+                    updated.ReceiptJson = envelope!.ToJsonString();
                 }
 
                 if (!await _store.TryUpdateAsync(record, updated))
@@ -260,10 +287,6 @@ namespace BiatecOIDC.BusinessLogic
                     continue; // someone changed the request between the read and the write: look again
                 }
 
-                if (finished)
-                {
-                    await _store.ReleaseAsync(updated);
-                }
                 _logger.LogInformation("consent_receipt auth_req_id={AuthReqId} device={Kid} outcome={Outcome}", authReqId, device.Kid, result.Outcome);
                 return result;
             }
@@ -297,26 +320,33 @@ namespace BiatecOIDC.BusinessLogic
 
         // ---- opening ----
 
-        private string? Validate(OpenConsentCommand c, out string? detailsJson, out string? boundHash)
+        private string? Validate(OpenConsentCommand c, out string? detailsJson, out string? boundHash, out string? normalizedOrigin)
         {
             detailsJson = null;
             boundHash = null;
+            normalizedOrigin = null;
             if (string.IsNullOrWhiteSpace(c.Sub) || string.IsNullOrWhiteSpace(c.ClientId))
             {
                 return "sub and client are required";
+            }
+            if (c.Sub.Length > MaxIdentifierLength || c.ClientId.Length > MaxIdentifierLength || (c.ClientEntityId?.Length ?? 0) > MaxOriginLength
+                || (c.ClientDisplayName?.Length ?? 0) > MaxDisplayNameLength || (c.ClientDomain?.Length ?? 0) > MaxOriginLength
+                || (c.Scope?.Length ?? 0) > MaxScopeLength || (c.Resource?.Length ?? 0) > MaxOriginLength)
+            {
+                return "a field is too long";
             }
             if (c.Entry is not ("step-up" or "direct"))
             {
                 return "entry must be step-up or direct";
             }
-            if (string.IsNullOrEmpty(c.Origin) || c.Origin.Length > MaxOriginLength || !Uri.TryCreate(c.Origin, UriKind.Absolute, out var origin)
-                || origin.Scheme is not ("https" or "http") || origin.PathAndQuery != "/" || origin.UserInfo.Length > 0)
+            normalizedOrigin = NormalizeOrigin(c.Origin);
+            if (normalizedOrigin is null)
             {
                 return "origin must be an absolute http(s) origin";
             }
-            if (c.BindingMessage is { Length: > MaxBindingMessageLength })
+            if (c.BindingMessage is { } message && (message.Length > MaxBindingMessageLength || message.Any(IsUnsafeTextCharacter)))
             {
-                return "binding_message is too long";
+                return "binding_message is too long or contains control or formatting characters";
             }
             if (c.AuthorizationDetails.ValueKind != JsonValueKind.Array || c.AuthorizationDetails.GetArrayLength() != 1
                 || c.AuthorizationDetails[0].ValueKind != JsonValueKind.Object)
@@ -355,45 +385,78 @@ namespace BiatecOIDC.BusinessLogic
             return null;
         }
 
+        /// <summary>
+        /// One spelling per origin: scheme and host lowercase, default port dropped, no path, query, fragment or credentials, ASCII host
+        /// only (an internationalised host must be sent as punycode). The per-origin cap, the pause-by-origin feature and the card all
+        /// key on this value, so it must not be spoofable by spelling.
+        /// </summary>
+        public static string? NormalizeOrigin(string? origin)
+        {
+            if (string.IsNullOrEmpty(origin) || origin.Length > MaxOriginLength || origin.Any(ch => ch <= ' ' || ch > '~')
+                || !Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                || uri.Scheme is not ("https" or "http") || uri.PathAndQuery != "/" || uri.Fragment.Length > 0 || uri.UserInfo.Length > 0
+                || origin.Contains('#') || origin.Contains('?') || uri.Host != uri.IdnHost)
+            {
+                return null;
+            }
+            return uri.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped).ToLowerInvariant();
+        }
+
+        private static bool IsUnsafeTextCharacter(char ch)
+            => char.IsControl(ch) || System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch) is System.Globalization.UnicodeCategory.Format
+                or System.Globalization.UnicodeCategory.LineSeparator or System.Globalization.UnicodeCategory.ParagraphSeparator;
+
         private static OpenConsentResult Fail(OpenConsentFailure failure, string? detail = null) => new() { Failure = failure, Detail = detail };
 
         // ---- receipts ----
 
+        private static readonly string[] EnvelopeMembers = { "version", "signed", "alg", "signature", "issued_at", "device" };
+        private static readonly string[] SignedMembers =
+            { "authorization_details", "auth_req_id", "client_entity_id", "binding_code", "decision", "expiry", "sub", "binding_message" };
+
         private string? CheckReceipt(JsonElement receipt, DeviceRecord device, ConsentRequestRecord record, string issuer, DateTimeOffset now,
-            out string decision, out string enteredCode)
+            out string decision, out string enteredCode, out JsonObject? envelope)
         {
             decision = "";
             enteredCode = "";
+            envelope = null;
             if (receipt.ValueKind != JsonValueKind.Object || Str(receipt, "version") != "1" || Str(receipt, "alg") != "ES256"
+                || !HasExactMembers(receipt, EnvelopeMembers)
                 || !receipt.TryGetProperty("signed", out var signed) || signed.ValueKind != JsonValueKind.Object
-                || !receipt.TryGetProperty("device", out var dev) || dev.ValueKind != JsonValueKind.Object)
+                || !receipt.TryGetProperty("device", out var dev) || dev.ValueKind != JsonValueKind.Object
+                || !HasExactMembers(dev, new[] { "kid", "public_key", "attestation" })
+                || !receipt.TryGetProperty("issued_at", out var issuedAt) || issuedAt.ValueKind != JsonValueKind.Number
+                || !issuedAt.TryGetInt64(out var issuedAtSeconds) || issuedAtSeconds < 0)
             {
                 return "malformed_receipt";
             }
 
             // The key in the receipt must be the enrolled one: a receipt cannot bring its own key.
-            if (Str(dev, "kid") != device.Kid || !dev.TryGetProperty("public_key", out var key)
+            if (Str(dev, "kid") != device.Kid || !dev.TryGetProperty("public_key", out var key) || !HasExactMembers(key, new[] { "kty", "crv", "x", "y" })
                 || Str(key, "kty") != "EC" || Str(key, "crv") != "P-256" || Str(key, "x") != device.KeyX || Str(key, "y") != device.KeyY)
             {
                 return "device_key_mismatch";
             }
 
-            var jwk = _attestation.GetPublicJwk();
-            if (jwk is null)
+            if (_attestationJwk is not { } jwk)
             {
                 return "not_configured";
             }
-            var jwks = new[] { JsonDocument.Parse(jwk.ToJsonString()).RootElement };
             if (!ConsentReceiptVerifier.VerifyDeviceSignature(receipt))
             {
                 return "bad_signature";
             }
-            if (!ConsentReceiptVerifier.VerifyAttestation(receipt, jwks, issuer, now))
+            if (!ConsentReceiptVerifier.VerifyAttestation(receipt, new[] { jwk }, issuer, now))
             {
                 return "bad_attestation";
             }
 
-            // Every signed member is compared with what this server stored, never with what the receipt supplies.
+            // The signed object is exactly the eight members of the protocol (section 8), and every one is compared with what this
+            // server stored, never with what the receipt supplies.
+            if (!HasExactMembers(signed, SignedMembers))
+            {
+                return "malformed_receipt";
+            }
             decision = Str(signed, "decision") ?? "";
             enteredCode = Str(signed, "binding_code") ?? "";
             if (decision is not ("approve" or "deny" or "code_failed"))
@@ -425,19 +488,56 @@ namespace BiatecOIDC.BusinessLogic
             {
                 return "bad_binding_code_format";
             }
+
+            // Rebuilt from the verified members only (see SubmitReceiptAsync).
+            envelope = new JsonObject
+            {
+                ["version"] = "1",
+                ["signed"] = JsonNode.Parse(signed.GetRawText()),
+                ["alg"] = "ES256",
+                ["signature"] = Str(receipt, "signature"),
+                ["issued_at"] = issuedAtSeconds,
+                ["device"] = new JsonObject
+                {
+                    ["kid"] = device.Kid,
+                    ["public_key"] = new JsonObject { ["kty"] = "EC", ["crv"] = "P-256", ["x"] = device.KeyX, ["y"] = device.KeyY },
+                    ["attestation"] = Str(dev, "attestation"),
+                },
+            };
             return null;
         }
 
-        private static bool CodeMatches(ConsentRequestRecord record, string entered)
+        /// <summary>True when the object has exactly these members, each once. A duplicated member is refused because parsers disagree on which copy wins.</summary>
+        private static bool HasExactMembers(JsonElement o, string[] names)
+        {
+            if (o.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in o.EnumerateObject())
+            {
+                if (!seen.Add(p.Name))
+                {
+                    return false;
+                }
+            }
+            return seen.Count == names.Length && names.All(seen.Contains);
+        }
+
+        private bool CodeMatches(ConsentRequestRecord record, string entered)
         {
             var expected = Encoding.ASCII.GetBytes(record.BindingCodeHash);
-            var actual = Encoding.ASCII.GetBytes(HashCode(record.AuthReqId, entered));
+            var actual = Encoding.ASCII.GetBytes(HashCode(_codeKey, record.AuthReqId, entered));
             return CryptographicOperations.FixedTimeEquals(expected, actual);
         }
 
-        /// <summary>SHA-256 hex of <c>auth_req_id:code</c>. The id is the salt, and a code is only ever tried three times, so a stored hash is no easier to use than none.</summary>
-        public static string HashCode(string authReqId, string code)
-            => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(authReqId + ":" + code))).ToLowerInvariant();
+        /// <summary>
+        /// HMAC-SHA-256 (hex) of <c>auth_req_id:code</c> under a server secret. A six digit code has only 20 bits, so an unkeyed hash would let
+        /// anyone with a Redis dump or backup read the code back; with the key they would also need the secret store.
+        /// </summary>
+        public static string HashCode(byte[] key, string authReqId, string code)
+            => Convert.ToHexString(HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(authReqId + ":" + code))).ToLowerInvariant();
 
         // ---- views ----
 

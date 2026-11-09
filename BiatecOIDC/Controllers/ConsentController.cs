@@ -86,8 +86,11 @@ namespace BiatecOIDC.Controllers
                 case ReceiptOutcome.NotFound:
                     return NotFound(new { error = "not_found" });
                 case ReceiptOutcome.AlreadyDecided:
-                case ReceiptOutcome.Conflict:
                     return Conflict(new { error = "already_decided" });
+                case ReceiptOutcome.Conflict:
+                    // The request kept changing while we tried: it is still open and the attempt was not spent. Try again.
+                    Response.Headers.RetryAfter = "1";
+                    return Conflict(new { error = "conflict" });
                 case ReceiptOutcome.Expired:
                     return StatusCode(StatusCodes.Status410Gone, new { error = "expired" });
                 case ReceiptOutcome.DeviceInactive:

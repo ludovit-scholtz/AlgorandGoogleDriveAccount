@@ -9,6 +9,13 @@ namespace BiatecOIDC.Model
         /// </summary>
         public string? AttestationSigningKeyPem { get; set; }
 
+        /// <summary>
+        /// Secret that keys the stored hash of binding codes (HMAC-SHA-256). A six digit code has only 20 bits, so an unkeyed hash would
+        /// be no protection against a Redis dump. Leave empty to derive it from <see cref="AttestationSigningKeyPem"/>; set it to
+        /// rotate it independently. From the secret store, never a committed file.
+        /// </summary>
+        public string? BindingCodeKey { get; set; }
+
         /// <summary>The <c>kid</c> the attestation key has in the JWKS. Change it when the key is rotated.</summary>
         public string AttestationKeyId { get; set; } = "biatec-consent-1";
 

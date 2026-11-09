@@ -129,6 +129,52 @@ namespace BiatecOIDCTests
         }
 
         [Test]
+        public async Task Open_TheHourlyLimitIsRolling_NotAFixedWindow()
+        {
+            var limits = new ConsentLimits { MaxOpenPerUser = 100, MaxPendingPerClientOrigin = 100, MaxPerClientUserHour = 2, RetentionSeconds = 3600 };
+            Assert.That(await _store.TryOpenAsync(Record(n: 1), limits, Now), Is.EqualTo(OpenOutcome.Opened));
+            Assert.That(await _store.TryOpenAsync(Record(n: 2), limits, Now.AddMinutes(30)), Is.EqualTo(OpenOutcome.Opened));
+            // Across a clock-hour boundary the limit still holds: two requests were made within the last hour.
+            Assert.That(await _store.TryOpenAsync(Record(n: 3), limits, Now.AddMinutes(59)), Is.EqualTo(OpenOutcome.RateLimited));
+            // After the first one is more than an hour old there is room for exactly one more.
+            Assert.That(await _store.TryOpenAsync(Record(n: 4), limits, Now.AddMinutes(61)), Is.EqualTo(OpenOutcome.Opened));
+            Assert.That(await _store.TryOpenAsync(Record(n: 5), limits, Now.AddMinutes(62)), Is.EqualTo(OpenOutcome.RateLimited));
+        }
+
+        [Test]
+        public async Task Update_ToADecidedStatus_GivesTheSlotsBackInTheSameAtomicStep()
+        {
+            var limits = new ConsentLimits { MaxOpenPerUser = 1, MaxPendingPerClientOrigin = 1, MaxPerClientUserHour = 50, RetentionSeconds = 3600 };
+            var r = Record(n: 1);
+            await _store.TryOpenAsync(r, limits, Now);
+            Assert.That(await _store.TryOpenAsync(Record(n: 2), limits, Now), Is.EqualTo(OpenOutcome.UserCap));
+
+            // Not decided yet (a wrong code): the slot stays.
+            var read = (await _store.GetAsync(r.AuthReqId))!;
+            var wrong = (await _store.GetAsync(r.AuthReqId))!;
+            wrong.AttemptsRemaining = 2;
+            Assert.That(await _store.TryUpdateAsync(read, wrong), Is.True);
+            Assert.That(await _store.TryOpenAsync(Record(n: 3), limits, Now), Is.EqualTo(OpenOutcome.UserCap));
+
+            // Decided: the slot is free without any separate release call.
+            read = (await _store.GetAsync(r.AuthReqId))!;
+            var approved = (await _store.GetAsync(r.AuthReqId))!;
+            approved.Status = ConsentStatus.Approved;
+            Assert.That(await _store.TryUpdateAsync(read, approved), Is.True);
+            Assert.That(await _store.ListOpenIdsAsync(r.Sub, Now), Is.Empty);
+            Assert.That(await _store.TryOpenAsync(Record(n: 4), limits, Now), Is.EqualTo(OpenOutcome.Opened));
+        }
+
+        [Test]
+        public async Task TheOpenSets_AreGivenAnExpiry()
+        {
+            var r = Record(n: 1);
+            await _store.TryOpenAsync(r, Limits, Now);
+            var db = _redis!.GetDatabase();
+            Assert.That(await db.KeyTimeToLiveAsync("oidc:consent-open:" + r.Sub), Is.Not.Null);
+        }
+
+        [Test]
         public async Task Open_ADuplicateId_IsACollision_AndChangesNothing()
         {
             var r = Record(n: 1);

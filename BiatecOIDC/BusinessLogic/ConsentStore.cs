@@ -20,7 +20,7 @@ namespace BiatecOIDC.BusinessLogic
 
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-        // KEYS: 1 record, 2 user open set, 3 client+user+origin open set, 4 hourly counter
+        // KEYS: 1 record, 2 user open set, 3 client+user+origin open set, 4 rolling-hour set of recent requests
         // ARGV: 1 json, 2 id, 3 now, 4 expiry, 5 max per user, 6 max per origin, 7 max per hour, 8 record ttl seconds
         // Returns 0 opened, 1 user cap, 2 origin cap, 3 rate limited, 4 id collision.
         private const string OpenScript = @"
@@ -28,20 +28,29 @@ namespace BiatecOIDC.BusinessLogic
             redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', ARGV[3])
             if redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[5]) then return 1 end
             if redis.call('ZCARD', KEYS[3]) >= tonumber(ARGV[6]) then return 2 end
-            local n = tonumber(redis.call('GET', KEYS[4]) or '0')
-            if n >= tonumber(ARGV[7]) then return 3 end
+            redis.call('ZREMRANGEBYSCORE', KEYS[4], '-inf', tonumber(ARGV[3]) - 3600)
+            if redis.call('ZCARD', KEYS[4]) >= tonumber(ARGV[7]) then return 3 end
             if not redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[8]) then return 4 end
             redis.call('ZADD', KEYS[2], ARGV[4], ARGV[2])
             redis.call('ZADD', KEYS[3], ARGV[4], ARGV[2])
-            if redis.call('INCR', KEYS[4]) == 1 then redis.call('EXPIRE', KEYS[4], 3700) end
+            redis.call('ZADD', KEYS[4], ARGV[3], ARGV[2])
+            -- None of these sets outlives its last request by more than the record retention.
+            redis.call('EXPIRE', KEYS[2], ARGV[8])
+            redis.call('EXPIRE', KEYS[3], ARGV[8])
+            redis.call('EXPIRE', KEYS[4], 3700)
             return 0";
 
-        // KEYS: 1 record. ARGV: 1 expected version, 2 new json. Returns 1 when replaced.
+        // KEYS: 1 record, 2 user open set, 3 client+user+origin open set. ARGV: 1 expected version, 2 new json, 3 "1" to release the slots, 4 id.
+        // Returns 1 when replaced.
         private const string UpdateScript = @"
             local cur = redis.call('GET', KEYS[1])
             if not cur then return 0 end
             if cjson.decode(cur).version ~= tonumber(ARGV[1]) then return 0 end
             redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL')
+            if ARGV[3] == '1' then
+                redis.call('ZREM', KEYS[2], ARGV[4])
+                redis.call('ZREM', KEYS[3], ARGV[4])
+            end
             return 1";
 
         private readonly IConnectionMultiplexer _redis;
@@ -61,7 +70,7 @@ namespace BiatecOIDC.BusinessLogic
                     RecordPrefix + record.AuthReqId,
                     UserOpenPrefix + record.Sub,
                     OriginKey(record),
-                    RatePrefix + Hash(record.ClientId + "|" + record.Sub) + ":" + nowSeconds / 3600,
+                    RatePrefix + Hash(record.ClientId + "|" + record.Sub),
                 },
                 new RedisValue[]
                 {
@@ -93,9 +102,10 @@ namespace BiatecOIDC.BusinessLogic
         public async Task<bool> TryUpdateAsync(ConsentRequestRecord expected, ConsentRequestRecord updated)
         {
             updated.Version = expected.Version + 1;
+            var release = updated.IsDecided && !expected.IsDecided;
             var result = (long)await _redis.GetDatabase().ScriptEvaluateAsync(UpdateScript,
-                new RedisKey[] { RecordPrefix + expected.AuthReqId },
-                new RedisValue[] { expected.Version, JsonSerializer.Serialize(updated, JsonOptions) });
+                new RedisKey[] { RecordPrefix + expected.AuthReqId, UserOpenPrefix + expected.Sub, OriginKey(expected) },
+                new RedisValue[] { expected.Version, JsonSerializer.Serialize(updated, JsonOptions), release ? "1" : "0", expected.AuthReqId });
             return result == 1;
         }
 

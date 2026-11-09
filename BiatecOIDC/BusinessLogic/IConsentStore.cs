@@ -13,6 +13,8 @@ namespace BiatecOIDC.BusinessLogic
         /// <summary>
         /// Replaces <paramref name="expected"/> by <paramref name="updated"/> only if the stored version still equals
         /// <c>expected.Version</c>; the stored version becomes <c>expected.Version + 1</c>. False when someone else changed it first.
+        /// When the update turns a pending request into a decided one, its open slots are given back in the same atomic step, so a
+        /// failure between the two can never leave a decided request holding a slot.
         /// </summary>
         Task<bool> TryUpdateAsync(ConsentRequestRecord expected, ConsentRequestRecord updated);
 

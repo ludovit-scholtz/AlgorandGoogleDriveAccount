@@ -15,7 +15,7 @@ namespace BiatecOIDCTests
     {
         public readonly Dictionary<string, ConsentRequestRecord> Records = new();
         private readonly Dictionary<string, SortedSet<string>> _open = new();
-        private readonly Dictionary<string, int> _rate = new();
+        private readonly Dictionary<string, List<long>> _rate = new();
         public int ConflictsToInject;
 
         private static ConsentRequestRecord Copy(ConsentRequestRecord r) => JsonSerializer.Deserialize<ConsentRequestRecord>(JsonSerializer.Serialize(r))!;
@@ -29,15 +29,17 @@ namespace BiatecOIDCTests
             }
             var user = Bucket("u:" + record.Sub);
             var origin = Bucket("o:" + record.ClientId + "|" + record.Sub + "|" + record.Origin);
-            var rateKey = record.ClientId + "|" + record.Sub + "|" + n / 3600;
+            var rateKey = record.ClientId + "|" + record.Sub;
+            var recent = _rate.TryGetValue(rateKey, out var list) ? list : _rate[rateKey] = new List<long>();
+            recent.RemoveAll(t => t <= n - 3600);
             if (user.Count >= limits.MaxOpenPerUser) return Task.FromResult(OpenOutcome.UserCap);
             if (origin.Count >= limits.MaxPendingPerClientOrigin) return Task.FromResult(OpenOutcome.OriginCap);
-            if (_rate.GetValueOrDefault(rateKey) >= limits.MaxPerClientUserHour) return Task.FromResult(OpenOutcome.RateLimited);
+            if (recent.Count >= limits.MaxPerClientUserHour) return Task.FromResult(OpenOutcome.RateLimited);
             if (Records.ContainsKey(record.AuthReqId)) return Task.FromResult(OpenOutcome.IdCollision);
             Records[record.AuthReqId] = Copy(record);
             user.Add(record.AuthReqId);
             origin.Add(record.AuthReqId);
-            _rate[rateKey] = _rate.GetValueOrDefault(rateKey) + 1;
+            recent.Add(n);
             return Task.FromResult(OpenOutcome.Opened);
         }
 
@@ -57,6 +59,11 @@ namespace BiatecOIDCTests
             if (!Records.TryGetValue(expected.AuthReqId, out var cur) || cur.Version != expected.Version) return Task.FromResult(false);
             updated.Version = expected.Version + 1;
             Records[expected.AuthReqId] = Copy(updated);
+            if (updated.IsDecided && !expected.IsDecided)
+            {
+                Bucket("u:" + expected.Sub).Remove(expected.AuthReqId);
+                Bucket("o:" + expected.ClientId + "|" + expected.Sub + "|" + expected.Origin).Remove(expected.AuthReqId);
+            }
             return Task.FromResult(true);
         }
 
@@ -118,8 +125,13 @@ namespace BiatecOIDCTests
             _attestation.Dispose();
         }
 
+        private const string CodeKey = "test-binding-key";
+
         private ConsentService Service(ConsentConfiguration config)
-            => new(_store, _devices, _attestation, Options.Create(config), _time, NullLogger<ConsentService>.Instance);
+        {
+            config.BindingCodeKey ??= CodeKey;
+            return new(_store, _devices, _attestation, Options.Create(config), _time, NullLogger<ConsentService>.Instance);
+        }
 
         private static JsonElement Details(string groupHash = "BJPM", string amount = "5000.000000")
             => JsonDocument.Parse(new JsonArray(new JsonObject
@@ -192,7 +204,8 @@ namespace BiatecOIDCTests
             Assert.That(r.Interval, Is.EqualTo(2));
             var rec = _store.Records[r.AuthReqId];
             Assert.That(JsonSerializer.Serialize(rec), Does.Not.Contain(r.BindingCode).Or.Contain("ciba_"), "the stored record holds no plain code");
-            Assert.That(rec.BindingCodeHash, Is.EqualTo(ConsentService.HashCode(r.AuthReqId, r.BindingCode)));
+            Assert.That(rec.BindingCodeHash, Is.EqualTo(ConsentService.HashCode(System.Text.Encoding.UTF8.GetBytes(CodeKey), r.AuthReqId, r.BindingCode)));
+            Assert.That(rec.BindingCodeHash, Is.Not.EqualTo(ConsentService.HashCode(System.Text.Encoding.UTF8.GetBytes("another-key"), r.AuthReqId, r.BindingCode)), "the hash is keyed");
             Assert.That(rec.AttemptsRemaining, Is.EqualTo(3));
         }
 
@@ -215,6 +228,18 @@ namespace BiatecOIDCTests
             var svc = new ConsentService(_store, _devices, none, Options.Create(new ConsentConfiguration()), _time, NullLogger<ConsentService>.Instance);
             Assert.That((await svc.OpenAsync(Command())).Failure, Is.EqualTo(OpenConsentFailure.NotConfigured));
             Assert.That(_store.Records, Is.Empty);
+        }
+
+        [Test]
+        public async Task Open_FailsClosed_WithoutAKeyForTheBindingCodeHash()
+        {
+            var svc = new ConsentService(_store, _devices, _attestation, Options.Create(new ConsentConfiguration()), _time, NullLogger<ConsentService>.Instance);
+            Assert.That((await svc.OpenAsync(Command())).Failure, Is.EqualTo(OpenConsentFailure.NotConfigured));
+            // With only the attestation key configured the hash key is derived from it, so a deployment needs nothing extra.
+            using var signing = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var derived = new ConsentService(_store, _devices, _attestation,
+                Options.Create(new ConsentConfiguration { AttestationSigningKeyPem = signing.ExportPkcs8PrivateKeyPem() }), _time, NullLogger<ConsentService>.Instance);
+            Assert.That((await derived.OpenAsync(Command())).Failure, Is.EqualTo(OpenConsentFailure.None));
         }
 
         [Test]
@@ -244,6 +269,16 @@ namespace BiatecOIDCTests
                 ["origin not a url"] = c => c.Origin = "app.test",
                 ["origin javascript"] = c => c.Origin = "javascript:alert(1)",
                 ["origin with credentials"] = c => c.Origin = "https://u:p@app.test",
+                ["origin with fragment"] = c => c.Origin = "https://app.test/#x",
+                ["origin with query"] = c => c.Origin = "https://app.test?x=1",
+                ["origin with a space"] = c => c.Origin = "https://app .test",
+                ["origin with a unicode host"] = c => c.Origin = "https://b\u00fccher.test",
+                ["origin with a control character"] = c => c.Origin = "https://app.test\u0000",
+                ["message with a control character"] = c => c.BindingMessage = "line\nbreak",
+                ["message with a bidi override"] = c => c.BindingMessage = "pay \u202eevil",
+                ["display name too long"] = c => c.ClientDisplayName = new string('x', 101),
+                ["scope too long"] = c => c.Scope = new string('x', 201),
+                ["client id too long"] = c => c.ClientId = new string('x', 201),
                 ["empty origin"] = c => c.Origin = "",
                 ["long message"] = c => c.BindingMessage = new string('x', 141),
                 ["details not an array"] = c => c.AuthorizationDetails = JsonDocument.Parse("{}").RootElement,
@@ -259,6 +294,36 @@ namespace BiatecOIDCTests
                 Assert.That(r.Failure, Is.EqualTo(OpenConsentFailure.InvalidRequest), name);
             }
             Assert.That(_store.Records, Is.Empty);
+        }
+
+        [TestCase("https://app.test", "https://app.test")]
+        [TestCase("https://app.test/", "https://app.test")]
+        [TestCase("HTTPS://APP.TEST", "https://app.test")]
+        [TestCase("https://app.test:443", "https://app.test")]
+        [TestCase("http://app.test:80/", "http://app.test")]
+        [TestCase("https://app.test:8443", "https://app.test:8443")]
+        [TestCase("https://xn--bcher-kva.test", "https://xn--bcher-kva.test")]
+        public void Origins_HaveOneSpelling(string input, string expected)
+            => Assert.That(ConsentService.NormalizeOrigin(input), Is.EqualTo(expected));
+
+        [Test]
+        public async Task Open_TheOriginCapCannotBeSidesteppedByASpelling()
+        {
+            var svc = Service(new ConsentConfiguration { MaxPendingPerClientOrigin = 2, MaxOpenRequestsPerUser = 100 });
+            Assert.That((await svc.OpenAsync(Command(c => c.Origin = "https://app.test"))).Failure, Is.EqualTo(OpenConsentFailure.None));
+            Assert.That((await svc.OpenAsync(Command(c => c.Origin = "HTTPS://APP.TEST/"))).Failure, Is.EqualTo(OpenConsentFailure.None));
+            Assert.That((await svc.OpenAsync(Command(c => c.Origin = "https://app.test:443"))).Failure, Is.EqualTo(OpenConsentFailure.OriginCap));
+            Assert.That(_store.Records.Values.Select(r => r.Origin).Distinct(), Is.EqualTo(new[] { "https://app.test" }));
+        }
+
+        [Test]
+        public async Task Open_AnUnverifiedClientCannotPassItselfOffAsAnotherEntity()
+        {
+            var r = await Open(c => { c.ClientVerified = false; c.ClientEntityId = "https://chat.biatec.io"; c.ClientId = "evil-client"; });
+            Assert.That(_store.Records[r.AuthReqId].ClientEntityId, Is.EqualTo("evil-client"));
+            var view = (await _svc.ListOpenForDeviceAsync(_device)).Single();
+            Assert.That(view["client"]!["entity_id"]!.GetValue<string>(), Is.EqualTo("evil-client"));
+            Assert.That(view.ToJsonString(), Does.Not.Contain("chat.biatec.io"));
         }
 
         [Test]
@@ -355,10 +420,19 @@ namespace BiatecOIDCTests
             Assert.That(await _svc.ListOpenForDeviceAsync(_device), Is.Empty);
         }
 
+        [Test]
+        public async Task DeviceView_IsEmptyForADeviceInItsActivationDelay_EvenAtTheServiceLevel()
+        {
+            var r = await Open();
+            _device.ActiveAt = Start.ToUnixTimeSeconds() + 60;
+            Assert.That(await _svc.ListOpenForDeviceAsync(_device), Is.Empty);
+            Assert.That(await _svc.GetForDeviceAsync(_device, r.AuthReqId), Is.Null);
+        }
+
         // ---- receipts ----
 
         [Test]
-        public async Task Approve_WithTheRightCode_IsRecordedOnce_AndTheReceiptIsKeptVerbatim()
+        public async Task Approve_WithTheRightCode_IsRecordedOnce_AndTheStoredReceiptIsRebuiltFromTheVerifiedMembers()
         {
             var open = await Open();
             var receipt = Receipt(open.AuthReqId, "approve", open.BindingCode);
@@ -366,7 +440,7 @@ namespace BiatecOIDCTests
             Assert.That(result.Outcome, Is.EqualTo(ReceiptOutcome.Approved));
             var rec = _store.Records[open.AuthReqId];
             Assert.That(rec.Status, Is.EqualTo(ConsentStatus.Approved));
-            Assert.That(rec.ReceiptJson, Is.EqualTo(receipt.GetRawText()));
+            Assert.That(JsonCanonicalizer.Canonicalize(rec.ReceiptJson!), Is.EqualTo(JsonCanonicalizer.Canonicalize(receipt)));
             Assert.That(rec.DecidedByDeviceKid, Is.EqualTo("device-0001"));
             Assert.That(await _svc.ListOpenForDeviceAsync(_device), Is.Empty, "a decided request is no longer pending");
             Assert.That(rec.ReceiptJson, Does.Not.Contain("\"bindingCodeHash\""));
@@ -589,6 +663,51 @@ namespace BiatecOIDCTests
             Assert.That(_store.Records[second.AuthReqId].Status, Is.EqualTo(ConsentStatus.Pending));
         }
 
+        [Test]
+        public async Task Receipt_WithExtraOrDuplicatedMembers_IsRefused_AndNothingExtraIsEverStored()
+        {
+            var open = await Open();
+            var good = Receipt(open.AuthReqId, "approve", open.BindingCode).GetRawText();
+
+            string With(string find, string replace) => good.Replace(find, replace);
+            var variants = new Dictionary<string, string>
+            {
+                ["extra top-level member"] = good[..^1] + ",\"note\":\"x\"}",
+                ["duplicated top-level member"] = good[..^1] + ",\"alg\":\"ES256\"}",
+                ["duplicated signature"] = good[..^1] + ",\"signature\":\"AAAA\"}",
+                ["extra signed member"] = With("\"binding_message\":\"\"", "\"binding_message\":\"\",\"extra\":1"),
+                ["extra device member"] = With("\"device\":{", "\"device\":{\"model\":\"x\","),
+                ["extra key member"] = With("\"public_key\":{", "\"public_key\":{\"d\":\"x\","),
+                ["missing issued_at"] = With("\"issued_at\":" + Start.ToUnixTimeSeconds() + ",", ""),
+            };
+            foreach (var (name, json) in variants)
+            {
+                var r = await _svc.SubmitReceiptAsync(_device, open.AuthReqId, JsonDocument.Parse(json).RootElement, Issuer);
+                Assert.That(r.Outcome, Is.EqualTo(ReceiptOutcome.InvalidReceipt), name);
+            }
+            Assert.That(_store.Records[open.AuthReqId].ReceiptJson, Is.Null);
+            Assert.That(_store.Records[open.AuthReqId].AttemptsRemaining, Is.EqualTo(3));
+        }
+
+        [Test]
+        public async Task APendingRecord_NeverClaimsADecidingDevice()
+        {
+            var open = await Open();
+            await _svc.SubmitReceiptAsync(_device, open.AuthReqId, Receipt(open.AuthReqId, "approve", WrongCode(open.BindingCode)), Issuer);
+            Assert.That(_store.Records[open.AuthReqId].DecidedByDeviceKid, Is.Null);
+            Assert.That(_store.Records[open.AuthReqId].DecidedAt, Is.Null);
+        }
+
+        [Test]
+        public async Task ALostRaceThatGivesUp_ReportsAConflict_NotADecision()
+        {
+            var open = await Open();
+            _store.ConflictsToInject = 50;
+            var r = await _svc.SubmitReceiptAsync(_device, open.AuthReqId, Receipt(open.AuthReqId, "approve", open.BindingCode), Issuer);
+            Assert.That(r.Outcome, Is.EqualTo(ReceiptOutcome.Conflict));
+            Assert.That(r.Outcome, Is.Not.EqualTo(ReceiptOutcome.AlreadyDecided));
+        }
+
         // ---- receipt retrieval (issue 15: subject-scoped) ----
 
         private async Task<string> Approved()
@@ -633,7 +752,7 @@ namespace BiatecOIDCTests
             await _svc.SubmitReceiptAsync(_device, open.AuthReqId, deny, Issuer);
             var (lookup, json) = await _svc.GetReceiptAsync(new ReceiptCaller { Sub = "user-1", ClientId = "chat" }, open.AuthReqId);
             Assert.That(lookup, Is.EqualTo(ReceiptLookup.Found));
-            Assert.That(json, Is.EqualTo(deny.GetRawText()));
+            Assert.That(JsonCanonicalizer.Canonicalize(json!), Is.EqualTo(JsonCanonicalizer.Canonicalize(deny)));
         }
     }
 }
