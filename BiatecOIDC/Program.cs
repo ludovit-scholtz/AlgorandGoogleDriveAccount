@@ -204,6 +204,9 @@ namespace BiatecOIDC
             // IJwtIssuerService.ResolveClientAsync for how statically- and dynamically-registered clients
             // are merged (static config always wins on a matching id).
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IDynamicClientStore, BiatecOIDC.BusinessLogic.DynamicClientStore>();
+            builder.Services.Configure<BiatecOIDC.Model.DevicesConfiguration>(builder.Configuration.GetSection("Devices"));
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IDeviceStore, BiatecOIDC.BusinessLogic.DeviceStore>();
+            Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.TryAddSingleton(builder.Services, TimeProvider.System);
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IJwtIssuerService, BiatecOIDC.BusinessLogic.JwtIssuerService>();
 
             // Wallet API (WalletController): signs transaction groups gated on the "sign" claim and
