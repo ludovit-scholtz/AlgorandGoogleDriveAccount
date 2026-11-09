@@ -161,6 +161,32 @@ namespace BiatecOIDC.Model
         NotReady,
     }
 
+    /// <summary>Answer of the CIBA token endpoint for a request (RFC 8628 3.5, CIBA 11).</summary>
+    public enum PollOutcome
+    {
+        /// <summary><c>authorization_pending</c></summary>
+        Pending,
+        /// <summary><c>slow_down</c>: the client polled faster than the announced interval; the interval grew by 5 seconds.</summary>
+        SlowDown,
+        /// <summary><c>access_denied</c>: denied, or the binding code failed.</summary>
+        AccessDenied,
+        /// <summary><c>expired_token</c></summary>
+        Expired,
+        /// <summary><c>invalid_grant</c>: unknown, or not this client's request (indistinguishable on purpose).</summary>
+        InvalidGrant,
+        /// <summary>Approved: the receipt is available. The elevated token is issued by the caller.</summary>
+        Approved,
+    }
+
+    public sealed class PollResult
+    {
+        public PollOutcome Outcome { get; set; }
+        /// <summary>The interval the client must now observe, in seconds.</summary>
+        public int Interval { get; set; }
+        /// <summary>The approved request (its receipt, bound hash, subject, scope and resource), only when <see cref="Outcome"/> is <see cref="PollOutcome.Approved"/>.</summary>
+        public ConsentRequestRecord? Request { get; set; }
+    }
+
     /// <summary>Who asks for a receipt: a bearer token's subject and client, or a confidential client's own credentials.</summary>
     public sealed class ReceiptCaller
     {

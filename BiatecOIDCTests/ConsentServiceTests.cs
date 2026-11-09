@@ -708,6 +708,111 @@ namespace BiatecOIDCTests
             Assert.That(r.Outcome, Is.Not.EqualTo(ReceiptOutcome.AlreadyDecided));
         }
 
+        // ---- polling (issue 15: slow_down) ----
+
+        [Test]
+        public async Task Poll_AtTheAnnouncedInterval_IsPending_AndAFastPollIsSlowedDownByFiveSeconds()
+        {
+            var open = await Open();
+            var first = await _svc.PollAsync("chat", open.AuthReqId);
+            Assert.That((first.Outcome, first.Interval), Is.EqualTo((PollOutcome.Pending, 2)));
+
+            // Again at once: too fast. The interval grows by 5 seconds (RFC 8628 3.5, CIBA 11).
+            var fast = await _svc.PollAsync("chat", open.AuthReqId);
+            Assert.That((fast.Outcome, fast.Interval), Is.EqualTo((PollOutcome.SlowDown, 7)));
+            var fastAgain = await _svc.PollAsync("chat", open.AuthReqId);
+            Assert.That((fastAgain.Outcome, fastAgain.Interval), Is.EqualTo((PollOutcome.SlowDown, 12)));
+
+            // Waiting the new interval is fine, and the interval does not shrink again.
+            _time.Now = Start.AddSeconds(12);
+            var patient = await _svc.PollAsync("chat", open.AuthReqId);
+            Assert.That((patient.Outcome, patient.Interval), Is.EqualTo((PollOutcome.Pending, 12)));
+            Assert.That(_store.Records[open.AuthReqId].Interval, Is.EqualTo(12));
+        }
+
+        [Test]
+        public async Task Poll_OneSecondIntoATwoSecondInterval_IsTooFast()
+        {
+            var open = await Open();
+            await _svc.PollAsync("chat", open.AuthReqId);
+            _time.Now = Start.AddSeconds(1);
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.SlowDown));
+        }
+
+        [Test]
+        public async Task Poll_WhenTheIntervalHasPassed_IsPending()
+        {
+            var open = await Open();
+            await _svc.PollAsync("chat", open.AuthReqId);
+            _time.Now = Start.AddSeconds(2);
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.Pending));
+        }
+
+        [Test]
+        public async Task Poll_OnlyTheClientThatOpenedTheRequestMayPollIt()
+        {
+            var open = await Open();
+            Assert.That((await _svc.PollAsync("another-client", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.InvalidGrant));
+            Assert.That((await _svc.PollAsync("chat", "ciba_unknown")).Outcome, Is.EqualTo(PollOutcome.InvalidGrant));
+            Assert.That((await _svc.PollAsync("", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.InvalidGrant));
+            Assert.That(_store.Records[open.AuthReqId].NextPollAt, Is.EqualTo(Start.ToUnixTimeSeconds()), "a stranger's poll changes nothing");
+        }
+
+        [Test]
+        public async Task Poll_MapsEveryDecisionToTheTokenEndpointAnswer()
+        {
+            var denied = await Open();
+            await _svc.SubmitReceiptAsync(_device, denied.AuthReqId, Receipt(denied.AuthReqId, "deny", ""), Issuer);
+            Assert.That((await _svc.PollAsync("chat", denied.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.AccessDenied));
+
+            var locked = await Open();
+            var wrong = WrongCode(locked.BindingCode);
+            for (var i = 0; i < 3; i++)
+            {
+                await _svc.SubmitReceiptAsync(_device, locked.AuthReqId, Receipt(locked.AuthReqId, "approve", wrong), Issuer);
+            }
+            Assert.That(_store.Records[locked.AuthReqId].Status, Is.EqualTo(ConsentStatus.CodeLocked));
+            Assert.That((await _svc.PollAsync("chat", locked.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.AccessDenied), "denied before the phone even posts code_failed");
+            await _svc.SubmitReceiptAsync(_device, locked.AuthReqId, Receipt(locked.AuthReqId, "code_failed", wrong), Issuer);
+            Assert.That((await _svc.PollAsync("chat", locked.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.AccessDenied));
+
+            var approved = await Open();
+            await _svc.SubmitReceiptAsync(_device, approved.AuthReqId, Receipt(approved.AuthReqId, "approve", approved.BindingCode), Issuer);
+            var result = await _svc.PollAsync("chat", approved.AuthReqId);
+            Assert.That(result.Outcome, Is.EqualTo(PollOutcome.Approved));
+            Assert.That(result.Request!.ReceiptJson, Is.Not.Null);
+            Assert.That(result.Request.BoundHash, Is.EqualTo("BJPM"));
+
+            var pending = await Open();
+            _time.Now = Start.AddSeconds(301);
+            Assert.That((await _svc.PollAsync("chat", pending.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.Expired));
+        }
+
+        [Test]
+        public async Task Poll_AnApprovalCollectedAfterTheWindow_YieldsNothing()
+        {
+            var open = await Open();
+            await _svc.SubmitReceiptAsync(_device, open.AuthReqId, Receipt(open.AuthReqId, "approve", open.BindingCode), Issuer);
+            _time.Now = Start.AddSeconds(299);
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.Approved));
+            _time.Now = Start.AddSeconds(300);
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.Expired));
+        }
+
+        [Test]
+        public async Task Poll_ALostRace_IsRetried_AndNeverRecordsAHalfStep()
+        {
+            var open = await Open();
+            _store.ConflictsToInject = 2;
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.Pending));
+
+            var second = await Open();
+            _store.ConflictsToInject = 50;
+            var gaveUp = await _svc.PollAsync("chat", second.AuthReqId);
+            Assert.That(gaveUp.Outcome, Is.EqualTo(PollOutcome.SlowDown), "a storm of competing polls is answered as too fast, never as a decision");
+            Assert.That(gaveUp.Interval, Is.GreaterThan(2));
+        }
+
         // ---- receipt retrieval (issue 15: subject-scoped) ----
 
         private async Task<string> Approved()
