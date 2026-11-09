@@ -318,6 +318,11 @@ namespace BiatecOIDC.BusinessLogic
                 switch (record.Status)
                 {
                     case ConsentStatus.Approved:
+                        // A consent is valid only inside its window (rule 5): an approval that is collected late yields nothing.
+                        if (record.Expiry <= now)
+                        {
+                            return new PollResult { Outcome = PollOutcome.Expired, Interval = record.Interval };
+                        }
                         return new PollResult { Outcome = PollOutcome.Approved, Interval = record.Interval, Request = record };
                     case ConsentStatus.Denied:
                     case ConsentStatus.CodeFailed:

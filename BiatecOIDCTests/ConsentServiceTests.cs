@@ -789,9 +789,12 @@ namespace BiatecOIDCTests
         }
 
         [Test]
-        public async Task Poll_AnExpiredRequestIsNeverApproved_EvenIfALateReceiptWasStored()
+        public async Task Poll_AnApprovalCollectedAfterTheWindow_YieldsNothing()
         {
             var open = await Open();
+            await _svc.SubmitReceiptAsync(_device, open.AuthReqId, Receipt(open.AuthReqId, "approve", open.BindingCode), Issuer);
+            _time.Now = Start.AddSeconds(299);
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.Approved));
             _time.Now = Start.AddSeconds(300);
             Assert.That((await _svc.PollAsync("chat", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.Expired));
         }
