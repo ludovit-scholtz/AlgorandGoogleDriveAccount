@@ -423,6 +423,10 @@ namespace BiatecOIDC.BusinessLogic
             {
                 return "entry must be step-up or direct";
             }
+            if (c.TokenClaims is { } snapshot && ConsentTokenClaims.Validate(snapshot) is { } snapshotProblem)
+            {
+                return snapshotProblem;
+            }
             normalizedOrigin = NormalizeOrigin(c.Origin);
             if (normalizedOrigin is null)
             {

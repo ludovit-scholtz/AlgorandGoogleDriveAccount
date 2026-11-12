@@ -17,20 +17,29 @@ namespace BiatecOIDC.Helper
         public const string AuthReqIdClaim = "consent_auth_req_id";
         public const string HashClaim = "consent_hash";
 
-        private static readonly HashSet<string> Allowed = new(StringComparer.Ordinal)
+        /// <summary>
+        /// The wallet scopes a consent can grant. <c>rekey</c> never travels: it permanently reassigns control of an account, so it is not
+        /// something a consent for one action may carry.
+        /// </summary>
+        public static readonly string[] GrantableWalletScopes = { "sign", "manage-limits" };
+
+        // Identity only. The scope and the wallet claims are rebuilt from the consent, the subject is the consent's own: none of them is copied.
+        // The two encrypted provider-token claims are kept deliberately: the wallet needs them to reach the user's cloud storage (they are
+        // encrypted for the user and not usable outside this service), and without them an elevated token could not sign anything.
+        private static readonly HashSet<string> Identity = new(StringComparer.Ordinal)
         {
-            "sub", ClaimTypes.NameIdentifier,
             "email", ClaimTypes.Email,
             "name", ClaimTypes.Name,
             "preferred_username",
-            "scope",
             "primary_seed_address",
             "email_verified",
-            "sign", "manage-limits", "rekey",
             ProviderAccessTokenProtector.ClaimType,
             ProviderAccessTokenProtector.RefreshClaimType,
             AuthSchemeNames.IdpClaimType,
         };
+
+        private const int MaxSnapshotClaims = 24;
+        private const int MaxSnapshotValueLength = 8192;
 
         /// <summary>
         /// The allowlisted claims, once each, for storing with a consent request. Taken from the <b>raw</b> claims of the challenged token
@@ -42,7 +51,7 @@ namespace BiatecOIDC.Helper
             var result = new List<ClaimSnapshot>();
             foreach (var (type, value) in rawClaims)
             {
-                if (Allowed.Contains(type) && value?.ToString() is { Length: > 0 } text)
+                if (Identity.Contains(type) && value?.ToString() is { Length: > 0 } text)
                 {
                     result.Add(new ClaimSnapshot { Type = type, Value = text });
                 }
@@ -50,7 +59,25 @@ namespace BiatecOIDC.Helper
             return result;
         }
 
-        /// <summary>True when <paramref name="type"/> may be copied into an elevated token.</summary>
-        public static bool IsAllowed(string type) => Allowed.Contains(type);
+        /// <summary>True when <paramref name="type"/> is an identity claim that may be copied into an elevated token.</summary>
+        public static bool IsIdentityClaim(string type) => Identity.Contains(type);
+
+        /// <summary>Why a snapshot handed to a consent request is not acceptable, or null: identity claims only, once each, bounded.</summary>
+        public static string? Validate(IReadOnlyCollection<ClaimSnapshot> snapshot)
+        {
+            if (snapshot.Count > MaxSnapshotClaims)
+            {
+                return "too many token claims";
+            }
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var c in snapshot)
+            {
+                if (!Identity.Contains(c.Type) || string.IsNullOrEmpty(c.Value) || c.Value.Length > MaxSnapshotValueLength || !seen.Add(c.Type))
+                {
+                    return "token claims must be identity claims, once each";
+                }
+            }
+            return null;
+        }
     }
 }

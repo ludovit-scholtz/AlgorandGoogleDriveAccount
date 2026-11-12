@@ -147,7 +147,7 @@ namespace BiatecOIDCTests
                 Sub = "user-1", ClientId = "chat", ClientEntityId = "https://chat.test", ClientVerified = true, ClientDisplayName = "Biatec Chat",
                 ClientDomain = "chat.test", Entry = "step-up", Origin = "https://app.test", Scope = "sign", AuthorizationDetails = Details(),
                 Resource = "https://mcp.biatec.io/tools",
-                TokenClaims = new List<ClaimSnapshot> { new() { Type = "sub", Value = "user-1" }, new() { Type = "sign", Value = "true" } },
+                TokenClaims = new List<ClaimSnapshot> { new() { Type = "email", Value = "user@example.com" }, new() { Type = "primary_seed_address", Value = "SEED" } },
             };
             tweak?.Invoke(c);
             return c;
@@ -326,6 +326,17 @@ namespace BiatecOIDCTests
             var view = (await _svc.ListOpenForDeviceAsync(_device)).Single();
             Assert.That(view["client"]!["entity_id"]!.GetValue<string>(), Is.EqualTo("evil-client"));
             Assert.That(view.ToJsonString(), Does.Not.Contain("chat.biatec.io"));
+        }
+
+        [Test]
+        public async Task Open_RefusesATokenSnapshotThatIsNotIdentityOnly()
+        {
+            foreach (var bad in new[] { ("sub", "someone-else"), ("sign", "true"), ("rekey", "true"), ("scope", "sign rekey"), ("acr", "x") })
+            {
+                var r = await _svc.OpenAsync(Command(c => c.TokenClaims = new List<ClaimSnapshot> { new() { Type = bad.Item1, Value = bad.Item2 } }));
+                Assert.That(r.Failure, Is.EqualTo(OpenConsentFailure.InvalidRequest), bad.Item1);
+            }
+            Assert.That(_store.Records, Is.Empty);
         }
 
         [Test]
@@ -784,7 +795,7 @@ namespace BiatecOIDCTests
             Assert.That(result.Outcome, Is.EqualTo(PollOutcome.Approved));
             Assert.That(result.Request!.ReceiptJson, Is.Not.Null);
             Assert.That(result.Request.BoundHash, Is.EqualTo("BJPM"));
-            Assert.That(result.Request.TokenClaims!.Select(c => c.Type), Is.EqualTo(new[] { "sub", "sign" }));
+            Assert.That(result.Request.TokenClaims!.Select(c => c.Type), Is.EqualTo(new[] { "email", "primary_seed_address" }));
 
             var pending = await Open();
             _time.Now = Start.AddSeconds(301);

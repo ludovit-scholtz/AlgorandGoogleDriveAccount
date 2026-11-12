@@ -55,7 +55,8 @@ namespace BiatecOIDC.Controllers
             var token = BearerTokenHelper.ExtractBearerToken(Request);
             var validation = string.IsNullOrWhiteSpace(token) ? default : _jwt.ValidateBearerAccessToken(token);
             var sub = BearerClaims.Value(validation, "sub");
-            if (string.IsNullOrEmpty(sub))
+            // A consent token is for one approved action; enrolling a device needs an ordinary login (protocol rule 7).
+            if (string.IsNullOrEmpty(sub) || BearerClaims.Value(validation, "acr") == ConsentTokenClaims.Acr)
             {
                 return Unauthorized();
             }

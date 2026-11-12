@@ -54,6 +54,8 @@ namespace BiatecOIDC.Controllers
             IConsentAttestationService? consentAttestation = null,
             ICibaTokenGrant? cibaTokenGrant = null)
         {
+            // Resolved per request from the service provider (below) when not given, so that unrelated endpoints of this controller do
+            // not build the consent stack (and need its Redis) on every call.
             _cibaTokenGrant = cibaTokenGrant;
             _consentAttestation = consentAttestation;
             _jwtIssuerService = jwtIssuerService;
@@ -1296,7 +1298,8 @@ namespace BiatecOIDC.Controllers
         /// </summary>
         private async Task<IActionResult> CibaTokenAsync(IFormCollection form)
         {
-            if (_cibaTokenGrant is null)
+            var grant = _cibaTokenGrant ?? HttpContext.RequestServices?.GetService(typeof(ICibaTokenGrant)) as ICibaTokenGrant;
+            if (grant is null)
             {
                 return BuildTokenError("unsupported_grant_type", "The CIBA grant is not enabled on this server.", 400);
             }
@@ -1304,11 +1307,13 @@ namespace BiatecOIDC.Controllers
             var client = await _jwtIssuerService.AuthenticateConfidentialClientAsync(Request.Headers.Authorization.ToString(), form["client_id"].ToString(), form["client_secret"].ToString());
             if (client is null)
             {
+                Response.Headers.CacheControl = "no-store";
+                Response.Headers.Pragma = "no-cache";
                 Response.Headers.WWWAuthenticate = "Basic realm=\"biatec\"";
                 return BuildTokenError("invalid_client", "Client authentication failed.", 401);
             }
 
-            var result = await _cibaTokenGrant.RedeemAsync(client, form["auth_req_id"].ToString(), form["resource"].ToString());
+            var result = await grant.RedeemAsync(client, form["auth_req_id"].ToString(), form["resource"].ToString());
             Response.Headers.CacheControl = "no-store";
             Response.Headers.Pragma = "no-cache";
             if (result.Body is not null)

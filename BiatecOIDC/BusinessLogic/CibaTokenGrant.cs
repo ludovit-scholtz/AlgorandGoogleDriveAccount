@@ -69,9 +69,10 @@ namespace BiatecOIDC.BusinessLogic
             var request = poll.Request!;
             var now = _time.GetUtcNow();
             var lifetime = TimeSpan.FromSeconds(Math.Max(1, _config.ElevatedTokenSeconds));
+            // Subject and scope are the consent's own; the snapshot supplies identity claims only.
             var token = _jwt.IssueConsentAccessToken(
                 request.TokenClaims!.Select(c => new System.Security.Claims.Claim(c.Type, c.Value)),
-                client.ClientId, request.Resource, request.AuthReqId, request.BoundHash, now, lifetime);
+                request.Sub, request.Scope, client.ClientId, request.Resource, request.AuthReqId, request.BoundHash, now, lifetime);
 
             // No refresh token and no ID token: an elevated token is for the bound action only.
             return new CibaGrantResult

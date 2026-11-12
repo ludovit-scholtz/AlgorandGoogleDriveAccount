@@ -1076,17 +1076,30 @@ namespace BiatecOIDC.BusinessLogic
             return result.Success && result.Client is { IsPublicClient: false } client ? client : null;
         }
 
-        public string IssueConsentAccessToken(IEnumerable<Claim> claims, string clientId, string? resource, string authReqId, string boundHash, DateTimeOffset now, TimeSpan lifetime)
+        public string IssueConsentAccessToken(IEnumerable<Claim> claims, string sub, string scope, string clientId, string? resource, string authReqId, string boundHash, DateTimeOffset now, TimeSpan lifetime)
         {
             var issued = new List<Claim>();
             foreach (var claim in claims)
             {
-                // Only the allowlisted claims of the challenged token travel; the client and consent claims are set below, never copied.
-                if (ConsentTokenClaims.IsAllowed(claim.Type))
+                // Only the identity claims of the challenged token travel. Subject and scope are the consent's own (below), and the
+                // client and consent claims are never copied.
+                if (ConsentTokenClaims.IsIdentityClaim(claim.Type))
                 {
-                    issued.Add(new Claim(claim.Type, claim.Value, claim.ValueType));
+                    var valueType = claim.Type == "email_verified" ? ClaimValueTypes.Boolean : claim.ValueType;
+                    issued.Add(new Claim(claim.Type, claim.Value, valueType));
                 }
             }
+            issued.Add(new Claim(JwtRegisteredClaimNames.Sub, sub));
+            var granted = scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).ToArray();
+            issued.Add(new Claim("scope", string.Join(' ', granted)));
+            foreach (var walletScope in ConsentTokenClaims.GrantableWalletScopes)
+            {
+                if (granted.Contains(walletScope, StringComparer.Ordinal))
+                {
+                    issued.Add(new Claim(walletScope, "true"));
+                }
+            }
+            issued.Add(new Claim(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
             issued.Add(new Claim("client_id", clientId));
             issued.Add(new Claim("token_use", "access_token"));
             issued.Add(new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")));
