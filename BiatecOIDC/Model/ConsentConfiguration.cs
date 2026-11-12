@@ -37,6 +37,9 @@ namespace BiatecOIDC.Model
         /// <summary>Binding code attempts in total within a request (protocol section 7: three).</summary>
         public int MaxWrongCodes { get; set; } = 3;
 
+        /// <summary>Lifetime of the elevated access token in seconds (protocol: 300).</summary>
+        public int ElevatedTokenSeconds { get; set; } = 300;
+
         /// <summary>Announced polling interval in seconds.</summary>
         public int PollIntervalSeconds { get; set; } = 2;
 

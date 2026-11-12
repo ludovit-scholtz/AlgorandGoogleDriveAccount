@@ -39,6 +39,7 @@ namespace BiatecOIDC.Controllers
 
         private readonly IJwtIssuerService _jwtIssuerService;
         private readonly IConsentAttestationService? _consentAttestation;
+        private readonly ICibaTokenGrant? _cibaTokenGrant;
         private readonly IDistributedCache _cache;
         private readonly ICloudStorageProviderCatalog _providerCatalog;
         private readonly ICloudAccountRepository _accountRepository;
@@ -50,8 +51,12 @@ namespace BiatecOIDC.Controllers
             ICloudStorageProviderCatalog providerCatalog,
             ICloudAccountRepository accountRepository,
             IOptionsMonitor<MockCloudServiceConfiguration> mockConfig,
-            IConsentAttestationService? consentAttestation = null)
+            IConsentAttestationService? consentAttestation = null,
+            ICibaTokenGrant? cibaTokenGrant = null)
         {
+            // Resolved per request from the service provider (below) when not given, so that unrelated endpoints of this controller do
+            // not build the consent stack (and need its Redis) on every call.
+            _cibaTokenGrant = cibaTokenGrant;
             _consentAttestation = consentAttestation;
             _jwtIssuerService = jwtIssuerService;
             _cache = cache;
@@ -1259,6 +1264,11 @@ namespace BiatecOIDC.Controllers
             }
 
             var form = await Request.ReadFormAsync();
+            if (string.Equals(form["grant_type"].ToString(), ICibaTokenGrant.GrantType, StringComparison.Ordinal))
+            {
+                return await CibaTokenAsync(form);
+            }
+
             var tokenRequest = new OidcTokenRequest
             {
                 GrantType = form["grant_type"].ToString(),
@@ -1280,6 +1290,43 @@ namespace BiatecOIDC.Controllers
             Response.Headers.CacheControl = "no-store";
             Response.Headers.Pragma = "no-cache";
             return Ok(result.Response);
+        }
+
+        /// <summary>
+        /// The CIBA token grant (poll mode) of the Biatec consent protocol. Only a confidential client that opened the request may poll it;
+        /// <c>authorization_pending</c> and <c>slow_down</c> carry the interval to observe.
+        /// </summary>
+        private async Task<IActionResult> CibaTokenAsync(IFormCollection form)
+        {
+            var grant = _cibaTokenGrant ?? HttpContext.RequestServices?.GetService(typeof(ICibaTokenGrant)) as ICibaTokenGrant;
+            if (grant is null)
+            {
+                return BuildTokenError("unsupported_grant_type", "The CIBA grant is not enabled on this server.", 400);
+            }
+
+            var client = await _jwtIssuerService.AuthenticateConfidentialClientAsync(Request.Headers.Authorization.ToString(), form["client_id"].ToString(), form["client_secret"].ToString());
+            if (client is null)
+            {
+                Response.Headers.CacheControl = "no-store";
+                Response.Headers.Pragma = "no-cache";
+                Response.Headers.WWWAuthenticate = "Basic realm=\"biatec\"";
+                return BuildTokenError("invalid_client", "Client authentication failed.", 401);
+            }
+
+            var result = await grant.RedeemAsync(client, form["auth_req_id"].ToString(), form["resource"].ToString());
+            Response.Headers.CacheControl = "no-store";
+            Response.Headers.Pragma = "no-cache";
+            if (result.Body is not null)
+            {
+                return Ok(result.Body);
+            }
+
+            var error = new System.Text.Json.Nodes.JsonObject { ["error"] = result.Error, ["error_description"] = result.Description };
+            if (result.Interval is { } interval)
+            {
+                error["interval"] = interval;
+            }
+            return StatusCode(result.Status, error);
         }
 
         /// <summary>

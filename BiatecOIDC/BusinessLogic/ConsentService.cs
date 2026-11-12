@@ -28,7 +28,7 @@ namespace BiatecOIDC.BusinessLogic
         /// or locked by three wrong codes, answers <c>access_denied</c>. The state is changed by compare-and-set, so concurrent polls
         /// cannot both pass.
         /// </summary>
-        Task<PollResult> PollAsync(string clientId, string authReqId);
+        Task<PollResult> PollAsync(string clientId, string authReqId, string? resource = null);
 
         /// <summary>The stored receipt of a decided request, only to the user it belongs to or to its own confidential client.</summary>
         Task<(ReceiptLookup Lookup, string? ReceiptJson)> GetReceiptAsync(ReceiptCaller caller, string authReqId);
@@ -142,6 +142,7 @@ namespace BiatecOIDC.BusinessLogic
                     Status = ConsentStatus.Pending,
                     Interval = _config.PollIntervalSeconds,
                     NextPollAt = nowSeconds,
+                    TokenClaims = c.TokenClaims,
                 };
 
                 switch (await _store.TryOpenAsync(record, limits, now))
@@ -303,7 +304,7 @@ namespace BiatecOIDC.BusinessLogic
             return new ReceiptResult { Outcome = ReceiptOutcome.Conflict };
         }
 
-        public async Task<PollResult> PollAsync(string clientId, string authReqId)
+        public async Task<PollResult> PollAsync(string clientId, string authReqId, string? resource = null)
         {
             var interval = _config.PollIntervalSeconds;
             for (var attempt = 0; attempt < ConflictRetries; attempt++)
@@ -323,7 +324,28 @@ namespace BiatecOIDC.BusinessLogic
                         {
                             return new PollResult { Outcome = PollOutcome.Expired, Interval = record.Interval };
                         }
-                        return new PollResult { Outcome = PollOutcome.Approved, Interval = record.Interval, Request = record };
+                        // A different resource, or a request that carries no token claims, is refused before anything is consumed.
+                        if (!string.IsNullOrEmpty(resource) && !string.Equals(resource, record.Resource, StringComparison.Ordinal))
+                        {
+                            return new PollResult { Outcome = PollOutcome.InvalidTarget };
+                        }
+                        if (record.TokenClaims is not { Count: > 0 } || record.ReceiptJson is null)
+                        {
+                            return new PollResult { Outcome = PollOutcome.InvalidGrant };
+                        }
+                        // An auth_req_id is redeemed once (CIBA). The mark is set by compare-and-set before the token is issued, so two
+                        // concurrent polls cannot both receive one.
+                        if (record.TokenIssued)
+                        {
+                            return new PollResult { Outcome = PollOutcome.InvalidGrant };
+                        }
+                        var redeemed = Clone(record);
+                        redeemed.TokenIssued = true;
+                        if (await _store.TryUpdateAsync(record, redeemed))
+                        {
+                            return new PollResult { Outcome = PollOutcome.Approved, Interval = record.Interval, Request = redeemed };
+                        }
+                        continue;
                     case ConsentStatus.Denied:
                     case ConsentStatus.CodeFailed:
                     case ConsentStatus.CodeLocked: // three wrong codes: denied for the client even before the signed code_failed arrives
@@ -400,6 +422,10 @@ namespace BiatecOIDC.BusinessLogic
             if (c.Entry is not ("step-up" or "direct"))
             {
                 return "entry must be step-up or direct";
+            }
+            if (c.TokenClaims is { } snapshot && ConsentTokenClaims.Validate(snapshot) is { } snapshotProblem)
+            {
+                return snapshotProblem;
             }
             normalizedOrigin = NormalizeOrigin(c.Origin);
             if (normalizedOrigin is null)

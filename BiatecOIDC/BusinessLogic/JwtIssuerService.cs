@@ -1062,15 +1062,64 @@ namespace BiatecOIDC.BusinessLogic
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
-        public async Task<JwtIssuerClientConfiguration?> AuthenticateConfidentialClientAsync(string? basicAuthHeader)
+        public Task<JwtIssuerClientConfiguration?> AuthenticateConfidentialClientAsync(string? basicAuthHeader)
+            => AuthenticateConfidentialClientAsync(basicAuthHeader, null, null);
+
+        public async Task<JwtIssuerClientConfiguration?> AuthenticateConfidentialClientAsync(string? basicAuthHeader, string? bodyClientId, string? bodyClientSecret)
         {
-            var (clientId, _) = ParseBasicAuth(basicAuthHeader);
-            if (string.IsNullOrWhiteSpace(clientId))
+            var (headerClientId, _) = ParseBasicAuth(basicAuthHeader);
+            if (string.IsNullOrWhiteSpace(headerClientId) && string.IsNullOrWhiteSpace(bodyClientId))
             {
                 return null;
             }
-            var result = await ValidateClientAuthenticationAsync(null, null, basicAuthHeader);
+            var result = await ValidateClientAuthenticationAsync(bodyClientId, bodyClientSecret, basicAuthHeader);
             return result.Success && result.Client is { IsPublicClient: false } client ? client : null;
+        }
+
+        public string IssueConsentAccessToken(IEnumerable<Claim> claims, string sub, string scope, string clientId, string? resource, string authReqId, string boundHash, DateTimeOffset now, TimeSpan lifetime)
+        {
+            var issued = new List<Claim>();
+            foreach (var claim in claims)
+            {
+                // Only the identity claims of the challenged token travel. Subject and scope are the consent's own (below), and the
+                // client and consent claims are never copied.
+                if (ConsentTokenClaims.IsIdentityClaim(claim.Type))
+                {
+                    var valueType = claim.Type == "email_verified" ? ClaimValueTypes.Boolean : claim.ValueType;
+                    issued.Add(new Claim(claim.Type, claim.Value, valueType));
+                }
+            }
+            issued.Add(new Claim(JwtRegisteredClaimNames.Sub, sub));
+            var granted = scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).ToArray();
+            issued.Add(new Claim("scope", string.Join(' ', granted)));
+            foreach (var walletScope in ConsentTokenClaims.GrantableWalletScopes)
+            {
+                if (granted.Contains(walletScope, StringComparer.Ordinal))
+                {
+                    issued.Add(new Claim(walletScope, "true"));
+                }
+            }
+            issued.Add(new Claim(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
+            issued.Add(new Claim("client_id", clientId));
+            issued.Add(new Claim("token_use", "access_token"));
+            issued.Add(new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")));
+            issued.Add(new Claim("acr", ConsentTokenClaims.Acr));
+            issued.Add(new Claim(ConsentTokenClaims.AuthReqIdClaim, authReqId));
+            issued.Add(new Claim(ConsentTokenClaims.HashClaim, boundHash));
+            if (!string.IsNullOrWhiteSpace(resource))
+            {
+                issued.Add(new Claim(JwtRegisteredClaimNames.Aud, resource));
+            }
+
+            var token = new JwtSecurityToken(
+                issuer: Current.Issuer,
+                audience: clientId,
+                claims: issued,
+                notBefore: now.UtcDateTime,
+                expires: now.Add(lifetime).UtcDateTime,
+                signingCredentials: _signingCredentials);
+            token.Header[JwtHeaderParameterNames.Kid] = Current.KeyId;
+            return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
         private async Task<(bool Success, int StatusCode, string? Error, string? ErrorDescription, JwtIssuerClientConfiguration? Client)> ValidateClientAuthenticationAsync(
