@@ -15,6 +15,13 @@ namespace BiatecOIDC.Model
         CodeFailed = 4,
     }
 
+    /// <summary>One claim of the caller's access token, stored with a step-up request so the elevated token can carry it.</summary>
+    public sealed class ClaimSnapshot
+    {
+        public string Type { get; set; } = "";
+        public string Value { get; set; } = "";
+    }
+
     /// <summary>One consent request, stored at Biatec OIDC. The binding code is never stored, only a salted hash of it.</summary>
     public sealed class ConsentRequestRecord
     {
@@ -53,6 +60,13 @@ namespace BiatecOIDC.Model
         public int Interval { get; set; }
         /// <summary>Earliest epoch second at which the next poll is not "too fast".</summary>
         public long NextPollAt { get; set; }
+        /// <summary>
+        /// The allowlisted claims of the token that was challenged (step-up entry). The elevated token carries exactly these, plus the
+        /// consent claims. Null for a request that cannot be redeemed for a token.
+        /// </summary>
+        public List<ClaimSnapshot>? TokenClaims { get; set; }
+        /// <summary>Set when the elevated token was issued: an <c>auth_req_id</c> is redeemed once (CIBA), and the signing call consumes the consent itself.</summary>
+        public bool TokenIssued { get; set; }
 
         public bool IsDecided => Status is ConsentStatus.Approved or ConsentStatus.Denied or ConsentStatus.CodeFailed;
     }
@@ -98,6 +112,8 @@ namespace BiatecOIDC.Model
         /// <summary>Optional text from the client; rendered (and signed) only when the client is verified.</summary>
         public string? BindingMessage { get; set; }
         public int? RequestedExpirySeconds { get; set; }
+        /// <summary>Claims of the challenged token to carry into the elevated token (see <see cref="ConsentTokenClaims"/>).</summary>
+        public List<ClaimSnapshot>? TokenClaims { get; set; }
         /// <summary>A hard ceiling on the validity (for example the group's remaining validity).</summary>
         public int? MaxConsentSeconds { get; set; }
     }
@@ -172,8 +188,10 @@ namespace BiatecOIDC.Model
         AccessDenied,
         /// <summary><c>expired_token</c></summary>
         Expired,
-        /// <summary><c>invalid_grant</c>: unknown, or not this client's request (indistinguishable on purpose).</summary>
+        /// <summary><c>invalid_grant</c>: unknown, not this client's request, already redeemed, or not redeemable (indistinguishable on purpose).</summary>
         InvalidGrant,
+        /// <summary><c>invalid_target</c>: the <c>resource</c> differs from the one of the request (RFC 8707).</summary>
+        InvalidTarget,
         /// <summary>Approved: the receipt is available. The elevated token is issued by the caller.</summary>
         Approved,
     }

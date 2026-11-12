@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using BiatecOIDC.BusinessLogic;
@@ -7,7 +6,6 @@ using BiatecOIDC.Model;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 
 namespace BiatecOIDC.Controllers
@@ -56,7 +54,7 @@ namespace BiatecOIDC.Controllers
         {
             var token = BearerTokenHelper.ExtractBearerToken(Request);
             var validation = string.IsNullOrWhiteSpace(token) ? default : _jwt.ValidateBearerAccessToken(token);
-            var sub = validation.IsValid ? validation.Principal?.FindFirstValue(JwtRegisteredClaimNames.Sub) : null;
+            var sub = BearerClaims.Value(validation, "sub");
             if (string.IsNullOrEmpty(sub))
             {
                 return Unauthorized();

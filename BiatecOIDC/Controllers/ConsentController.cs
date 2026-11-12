@@ -1,11 +1,9 @@
-using System.Security.Claims;
 using System.Text.Json;
 using BiatecOIDC.BusinessLogic;
 using BiatecOIDC.Helper;
 using BiatecOIDC.Model;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.JsonWebTokens;
 
 namespace BiatecOIDC.Controllers
 {
@@ -141,12 +139,13 @@ namespace BiatecOIDC.Controllers
                 return null;
             }
             var validation = _jwt.ValidateBearerAccessToken(token);
-            if (!validation.IsValid || validation.Principal is null)
+            if (!validation.IsValid)
             {
                 return null;
             }
-            var sub = validation.Principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
-            var clientId = validation.Principal.FindFirstValue("client_id");
+            // The raw claims of the token: the validated principal maps "sub" to another claim type.
+            var sub = BearerClaims.Value(validation, "sub");
+            var clientId = BearerClaims.Value(validation, "client_id");
             return string.IsNullOrEmpty(sub) ? null : new ReceiptCaller { Sub = sub, ClientId = clientId };
         }
 

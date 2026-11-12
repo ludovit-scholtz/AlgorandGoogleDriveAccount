@@ -146,6 +146,8 @@ namespace BiatecOIDCTests
             {
                 Sub = "user-1", ClientId = "chat", ClientEntityId = "https://chat.test", ClientVerified = true, ClientDisplayName = "Biatec Chat",
                 ClientDomain = "chat.test", Entry = "step-up", Origin = "https://app.test", Scope = "sign", AuthorizationDetails = Details(),
+                Resource = "https://mcp.biatec.io/tools",
+                TokenClaims = new List<ClaimSnapshot> { new() { Type = "sub", Value = "user-1" }, new() { Type = "sign", Value = "true" } },
             };
             tweak?.Invoke(c);
             return c;
@@ -782,10 +784,46 @@ namespace BiatecOIDCTests
             Assert.That(result.Outcome, Is.EqualTo(PollOutcome.Approved));
             Assert.That(result.Request!.ReceiptJson, Is.Not.Null);
             Assert.That(result.Request.BoundHash, Is.EqualTo("BJPM"));
+            Assert.That(result.Request.TokenClaims!.Select(c => c.Type), Is.EqualTo(new[] { "sub", "sign" }));
 
             var pending = await Open();
             _time.Now = Start.AddSeconds(301);
             Assert.That((await _svc.PollAsync("chat", pending.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.Expired));
+        }
+
+        [Test]
+        public async Task Poll_AnApproval_IsRedeemedOnce()
+        {
+            var open = await Open();
+            await _svc.SubmitReceiptAsync(_device, open.AuthReqId, Receipt(open.AuthReqId, "approve", open.BindingCode), Issuer);
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.Approved));
+            Assert.That(_store.Records[open.AuthReqId].TokenIssued, Is.True);
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.InvalidGrant), "an auth_req_id yields one token");
+        }
+
+        [Test]
+        public async Task Poll_ConcurrentRedemptions_HaveExactlyOneWinner()
+        {
+            var open = await Open();
+            await _svc.SubmitReceiptAsync(_device, open.AuthReqId, Receipt(open.AuthReqId, "approve", open.BindingCode), Issuer);
+            var results = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => _svc.PollAsync("chat", open.AuthReqId)));
+            Assert.That(results.Count(r => r.Outcome == PollOutcome.Approved), Is.EqualTo(1));
+            Assert.That(results.Count(r => r.Outcome == PollOutcome.InvalidGrant), Is.EqualTo(11));
+        }
+
+        [Test]
+        public async Task Poll_AWrongResource_OrARequestWithoutTokenClaims_IsRefusedBeforeAnythingIsConsumed()
+        {
+            var open = await Open();
+            await _svc.SubmitReceiptAsync(_device, open.AuthReqId, Receipt(open.AuthReqId, "approve", open.BindingCode), Issuer);
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId, "https://other.test")).Outcome, Is.EqualTo(PollOutcome.InvalidTarget));
+            Assert.That(_store.Records[open.AuthReqId].TokenIssued, Is.False, "a refused poll consumes nothing");
+            Assert.That((await _svc.PollAsync("chat", open.AuthReqId, "https://mcp.biatec.io/tools")).Outcome, Is.EqualTo(PollOutcome.Approved));
+
+            var bare = await Open(c => c.TokenClaims = null);
+            await _svc.SubmitReceiptAsync(_device, bare.AuthReqId, Receipt(bare.AuthReqId, "approve", bare.BindingCode), Issuer);
+            Assert.That((await _svc.PollAsync("chat", bare.AuthReqId)).Outcome, Is.EqualTo(PollOutcome.InvalidGrant));
+            Assert.That(_store.Records[bare.AuthReqId].TokenIssued, Is.False);
         }
 
         [Test]

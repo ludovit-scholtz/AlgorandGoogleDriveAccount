@@ -68,6 +68,16 @@ namespace BiatecOIDC.BusinessLogic
         /// </summary>
         Task<JwtIssuerClientConfiguration?> AuthenticateConfidentialClientAsync(string? basicAuthHeader);
 
+        /// <summary>The same, also accepting <c>client_id</c> and <c>client_secret</c> from the request body (client_secret_post).</summary>
+        Task<JwtIssuerClientConfiguration?> AuthenticateConfidentialClientAsync(string? basicAuthHeader, string? bodyClientId, string? bodyClientSecret);
+
+        /// <summary>
+        /// Issues the elevated access token of a consent: the allowlisted <paramref name="claims"/> of the challenged token, the consent
+        /// claims (<c>acr</c> biatec:consent, the <c>auth_req_id</c> and the bound hash), audience <paramref name="clientId"/> and
+        /// <paramref name="resource"/>, and a short lifetime.
+        /// </summary>
+        string IssueConsentAccessToken(IEnumerable<System.Security.Claims.Claim> claims, string clientId, string? resource, string authReqId, string boundHash, DateTimeOffset now, TimeSpan lifetime);
+
         /// <summary>
         /// Validates the signature and issuer of a token previously issued by this provider (e.g. an
         /// <c>id_token_hint</c> at logout) and returns its <c>aud</c> claim if valid. Lifetime is not

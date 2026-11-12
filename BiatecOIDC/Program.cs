@@ -211,6 +211,7 @@ namespace BiatecOIDC
             builder.Services.AddSingleton<BiatecOIDC.BusinessLogic.IConsentAttestationService, BiatecOIDC.BusinessLogic.ConsentAttestationService>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IConsentStore, BiatecOIDC.BusinessLogic.ConsentStore>();
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IConsentService, BiatecOIDC.BusinessLogic.ConsentService>();
+            builder.Services.AddScoped<BiatecOIDC.BusinessLogic.ICibaTokenGrant, BiatecOIDC.BusinessLogic.CibaTokenGrant>();
             Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.TryAddSingleton(builder.Services, TimeProvider.System);
             builder.Services.AddScoped<BiatecOIDC.BusinessLogic.IJwtIssuerService, BiatecOIDC.BusinessLogic.JwtIssuerService>();
 
